@@ -1,33 +1,62 @@
+import torch
 from torch.utils.data import DataLoader
+import torch.optim as optim
+import torch.nn as nn
+
 from data.dataset import ECGDataset
+from models.vqvae import VQVAE
 
-# Define paths
-train_parquet = '/volume/mhi_dataset/train_trial_v1.1.parquet'
-validation_parquet = '/volume/mhi_dataset/val_trial_v1.1.parquet'
-test_parquet = '/volume/mhi_dataset/test_trial_v1.1.parquet'
-npy_root_dir = '/volume/mhi_dataset/'
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-csv_file = '/media/data1/ravram/MIMIC-IV/mimic_index.corrected.csv'
+# Define the training loop
+def train_vqvae(model, dataloader, num_epochs=1, learning_rate=1e-3):
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.MSELoss()
 
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
 
-# train_dataset = ECGDataset(parquet_file=train_parquet, root_dir=npy_root_dir)
-# validation_dataset = ECGDataset(parquet_file=validation_parquet, root_dir=npy_root_dir)
-# test_dataset = ECGDataset(parquet_file=test_parquet, root_dir=npy_root_dir)
+        for batch in dataloader:
+            signals = batch['signal'].unsqueeze(1).float()  # Add a channel dimension
+            signals = signals.to(device)
 
-train_dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
-test_dataset_mimic = ECGDataset(csv_file=csv_file, split='test')
+            optimizer.zero_grad()
 
+            # Forward pass
+            x_reconstructed, vq_loss = model(signals)
 
-train_loader_mimic = DataLoader(train_dataset_mimic, batch_size=32, shuffle=True, num_workers=4)
-test_loader_mimic = DataLoader(test_dataset_mimic, batch_size=32, shuffle=False, num_workers=4)
+            # Calculate reconstruction loss
+            recon_loss = criterion(x_reconstructed, signals)
+            loss = recon_loss + vq_loss
 
-try:
-    for i, batch in enumerate(train_loader_mimic):
-        signals = batch['signal']
-        
-        print(f"Batch {i + 1} loaded successfully.")
-        print(f"Signals shape: {signals.shape}")
-        
-        break
-except Exception as e:
-    print(f"Error loading batch: {e}")
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
+
+def main():
+
+    # Load your dataset
+    csv_file = '/media/data1/ravram/MIMIC-IV/mimic_index.corrected.csv'  # Update with the path to your CSV file
+    dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
+    train_loader = DataLoader(dataset_mimic, batch_size=1, shuffle=True, num_workers=4)
+
+    # Define the VQ-VAE model
+    in_channels = 1  # ECG signals, so single channel
+    hidden_channels = 64  # Hidden dimension
+    embedding_dim = 64  # Latent space embedding dimension
+    num_embeddings = 512  # Number of discrete embeddings
+    commitment_cost = 0.25  # Weight for the commitment loss
+
+    model = VQVAE(in_channels, hidden_channels, embedding_dim, num_embeddings, commitment_cost)
+    model = model.to(device)
+
+    # Train the VQ-VAE model
+    train_vqvae(model, train_loader, num_epochs=20)
+
+if __name__ == '__main__':
+    main()

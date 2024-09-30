@@ -11,7 +11,7 @@ class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_channels, embedding_dim):
         super(Encoder, self).__init__()
         self.conv1 = nn.Conv1d(in_channels, hidden_channels, kernel_size=4, stride=2, padding=1)
-        self.conv2 = nn.conv1d(hidden_channels,  embedding_dim, kernel_size=4, stride=2, padding=1)
+        self.conv2 = nn.Conv1d(hidden_channels,  embedding_dim, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
