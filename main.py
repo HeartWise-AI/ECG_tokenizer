@@ -7,18 +7,27 @@ validation_parquet = '/volume/mhi_dataset/val_trial_v1.1.parquet'
 test_parquet = '/volume/mhi_dataset/test_trial_v1.1.parquet'
 npy_root_dir = '/volume/mhi_dataset/'
 
-# Create dataset objects
-train_dataset = ECGDataset(parquet_file=train_parquet, root_dir=npy_root_dir)
-validation_dataset = ECGDataset(parquet_file=validation_parquet, root_dir=npy_root_dir)
-test_dataset = ECGDataset(parquet_file=test_parquet, root_dir=npy_root_dir)
+csv_file = '/media/data1/ravram/MIMIC-IV/mimic_index.corrected.csv'
 
-# Create DataLoaders
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
-validation_loader = DataLoader(validation_dataset, batch_size=32, shuffle=False, num_workers=4)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4)
 
-# Example usage
-for batch in train_loader:
-    ecg_signals = batch['ecg_signal']  # Tensor of ECG signals
+# train_dataset = ECGDataset(parquet_file=train_parquet, root_dir=npy_root_dir)
+# validation_dataset = ECGDataset(parquet_file=validation_parquet, root_dir=npy_root_dir)
+# test_dataset = ECGDataset(parquet_file=test_parquet, root_dir=npy_root_dir)
 
-print(ecg_signals)
+train_dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
+test_dataset_mimic = ECGDataset(csv_file=csv_file, split='test')
+
+
+train_loader_mimic = DataLoader(train_dataset_mimic, batch_size=32, shuffle=True, num_workers=4)
+test_loader_mimic = DataLoader(test_dataset_mimic, batch_size=32, shuffle=False, num_workers=4)
+
+try:
+    for i, batch in enumerate(train_loader_mimic):
+        signals = batch['signal']
+        
+        print(f"Batch {i + 1} loaded successfully.")
+        print(f"Signals shape: {signals.shape}")
+        
+        break
+except Exception as e:
+    print(f"Error loading batch: {e}")
