@@ -2,12 +2,12 @@ from torch.utils.data import DataLoader
 from data.dataset import ECGDataset
 
 # Define paths
-train_parquet = '/volume/mhi_dataset/train_trial_v1.1.parquet'
-validation_parquet = '/volume/mhi_dataset/val_trial_v1.1.parquet'
-test_parquet = '/volume/mhi_dataset/test_trial_v1.1.parquet'
-npy_root_dir = '/volume/mhi_dataset/'
+train_parquet = '...'
+validation_parquet = '...'
+test_parquet = '...'
+npy_root_dir = '...'
 
-csv_file = '/media/data1/ravram/MIMIC-IV/mimic_index.corrected.csv'
+csv_file = '...'
 
 
 # train_dataset = ECGDataset(parquet_file=train_parquet, root_dir=npy_root_dir)
