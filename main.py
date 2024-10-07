@@ -5,7 +5,10 @@ import torch.nn as nn
 
 from data.dataset import ECGDataset
 from models.vqvae import VQVAE
+import os
+from tqdm import tqdm
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Define the training loop
@@ -17,9 +20,10 @@ def train_vqvae(model, dataloader, num_epochs=1, learning_rate=1e-3):
         model.train()
         total_loss = 0
 
-        for batch in dataloader:
-            signals = batch['signal'].unsqueeze(1).float()  # Add a channel dimension
-            signals = signals.to(device)
+        for batch in tqdm(dataloader):
+            signals = batch['signal'].float().to(device)  # Add a channel dimension
+            signals = signals.permute(0, 2, 1)
+            # import pdb; pdb.set_trace()
 
             optimizer.zero_grad()
 
@@ -43,10 +47,10 @@ def main():
     # Load your dataset
     csv_file = '/media/data1/ravram/MIMIC-IV/mimic_index.corrected.csv'  # Update with the path to your CSV file
     dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
-    train_loader = DataLoader(dataset_mimic, batch_size=1, shuffle=True, num_workers=4)
+    train_loader = DataLoader(dataset_mimic, batch_size=128, shuffle=True, num_workers=4)
 
     # Define the VQ-VAE model
-    in_channels = 1  # ECG signals, so single channel
+    in_channels = 12  # ECG signals
     hidden_channels = 64  # Hidden dimension
     embedding_dim = 64  # Latent space embedding dimension
     num_embeddings = 512  # Number of discrete embeddings

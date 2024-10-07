@@ -67,4 +67,5 @@ class ECGDataset(Dataset):
         if self.transform:
             sample['signal'] = self.transform(sample['signal'])
 
+        # sample['signal'] = sample['signal'].permute(1, 0)
         return sample
