@@ -78,7 +78,9 @@ class ECGDataset(Dataset):
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))  # Skip this sample if NaN values are found
 
-        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min()) * 2 - 1
+
+        epsilon = 1e-8  # Small value to avoid division by zero in cases where the unnormalized_signal.max() and the unnormalized_signal.min() values are the same
+        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
     
         sample = {'signal': signal}
 
