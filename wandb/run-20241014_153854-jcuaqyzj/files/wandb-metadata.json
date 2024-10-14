@@ -1,0 +1,49 @@
+{
+  "os":  "Linux-5.14.0-427.37.1.el9_4.x86_64-x86_64-with-glibc2.34",
+  "python":  "3.12.7",
+  "startedAt":  "2024-10-14T15:38:54.976602Z",
+  "program":  "/mnt/rbanerjee/code/ECG_tokenizer/main.py",
+  "codePath":  "main.py",
+  "git":  {
+    "remote":  "https://github.com/HeartWise-AI/ECG_tokenizer.git",
+    "commit":  "c2a99a679ddf22bb0cf71ea232a8fce155e4db86"
+  },
+  "email":  "banerjee.rohan98@gmail.com",
+  "root":  "/mnt/rbanerjee/code/ECG_tokenizer",
+  "host":  "heartwise-2x80go.openstacklocal",
+  "username":  "rbanerjee",
+  "executable":  "/mnt/rbanerjee/code/ECG_tokenizer/.venv/bin/python",
+  "codePathLocal":  "main.py",
+  "cpu_count":  26,
+  "cpu_count_logical":  26,
+  "gpu":  "[NVIDIA A100-SXM4-80GB, NVIDIA A100-SXM4-80GB]",
+  "gpu_count":  2,
+  "disk":  {
+    "/":  {
+      "total":  "41722818560",
+      "used":  "17188327424"
+    }
+  },
+  "memory":  {
+    "total":  "506480267264"
+  },
+  "cpu":  {
+    "count":  26,
+    "countLogical":  26
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA A100-SXM4-80GB",
+      "memoryTotal":  "85899345920",
+      "cudaCores":  6272,
+      "architecture":  "Ampere"
+    },
+    {
+      "name":  "NVIDIA A100-SXM4-80GB",
+      "memoryTotal":  "85899345920",
+      "cudaCores":  6272,
+      "architecture":  "Ampere"
+    }
+  ],
+  "cudaVersion":  "12.6"
+}

@@ -33,6 +33,8 @@ class ECGDataset(Dataset):
             self.data_frame = pd.read_csv(csv_file)
             self.data_frame = self._random_split(test_size, random_state)
 
+        self.waveform_length, self.leads = self.get_signal(1).shape
+
     def _random_split(self, test_size, random_state):
         """
         Perform a random train-test split (MIMIC-IV dataset).
@@ -45,27 +47,50 @@ class ECGDataset(Dataset):
         else:
             return test_df
 
+    def _check_for_nan(self):
+        """
+        Check for NaN values in the DataFrame.
+        """
+        if self.data_frame.isnull().values.any():
+            raise ValueError("NaN values found in the dataset")
 
     def __len__(self):
         return len(self.data_frame)
 
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
+    def get_signal(self, idx):
         if 'npy_path' in self.data_frame.columns:
             # Load data for the first dataset (with .npy files)
             npy_path = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
-            signal = np.load(npy_path)
+            unnormalized_signal = np.load(npy_path)
         elif 'waveform_path' in self.data_frame.columns:
             # Load data for the MIMIC-IV dataset (with full waveform paths)
             waveform_path = self.data_frame.iloc[idx]['waveform_path']
-            signal = np.load(waveform_path)  # Loading the .npy file from the full path
+            unnormalized_signal = np.load(waveform_path)  # Loading the .npy file from the full path
+        return unnormalized_signal
 
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        
+        unnormalized_signal = self.get_signal(idx)
+        
+        # Check for NaN values in the signal
+        if np.isnan(unnormalized_signal).any():
+            return self.__getitem__((idx + 1) % len(self))  # Skip this sample if NaN values are found
+
+        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min()) * 2 - 1
+    
         sample = {'signal': signal}
 
-        if self.transform:
-            sample['signal'] = self.transform(sample['signal'])
+        # if self.transform:
+        #     sample['signal'] = self.transform(sample['signal'])
 
         # sample['signal'] = sample['signal'].permute(1, 0)
         return sample
+
+csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'  # Update with the path to your CSV file
+try:
+    dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
+    print("No NaN values found in the dataset.")
+except ValueError as e:
+    print(e)
