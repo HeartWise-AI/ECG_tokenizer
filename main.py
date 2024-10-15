@@ -10,6 +10,12 @@ import os
 from tqdm.auto import trange
 import wandb
 
+"""
+Author: Rohan Banerjee
+
+Relevant issues from lucid-rains repos: #28, #44
+"""
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_checkpoint(model, optimizer, epoch, checkpoint_dir='checkpoints/'):

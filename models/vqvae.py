@@ -83,7 +83,10 @@ class SimpleVQAutoEncoder(nn.Module):
                 nn.MaxPool1d(kernel_size=2, stride=2),
                 nn.GELU(),
                 nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
-                VectorQuantize(dim=timesteps // 8, **vq_kwargs),
+                VectorQuantize(dim=timesteps // 8,
+                                decay = 0.8,             # the exponential moving average decay, lower means the dictionary will change faster
+                                commitment_weight = 1.,
+                                **vq_kwargs),
                 nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
                 nn.GELU(),
                 nn.Upsample(scale_factor=2, mode="nearest"),
