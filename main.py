@@ -26,6 +26,8 @@ def save_checkpoint(model, optimizer, epoch, checkpoint_dir='checkpoints/'):
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'active_percentages': active_percentages,
+        'reconstruction_losses': reconstruction_losses
     }, checkpoint_path)
     print(f"Checkpoint saved at epoch {epoch}")
 
@@ -97,7 +99,7 @@ def train_vqvae(model, dataloader, num_epochs=1, learning_rate=1e-5, checkpoint_
         if (epoch + 1) % 5 == 0:
             save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
 
-def train(model, train_loader, optimizer, num_codes, train_iterations=1000, alpha=10):
+def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_iterations=1000, alpha=1):
     
     def iterate_dataset(data_loader):
         data_iter = iter(data_loader)
@@ -115,7 +117,7 @@ def train(model, train_loader, optimizer, num_codes, train_iterations=1000, alph
         # import pdb; pdb.set_trace()
         optimizer.zero_grad()
         x = next(iterate_dataset(train_loader))
-        print(x.min(), x.max())
+        print(x.mean())
         # x = x.unsqueeze(1)
         # import pdb; pdb.set_trace()
         out, indices, cmt_loss = model(x)
@@ -145,7 +147,7 @@ def train(model, train_loader, optimizer, num_codes, train_iterations=1000, alph
 def main():
 
     # Load your dataset
-    csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'  # Update with the path to your CSV file
+    csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'
     dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
     train_loader = DataLoader(dataset_mimic, batch_size=512, shuffle=True, num_workers=4)
 
@@ -168,6 +170,7 @@ def main():
     train_iter = 1000
     num_codes = 2048
     seed = 1234
+    checkpoint_dir = "/mnt/rbanerjee/checkpoints/"
 
     print("baseline")
     torch.random.manual_seed(seed)
@@ -178,7 +181,7 @@ def main():
     ).to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    train(model, train_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes)
+    train(model, train_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir)
 
 if __name__ == '__main__':
     main()
