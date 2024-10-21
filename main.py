@@ -137,6 +137,9 @@ def train(model, train_loader, optimizer, num_codes, train_iterations=1000, alph
             "cmt_loss": cmt_loss.item(),
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
+
+        if (epoch + 1) % 5 == 0:
+            save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
     return
 
 def main():
@@ -163,7 +166,7 @@ def main():
 
     lr = 3e-4
     train_iter = 1000
-    num_codes = 1024
+    num_codes = 2048
     seed = 1234
 
     print("baseline")
