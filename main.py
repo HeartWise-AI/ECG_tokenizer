@@ -18,18 +18,16 @@ Relevant issues from lucid-rains repos: #28, #44
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def save_checkpoint(model, optimizer, epoch, checkpoint_dir='checkpoints/'):
+def save_checkpoint(model, optimizer, iteration, checkpoint_dir='checkpoints/'):
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
-    checkpoint_path = os.path.join(checkpoint_dir, f'vqvae_epoch_{epoch}.pth')
+    checkpoint_path = os.path.join(checkpoint_dir, f'vqvae_iteration_{iteration}.pth')
     torch.save({
-        'epoch': epoch,
+        'iteration': iteration,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'active_percentages': active_percentages,
-        'reconstruction_losses': reconstruction_losses
+        'optimizer_state_dict': optimizer.state_dict()
     }, checkpoint_path)
-    print(f"Checkpoint saved at epoch {epoch}")
+    print(f"Checkpoint saved at iteration {iteration}")
 
 def load_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
     if not os.path.exists(checkpoint_dir):
@@ -140,8 +138,8 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
 
-        if (epoch + 1) % 5 == 0:
-            save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
+        if (_ + 1) % 5 == 0:
+            save_checkpoint(model, optimizer, _ + 1, checkpoint_dir)
     return
 
 def main():
