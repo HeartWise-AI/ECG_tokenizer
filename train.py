@@ -129,7 +129,7 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
         # Initialize Weights and Biases
-        wandb.init(project="ECG_tokenizer", entity="rohanbanerjee")
+        wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=f"experiment_rotation_trick_false")
 
         # Log the losses and active indices
         wandb.log({
@@ -138,7 +138,7 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
 
-        if (_ + 1) % 5 == 0:
+        if (_ + 1) % 100 == 0:
             save_checkpoint(model, optimizer, _ + 1, checkpoint_dir)
     return
 
@@ -175,7 +175,8 @@ def main():
     # import pdb; pdb.set_trace()
     model = SimpleVQAutoEncoder(
         timesteps=dataset_mimic.waveform_length,
-        codebook_size=num_codes
+        codebook_size=num_codes,
+        rotation_trick = False 
     ).to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
