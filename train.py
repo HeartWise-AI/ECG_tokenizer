@@ -17,6 +17,7 @@ Relevant issues from lucid-rains repos: #28, #44
 """
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+experiment_name = "experiment_with_4096_codes"
 
 def save_checkpoint(model, optimizer, iteration, checkpoint_dir='checkpoints/'):
     if not os.path.exists(checkpoint_dir):
@@ -47,57 +48,20 @@ def load_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
     print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
     return start_epoch
 
-# Define the training loop
-def train_vqvae(model, dataloader, num_epochs=1, learning_rate=1e-5, checkpoint_dir='checkpoints/'):
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss()
-
-    start_epoch = load_checkpoint(model, optimizer, checkpoint_dir=checkpoint_dir)
-
-    for epoch in range(num_epochs):
-        model.train()
-        total_loss = 0.0
-
-        progress_bar = tqdm(dataloader, desc=f"Epoch [{epoch + 1}/{num_epochs}]", leave=False)
-
-        for batch in dataloader:
+def evaluate(model, data_loader):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in data_loader:
             signals = batch['signal'].float().to(device)
             signals = signals.permute(0, 2, 1)
-            # import pdb; pdb.set_trace()
+            out, indices, cmt_loss = model(signals)
+            rec_loss = (out - signals).abs().mean()
+            total_loss += rec_loss.item()
+    model.train()
+    return total_loss / len(data_loader)
 
-            optimizer.zero_grad()
-
-            # Forward pass
-            x_reconstructed, vq_loss = model(signals)
-
-            # Check for NaN values in model outputs
-            if torch.isnan(x_reconstructed).any() or torch.isnan(vq_loss).any():
-                raise ValueError("NaN values found in model outputs")
-
-
-            # Calculate reconstruction loss
-            recon_loss = criterion(x_reconstructed, signals)
-            loss = recon_loss + vq_loss
-
-            # Check for NaN values in loss
-            if torch.isnan(loss).any():
-                raise ValueError("NaN values found in loss")
-
-            # Backward pass and optimization
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.item()
-            print(total_loss)
-
-            progress_bar.set_postfix({"Loss": total_loss / (len(dataloader))})
-
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {total_loss / len(dataloader):.4f}")
-
-        if (epoch + 1) % 5 == 0:
-            save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
-
-def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_iterations=1000, alpha=1):
+def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir, train_iterations=1000, alpha=1):
     
     def iterate_dataset(data_loader):
         data_iter = iter(data_loader)
@@ -112,12 +76,8 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
             yield signals
 
     for _ in (pbar := trange(train_iterations)):
-        # import pdb; pdb.set_trace()
         optimizer.zero_grad()
         x = next(iterate_dataset(train_loader))
-        print(x.mean())
-        # x = x.unsqueeze(1)
-        # import pdb; pdb.set_trace()
         out, indices, cmt_loss = model(x)
         rec_loss = (out - x).abs().mean()
         (rec_loss + alpha * cmt_loss).backward()
@@ -128,10 +88,9 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
             + f"cmt loss: {cmt_loss.item():.3f} | "
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
-        # Initialize Weights and Biases
-        wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=f"experiment_rotation_trick_false")
 
-        # Log the losses and active indices
+        wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=experiment_name)
+
         wandb.log({
             "rec_loss": rec_loss.item(),
             "cmt_loss": cmt_loss.item(),
@@ -139,48 +98,34 @@ def train(model, train_loader, optimizer, num_codes, checkpoint_dir, train_itera
         })
 
         if (_ + 1) % 100 == 0:
+            test_loss = evaluate(model, test_loader)
+            wandb.log({"test_loss": test_loss})
             save_checkpoint(model, optimizer, _ + 1, checkpoint_dir)
+            model.train()
     return
 
 def main():
 
-    # Load your dataset
     csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'
-    dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
-    train_loader = DataLoader(dataset_mimic, batch_size=512, shuffle=True, num_workers=4)
+    dataset_mimic_train = ECGDataset(csv_file=csv_file, split='train')
+    train_loader = DataLoader(dataset_mimic_train, batch_size=512, shuffle=True, num_workers=4)
 
-    #=======================================================================================================
-    # Define the VQ-VAE model
-    in_channels = 12  # ECG signals
-    hidden_channels = 64  # Hidden dimension
-    embedding_dim = 64  # Latent space embedding dimension
-    num_embeddings = 512  # Number of discrete embeddings
-    commitment_cost = 0.25  # Weight for the commitment loss
-
-    # model = VQVAE(in_channels, hidden_channels, embedding_dim, num_embeddings, commitment_cost)
-    # model = model.to(device)
-
-    # # Train the VQ-VAE model
-    # train_vqvae(model, train_loader, num_epochs=10, checkpoint_dir='checkpoints/')
-    #========================================================================================================
+    dataset_mimic_test = ECGDataset(csv_file=csv_file, split='test')
+    test_loader = DataLoader(dataset_mimic_test, batch_size=512, shuffle=False, num_workers=4)
 
     lr = 3e-4
     train_iter = 1000
-    num_codes = 2048
+    num_codes = 4096
     seed = 1234
-    checkpoint_dir = "/mnt/rbanerjee/checkpoints/"
-
-    print("baseline")
+    checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{experiment_name}/"
     torch.random.manual_seed(seed)
-    # import pdb; pdb.set_trace()
     model = SimpleVQAutoEncoder(
-        timesteps=dataset_mimic.waveform_length,
-        codebook_size=num_codes,
-        rotation_trick = False 
+        timesteps=dataset_mimic_train.waveform_length,
+        codebook_size=num_codes
     ).to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    train(model, train_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir)
+    train(model, train_loader, test_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir)
 
 if __name__ == '__main__':
     main()

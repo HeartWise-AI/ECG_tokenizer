@@ -1,7 +1,7 @@
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-from vector_quantize_pytorch import VectorQuantize
+from vector_quantize_pytorch import VectorQuantize, ResidualVQ
 
 """
 VQ-VAE vanilla implementation
@@ -83,10 +83,22 @@ class SimpleVQAutoEncoder(nn.Module):
                 nn.MaxPool1d(kernel_size=2, stride=2),
                 nn.GELU(),
                 nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
+                nn.MaxPool1d(kernel_size=2, stride=2),
+                nn.GELU(),
+                nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=1),
+                nn.MaxPool1d(kernel_size=2, stride=2),
+                nn.GELU(),
                 VectorQuantize(dim=timesteps // 8,
-                                decay = 0.8,             # the exponential moving average decay, lower means the dictionary will change faster
+                                decay = 0.8,          
                                 commitment_weight = 0.25,
                                 **vq_kwargs),
+                # ResidualVQ(
+                #             dim = 256,
+                #             num_quantizers = 8,      # specify number of quantizers
+                #             codebook_size = 1024,    # codebook size
+                #         )
+                nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=1),
+                nn.GELU(),
                 nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
                 nn.GELU(),
                 nn.Upsample(scale_factor=2, mode="nearest"),
@@ -102,4 +114,4 @@ class SimpleVQAutoEncoder(nn.Module):
             else:
                 x = layer(x)
            
-        return x.clamp(-1, 1), indices, commit_loss
+        return x, indices, commit_loss
