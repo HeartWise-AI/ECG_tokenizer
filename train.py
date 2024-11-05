@@ -9,6 +9,7 @@ from models.vqvae import VQVAE, SimpleVQAutoEncoder
 import os
 from tqdm.auto import trange
 import wandb
+import yaml
 
 """
 Author: Rohan Banerjee
@@ -17,7 +18,6 @@ Relevant issues from lucid-rains repos: #28, #44
 """
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-experiment_name = "experiment_with_4096_codes"
 
 def save_checkpoint(model, optimizer, iteration, checkpoint_dir='checkpoints/'):
     if not os.path.exists(checkpoint_dir):
@@ -89,8 +89,6 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
 
-        wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=experiment_name)
-
         wandb.log({
             "rec_loss": rec_loss.item(),
             "cmt_loss": cmt_loss.item(),
@@ -106,18 +104,23 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
 
 def main():
 
-    csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'
+    with open('config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=config["training"]["experiment_name"])
+
+    csv_file = config["dataset"]["csv_file"]
     dataset_mimic_train = ECGDataset(csv_file=csv_file, split='train')
     train_loader = DataLoader(dataset_mimic_train, batch_size=512, shuffle=True, num_workers=4)
 
     dataset_mimic_test = ECGDataset(csv_file=csv_file, split='test')
     test_loader = DataLoader(dataset_mimic_test, batch_size=512, shuffle=False, num_workers=4)
 
-    lr = 3e-4
-    train_iter = 1000
-    num_codes = 4096
-    seed = 1234
-    checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{experiment_name}/"
+    lr = float(config["training"]["learning_rate"])
+    train_iter = config["training"]["train_iterations"]
+    num_codes = config["training"]["num_codes"]
+    seed = config["training"]["seed"]
+    checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{config['training']['experiment_name']}"
     torch.random.manual_seed(seed)
     model = SimpleVQAutoEncoder(
         timesteps=dataset_mimic_train.waveform_length,

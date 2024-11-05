@@ -1,0 +1,11 @@
+training:
+  learning_rate: 3e-4
+  train_iterations: 1000
+  num_codes: 4096
+  seed: 1234
+  batch_size: 512
+  num_workers: 4
+  experiment_name: "experiment_with_4096_codes"
+
+dataset:
+  csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
