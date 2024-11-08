@@ -5,7 +5,7 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 
 from data.dataset import ECGDataset
-from models.vqvae import VQVAE, SimpleVQAutoEncoder
+from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder
 import os
 from tqdm.auto import trange
 import wandb
@@ -80,18 +80,19 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
         x = next(iterate_dataset(train_loader))
         out, indices, cmt_loss = model(x)
         rec_loss = (out - x).abs().mean()
-        (rec_loss + alpha * cmt_loss).backward()
+        # import pdb; pdb.set_trace()
+        (rec_loss + alpha * cmt_loss.mean()).backward()
 
         optimizer.step()
         pbar.set_description(
             f"rec loss: {rec_loss.item():.3f} | "
-            + f"cmt loss: {cmt_loss.item():.3f} | "
+            + f"cmt loss: {cmt_loss.mean().item():.3f} | "
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
 
         wandb.log({
             "rec_loss": rec_loss.item(),
-            "cmt_loss": cmt_loss.item(),
+            "cmt_loss": cmt_loss.mean().item(),
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
 
@@ -122,7 +123,7 @@ def main():
     seed = config["training"]["seed"]
     checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{config['training']['experiment_name']}"
     torch.random.manual_seed(seed)
-    model = SimpleVQAutoEncoder(
+    model = ResVQAutoEncoder(
         timesteps=dataset_mimic_train.waveform_length,
         codebook_size=num_codes
     ).to(device)

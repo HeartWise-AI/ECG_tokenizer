@@ -5,7 +5,10 @@ training:
   seed: 1234
   batch_size: 512
   num_workers: 4
-  experiment_name: "experiment_with_4096_codes"
+  experiment_name: "experiment_resvq"
 
 dataset:
   csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
+
+evaluation:
+  model_path: "/mnt/rbanerjee/checkpoints/vqvae_iteration_1000.pth"

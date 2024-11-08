@@ -4,6 +4,10 @@ import torch
 from torch.utils.data import Dataset
 import os
 from sklearn.model_selection import train_test_split
+import yaml
+
+with open('config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
 
 
 """
@@ -21,7 +25,7 @@ Author: Rohan Banerjee
 """
 
 class ECGDataset(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.2, random_state=42):
+    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
         self.transform = transform
         self.split = split
 
@@ -46,13 +50,6 @@ class ECGDataset(Dataset):
             return train_df
         else:
             return test_df
-
-    def _check_for_nan(self):
-        """
-        Check for NaN values in the DataFrame.
-        """
-        if self.data_frame.isnull().values.any():
-            raise ValueError("NaN values found in the dataset")
 
     def __len__(self):
         return len(self.data_frame)

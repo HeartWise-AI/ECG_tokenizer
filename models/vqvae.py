@@ -103,3 +103,33 @@ class SimpleVQAutoEncoder(nn.Module):
                 x = layer(x)
            
         return x.clamp(-1, 1), indices, commit_loss
+    
+class ResVQAutoEncoder(nn.Module):
+    def __init__(self, timesteps, **vq_kwargs):
+            super().__init__()
+            self.layers = nn.ModuleList(
+                [
+                    nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=1), 
+                    nn.MaxPool1d(kernel_size=2, stride=2),
+                    nn.GELU(),
+                    nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
+                    ResidualVQ(dim=timesteps // 8,
+                                num_quantizers = 8,
+                                commitment_weight = 0.25,
+                                **vq_kwargs),
+                    nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
+                    nn.GELU(),
+                    nn.Upsample(scale_factor=2, mode="nearest"),
+                    nn.ConvTranspose1d(32, 12, kernel_size=4, stride=2, padding=1),
+                ]
+            )
+            return
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            if isinstance(layer, ResidualVQ):
+                x, indices, commit_loss = layer(x) # [2048, 64, 625]
+            else:
+                x = layer(x)
+           
+        return x.clamp(-1, 1), indices, commit_loss
