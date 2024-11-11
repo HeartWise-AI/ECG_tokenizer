@@ -10,5 +10,6 @@ dependencies = [
     "scikit-learn>=1.5.2",
     "torch>=2.4.1",
     "tqdm>=4.66.5",
+    "transformers>=4.46.2",
     "wandb>=0.18.3",
 ]

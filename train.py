@@ -78,21 +78,21 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
     for _ in (pbar := trange(train_iterations)):
         optimizer.zero_grad()
         x = next(iterate_dataset(train_loader))
+        # import pdb; pdb.set_trace()
         out, indices, cmt_loss = model(x)
         rec_loss = (out - x).abs().mean()
-        # import pdb; pdb.set_trace()
-        (rec_loss + alpha * cmt_loss.mean()).backward()
+        (rec_loss + alpha * cmt_loss).backward()
 
         optimizer.step()
         pbar.set_description(
             f"rec loss: {rec_loss.item():.3f} | "
-            + f"cmt loss: {cmt_loss.mean().item():.3f} | "
+            + f"cmt loss: {cmt_loss.item():.3f} | "
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
 
         wandb.log({
             "rec_loss": rec_loss.item(),
-            "cmt_loss": cmt_loss.mean().item(),
+            "cmt_loss": cmt_loss.item(),
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
 
@@ -123,7 +123,7 @@ def main():
     seed = config["training"]["seed"]
     checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{config['training']['experiment_name']}"
     torch.random.manual_seed(seed)
-    model = ResVQAutoEncoder(
+    model = SimpleVQAutoEncoder(
         timesteps=dataset_mimic_train.waveform_length,
         codebook_size=num_codes
     ).to(device)

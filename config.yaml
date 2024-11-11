@@ -5,7 +5,7 @@ training:
   seed: 1234
   batch_size: 512
   num_workers: 4
-  experiment_name: "experiment_resvq"
+  experiment_name: "experiment_deepeer_model"
 
 dataset:
   csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"

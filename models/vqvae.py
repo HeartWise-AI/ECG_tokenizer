@@ -78,7 +78,7 @@ class SimpleVQAutoEncoder(nn.Module):
     def __init__(self, timesteps, **vq_kwargs):
             super().__init__()
             self.layers = nn.ModuleList(
-                [
+            [
                     nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=1), 
                     nn.MaxPool1d(kernel_size=2, stride=2),
                     nn.GELU(),
@@ -97,6 +97,7 @@ class SimpleVQAutoEncoder(nn.Module):
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
+            # print(f"Shape after layer {i} ({layer}): {x.shape}")
             if isinstance(layer, VectorQuantize):
                 x, indices, commit_loss = layer(x) # [2048, 64, 625]
             else:
