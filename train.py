@@ -14,7 +14,7 @@ import yaml
 """
 Author: Rohan Banerjee
 
-Relevant issues from lucid-rains repos: #28, #44
+Relevant issues from lucid-rains repos: #28, #44, #102
 """
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

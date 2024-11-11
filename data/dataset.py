@@ -88,9 +88,10 @@ class ECGDataset(Dataset):
         return sample
 
 class ECGDatasetLLM(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
+    def __init__(self, parquet_file=None, csv_file=None, model=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
         self.transform = transform
         self.split = split
+        self.model = model
 
         if parquet_file:
             # Load data from parquet file for the first dataset
@@ -132,6 +133,21 @@ class ECGDatasetLLM(Dataset):
     
     def get_report(self, idx):
         return self.data_frame.iloc[idx]['report']
+    
+    def set_model(self, model):
+        """Set the model only if it hasn't been set before."""
+        if self.model is not None:
+            raise ValueError("Model has already been set.")
+        self.model = model
+    
+    # get VQ embeddings for the ECG signal
+    def encode_ecg_to_tokens(self, ecg_signal):
+        if self.model is None:
+            raise ValueError("Model has not been set in the dataset.")
+        
+        with torch.no_grad():
+            encoded_tokens = self.model.layers[4].codebook(ecg_signal) 
+        return encoded_tokens
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -147,14 +163,13 @@ class ECGDatasetLLM(Dataset):
 
         epsilon = 1e-8  # Small value to avoid division by zero in cases where the unnormalized_signal.max() and the unnormalized_signal.min() values are the same
         signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
+        signal = torch.from_numpy(signal).float()
+        signal = signal.permute(1, 0).unsqueeze(0)
+
+        device = next(self.model.parameters()).device
+        signal = signal.to(device)
         
+        encoded_tokens = self.encode_ecg_to_tokens(signal)
         # sample = {'signal': signal, 'report': report}
 
-        return signal, report
-
-csv_file = '/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv'  # Update with the path to your CSV file
-try:
-    dataset_mimic = ECGDataset(csv_file=csv_file, split='train')
-    print("No NaN values found in the dataset.")
-except ValueError as e:
-    print(e)
+        return encoded_tokens, report
