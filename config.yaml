@@ -1,14 +1,14 @@
 training:
   learning_rate: 3e-4
-  train_iterations: 1000
+  train_iterations: 10000
   num_codes: 4096
   seed: 1234
   batch_size: 512
   num_workers: 4
-  experiment_name: "experiment_deepeer_model"
+  experiment_name: "experiment_deeper_2048_learnable_codebook_model"
 
 dataset:
   csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
 
 evaluation:
-  model_path: "/mnt/rbanerjee/checkpoints/vqvae_iteration_1000.pth"
+  model_path: "/mnt/rbanerjee/checkpoints/experiment_deeper_2048_learnable_codebook_model/vqvae_iteration_10000.pth"

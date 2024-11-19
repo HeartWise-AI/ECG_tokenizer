@@ -81,18 +81,18 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
         # import pdb; pdb.set_trace()
         out, indices, cmt_loss = model(x)
         rec_loss = (out - x).abs().mean()
-        (rec_loss + alpha * cmt_loss).backward()
+        (rec_loss + alpha * cmt_loss.mean()).backward()
 
         optimizer.step()
         pbar.set_description(
             f"rec loss: {rec_loss.item():.3f} | "
-            + f"cmt loss: {cmt_loss.item():.3f} | "
+            + f"cmt loss: {cmt_loss.mean().item():.3f} | "
             + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
         )
 
         wandb.log({
             "rec_loss": rec_loss.item(),
-            "cmt_loss": cmt_loss.item(),
+            "cmt_loss": cmt_loss.mean().item(),
             "active_percentage": indices.unique().numel() / num_codes * 100
         })
 
@@ -130,6 +130,6 @@ def main():
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     train(model, train_loader, test_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir)
-
+    
 if __name__ == '__main__':
     main()
