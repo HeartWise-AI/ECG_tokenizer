@@ -101,7 +101,6 @@ class SimpleVQAutoEncoder(nn.Module):
                 nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=16)
                 ]
             )
-            return
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
@@ -139,7 +138,6 @@ class ResVQAutoEncoder(nn.Module):
                     nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=16)
                 ]
             )
-            return
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
