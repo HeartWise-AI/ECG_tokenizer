@@ -60,4 +60,3 @@ with torch.no_grad():
 
     plt.tight_layout()
     plt.savefig('/mnt/rbanerjee/figures/input_reconstructed_signals_2048.png')
-    plt.show()
