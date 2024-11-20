@@ -43,7 +43,7 @@ def create_dataset_and_model(csv_file, config, device):
     checkpoint = torch.load(config["evaluation"]["model_path"], weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    print(model.layers[4].codebook.shape)
+    # print(model.layers[4].codebook.shape)
 
     dataset = ECGDatasetLLM(csv_file=csv_file, split='train', model=model)
 
