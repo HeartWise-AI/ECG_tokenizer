@@ -87,7 +87,7 @@ class SimpleVQAutoEncoder(nn.Module):
                 nn.GELU(),
                 nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
                 VectorQuantize(dim=160,
-                                decay = 0.8,             # the exponential moving average decay, lower means the dictionary will change faster
+                                decay = 0.8,       
                                 commitment_weight = 0.25,
                                 ema_update=False,
                                 learnable_codebook=True,
@@ -104,13 +104,11 @@ class SimpleVQAutoEncoder(nn.Module):
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
-            # print(f"Shape after layer {i} ({layer}): {x.shape}")
             if isinstance(layer, VectorQuantize):
-                x, indices, commit_loss = layer(x) # [2048, 64, 625]
+                x, indices, commit_loss = layer(x)
             else:
                 x = layer(x)
-
-            # print(f"Shape after layer {i} ({layer}): {x.shape}")           
+        
         return x.clamp(-1, 1), indices, commit_loss
     
 class ResVQAutoEncoder(nn.Module):
@@ -142,7 +140,7 @@ class ResVQAutoEncoder(nn.Module):
     def forward(self, x):
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualVQ):
-                x, indices, commit_loss = layer(x) # [2048, 64, 625]
+                x, indices, commit_loss = layer(x)
             else:
                 x = layer(x)
            
