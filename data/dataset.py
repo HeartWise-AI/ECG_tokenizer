@@ -25,7 +25,7 @@ Author: Rohan Banerjee
 """
 
 class ECGDataset(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
+    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.01, random_state=config["training"]["seed"]):
         self.transform = transform
         self.split = split
 
@@ -146,7 +146,7 @@ class ECGDatasetLLM(Dataset):
             raise ValueError("Model has not been set in the dataset.")
         
         with torch.no_grad():
-            encoded_tokens = self.model.layers[4].codebook(ecg_signal) 
+            _, encoded_tokens, _ = self.model(ecg_signal) 
         return encoded_tokens
 
     def __getitem__(self, idx):
