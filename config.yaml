@@ -3,9 +3,9 @@ training:
   train_iterations: 10000
   num_codes: 4096
   seed: 1234
-  batch_size: 512
+  batch_size: 8
   num_workers: 4
-  experiment_name: "experiment_deeper_2048_learnable_codebook_model"
+  experiment_name: "experiment_deeper_4096_rvq_QINCo"
 
 dataset:
   csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
