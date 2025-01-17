@@ -5,10 +5,12 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.cuda.amp import autocast
 import torch.distributed as dist
+import argparse
 
 from data.dataset import ECGDataset
 from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder
 import os
+import tqdm
 from tqdm.auto import trange
 import wandb
 import yaml
@@ -35,23 +37,48 @@ def save_checkpoint(model, optimizer, iteration, checkpoint_dir='checkpoints/'):
     }, checkpoint_path)
     print(f"Checkpoint saved at iteration {iteration}")
 
-def load_checkpoint(model, optimizer, checkpoint_dir='checkpoints/'):
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
-        return 0  
+def load_checkpoint(model, optimizer, checkpoint_dir='checkpoints/', checkpoint_path=None):
+    if checkpoint_path:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        checkpoint = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        # Dynamically adjust keys if necessary
+        state_dict = checkpoint['model_state_dict']
+        model_state_dict = model.state_dict()
+        new_state_dict = {}
+        
+        # for key in state_dict:
+        #     if key.startswith("module.") and not any(k.startswith("module.") for k in model_state_dict.keys()):
+        #         new_key = key[len("module."):]
+        #     elif not key.startswith("module.") and any(k.startswith("module.") for k in model_state_dict.keys()):
+        #         new_key = "module." + key
+        #     else:
+        #         new_key = key
+        #     new_state_dict[new_key] = state_dict[key]
 
-    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
-    if not checkpoints:
-        return 0
+        # Load the state dict with strict=False
+        
+        model.load_state_dict(model_state_dict, strict=False)
+        model = model.to(device)
+    
+        optimizer_state_dict = checkpoint['optimizer_state_dict']
+        optimizer.param_groups.clear()
+        param_list = list(model.parameters()) 
+        for group in optimizer_state_dict['param_groups']:
+            valid_params = [param_list[idx] for idx in group['params'] if isinstance(idx, int) and idx < len(param_list)]
+            if valid_params:
+                group['params'] = valid_params
+                optimizer.add_param_group(group)
 
-    latest_checkpoint = max(checkpoints, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-    checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1
-    print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
-    return start_epoch
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+
+        optimizer.load_state_dict(optimizer_state_dict)
+
+        print(f"Checkpoint {checkpoint_path} loaded successfully.")
+
+    return checkpoint['iteration'], model, optimizer
 
 def evaluate(model, data_loader):
     logging.debug("Starting evaluation...")
@@ -70,60 +97,57 @@ def evaluate(model, data_loader):
     logging.debug("Evaluation completed.")
     return total_loss / len(data_loader)
 
-def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir, train_iterations=1000, alpha=1):
-    
-    def iterate_dataset(data_loader):
-        data_iter = iter(data_loader)
-        while True:
-            try:
-                batch = next(data_iter)
-            except StopIteration:
-                data_iter = iter(data_loader)
-                batch = next(data_iter)
-            signals = batch['signal'].float().to(device)
+def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir, num_epochs=10, alpha=1.0, start_epoch=0):
+    model.train()
+    for epoch in range(start_epoch, num_epochs):
+        progress_bar = tqdm.tqdm(train_loader, total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
+        for batch_idx, batch in enumerate(train_loader):
+            signals = batch["signal"].float().to(device)
             signals = signals.permute(0, 2, 1)
-            yield signals
+            optimizer.zero_grad()
+            out, indices, cmt_loss = model(signals)
+            rec_loss = (out - signals).abs().mean()
+            combined_loss = rec_loss + alpha * cmt_loss.mean()
+            combined_loss.backward()
+            optimizer.step()
+            torch.cuda.empty_cache()
 
-    for _ in (pbar := trange(train_iterations)):
-        optimizer.zero_grad()
-        x = next(iterate_dataset(train_loader))
-        # import pdb; pdb.set_trace()
-        out, indices, cmt_loss = model(x)
-        rec_loss = (out - x).abs().mean()
-        (rec_loss + alpha * cmt_loss.mean()).backward()
+            progress_bar.set_postfix({
+                "rec_loss": f"{rec_loss.item():.4f}",
+                "cmt_loss": f"{cmt_loss.mean().item():.4f}",
+                "active": f"{indices.unique().numel() / num_codes * 100:.4f}"
+            })
 
-        optimizer.step()
-        torch.cuda.empty_cache()
+            wandb.log({
+                "epoch": epoch + 1,
+                "batch_idx": batch_idx,
+                "rec_loss": rec_loss.item(),
+                "cmt_loss": cmt_loss.mean().item(),
+                "active_percentage": indices.unique().numel() / num_codes * 100
+            })
 
-        pbar.set_description(
-            f"rec loss: {rec_loss.item():.3f} | "
-            + f"cmt loss: {cmt_loss.mean().item():.3f} | "
-            + f"active %: {indices.unique().numel() / num_codes * 100:.3f}"
-        )
-
-        wandb.log({
-            "rec_loss": rec_loss.item(),
-            "cmt_loss": cmt_loss.mean().item(),
-            "active_percentage": indices.unique().numel() / num_codes * 100
-        })
-        
-        try:
-            if (_ + 1) % 100 == 0:
+        if (epoch + 1) % 1 == 0:
+            try:
                 test_loss = evaluate(model, test_loader)
-                wandb.log({"test_loss": test_loss})
-                save_checkpoint(model, optimizer, _ + 1, checkpoint_dir)
+                wandb.log({"test_loss": test_loss, "epoch": epoch + 1})
+                save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
+                model.train()  # Ensure model is back in training mode
+            except Exception as e:
+                print(f"An error occurred during evaluation: {e}")
                 model.train()
-        except Exception as e:
-            print(f"An error occurred during evaluation: {e}")
-            model.train()
-            return
+                return
+
+    print("Training complete!")
 
 def main():
+    parser = argparse.ArgumentParser(description='Train VQVAE model.')
+    parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint file')
+    args = parser.parse_args()
 
     with open('config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=config["training"]["experiment_name"])
+    wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=config["training"]["experiment_name"], config=config)
 
     csv_file = config["dataset"]["csv_file"]
     dataset_mimic_train = ECGDataset(csv_file=csv_file, split='train')
@@ -145,14 +169,12 @@ def main():
     ).to(device)
 
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        model = nn.DataParallel(model)
-
-    # Move the model to GPU
-    model = model.to(device)
+            print(f"Using {torch.cuda.device_count()} GPUs")
+            model = nn.DataParallel(model)
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    train(model, train_loader, test_loader, train_iterations=train_iter, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir)
+    # start_iteration, model, optimizer = load_checkpoint(model, opt, checkpoint_dir='checkpoints/', checkpoint_path=args.checkpoint_path)
+    train(model, train_loader, test_loader, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir, num_epochs=train_iter, start_epoch=0)
     
 if __name__ == '__main__':
     main()
