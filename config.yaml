@@ -1,14 +1,17 @@
 training:
   learning_rate: 3e-4
-  train_iterations: 10000
-  num_codes: 4096
+  train_iterations: 20000
+  num_codes: 1024
   seed: 1234
-  batch_size: 8
+  batch_size: 4
   num_workers: 4
-  experiment_name: "experiment_deeper_4096_rvq_QINCo"
+  experiment_name: "experiment_deeper_1024_rvq_QINCo_debug"
+  classes: 77
 
 dataset:
   csv_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
+  parquet_file: "/mnt/rbanerjee/data/MIMIC-IV/mimic_labelbox_bert_v4_all_updated.parquet"
 
 evaluation:
-  model_path: "/mnt/rbanerjee/checkpoints/experiment_deeper_2048_learnable_codebook_model/vqvae_iteration_10000.pth"
+  model_path: "/mnt/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
+  embedding_dir: "/mnt/rbanerjee/embeddings/experiment_deeper_1024_rvq_QINCo/"

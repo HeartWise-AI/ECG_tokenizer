@@ -97,9 +97,8 @@ class SimpleVQAutoEncoder(nn.Module):
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
-            # print(f"Shape after layer {i} ({layer}): {x.shape}")
             if isinstance(layer, VectorQuantize):
-                x, indices, commit_loss = layer(x) # [2048, 64, 625]
+                x, indices, commit_loss = layer(x)
             else:
                 x = layer(x)
            
@@ -110,18 +109,24 @@ class ResVQAutoEncoder(nn.Module):
             super().__init__()
             self.layers = nn.ModuleList(
                 [
-                    nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=1), 
-                    nn.MaxPool1d(kernel_size=2, stride=2),
+                    nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=16), 
+                    nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
                     nn.GELU(),
-                    nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
-                    ResidualVQ(dim=timesteps // 8,
+                    nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=8),
+                    nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
+                    nn.GELU(),
+                    nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
+                    ResidualVQ(dim=160,
                                 num_quantizers = 8,
                                 commitment_weight = 0.25,
                                 **vq_kwargs),
-                    nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
+                    nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=2),
                     nn.GELU(),
                     nn.Upsample(scale_factor=2, mode="nearest"),
-                    nn.ConvTranspose1d(32, 12, kernel_size=4, stride=2, padding=1),
+                    nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
+                    nn.GELU(),
+                    nn.Upsample(scale_factor=2, mode="nearest"),
+                    nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=16)
                 ]
             )
             return
@@ -129,8 +134,34 @@ class ResVQAutoEncoder(nn.Module):
     def forward(self, x):
         for i, layer in enumerate(self.layers):
             if isinstance(layer, ResidualVQ):
-                x, indices, commit_loss = layer(x) # [2048, 64, 625]
+                x, indices, commit_loss = layer(x)
             else:
                 x = layer(x)
            
         return x.clamp(-1, 1), indices, commit_loss
+    
+class CodebookClassifier(nn.Module):
+    def __init__(self, num_classes, num_quantizers, prev_embedding_dim, embedding_dim):
+        super(CodebookClassifier, self).__init__()
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(num_quantizers * prev_embedding_dim * embedding_dim, 4096), 
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(4096, 2048),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(2048, 1024),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(p=0.3),
+            nn.Linear(256, num_classes)
+        )
+    
+    def forward(self, codebook_embeddings):
+        return self.classifier(codebook_embeddings)
