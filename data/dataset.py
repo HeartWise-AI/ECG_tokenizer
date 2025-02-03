@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
 
-with open('/mnt/rbanerjee/code/ECG_tokenizer/config.yaml', 'r') as file:
+with open('/home/rbanerjee/ECG_tokenizer/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
 
@@ -374,15 +374,41 @@ class ECGDatasetLinearProbe(Dataset):
         Stratified train-validation-test split based on the label distribution.
         """
         labels = self.data_frame[[
-            'Afib'
+            'Sinusal', 'Regular', 'Monomorph', 
+                'QS complex in V1-V2-V3', 'R complex in V5-V6', 
+                'T wave inversion (inferior - II, III, aVF)', 
+                'Left bundle branch block', 'RaVL > 11 mm', 'SV1 + RV5 or RV6 > 35 mm', 
+                'T wave inversion (lateral -I, aVL, V5-V6)', 'T wave inversion (anterior - V3-V4)', 
+                'Left axis deviation', 'Left ventricular hypertrophy', 'Bradycardia', 
+                'Q wave (inferior - II, III, aVF)', 'Afib', 'Irregularly irregular', 
+                'Atrial tachycardia (>= 100 BPM)', 'Nonspecific intraventricular conduction delay', 
+                'Premature ventricular complex', 'Polymorph', 'T wave inversion (septal- V1-V2)', 
+                'Right bundle branch block', 'Ventricular paced', 'ST elevation (anterior - V3-V4)', 
+                'ST elevation (septal - V1-V2)', '1st degree AV block', 'Premature atrial complex', 
+                'Atrial flutter', "rSR' in V1-V2", 'qRS in V5-V6-I, aVL', 
+                'Left anterior fascicular block', 'Right axis deviation', '2nd degree AV block - mobitz 1', 
+                'ST depression (inferior - II, III, aVF)', 'Acute pericarditis', 
+                'ST elevation (inferior - II, III, aVF)', 'Low voltage', 'Regularly irregular', 
+                'Junctional rhythm', 'Left atrial enlargement', 'ST elevation (lateral - I, aVL, V5-V6)', 
+                'Atrial paced', 'Right ventricular hypertrophy', 'Delta wave', 'Wolff-Parkinson-White (Pre-excitation syndrome)', 
+                'Prolonged QT', 'ST depression (anterior - V3-V4)', 'QRS complex negative in III', 
+                'Q wave (lateral- I, aVL, V5-V6)', 'Supraventricular tachycardia', 'ST downslopping', 
+                'ST depression (lateral - I, avL, V5-V6)', '2nd degree AV block - mobitz 2', 'U wave', 
+                'R/S ratio in V1-V2 >1', 'RV1 + SV6 > 11 mm', 'Left posterior fascicular block', 
+                'Right atrial enlargement', 'ST depression (septal- V1-V2)', 'Q wave (septal- V1-V2)', 
+                'Q wave (anterior - V3-V4)', 'ST upslopping', 'Right superior axis', 'Ventricular tachycardia', 
+                'ST elevation (posterior - V7-V8-V9)', 'Ectopic atrial rhythm (< 100 BPM)', 
+                'Lead misplacement', 'Third Degree AV Block', 'Acute MI', 'Early repolarization', 
+                'Q wave (posterior - V7-V9)', 'Bi-atrial enlargement', 'LV pacing', 'Brugada', 
+                'Ventricular Rhythm', 'no_qrs'
         ]].values
 
-        stratifier = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
         train_idx, test_idx = next(stratifier.split(self.data_frame, labels))
 
         train_val_df = self.data_frame.iloc[train_idx].reset_index(drop=True)
         test_df = self.data_frame.iloc[test_idx].reset_index(drop=True)
-        stratifier = StratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
+        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
         train_idx, val_idx = next(stratifier.split(train_val_df, labels[train_idx]))
         train_df = train_val_df.iloc[train_idx].reset_index(drop=True)
         val_df = train_val_df.iloc[val_idx].reset_index(drop=True)
@@ -401,21 +427,49 @@ class ECGDatasetLinearProbe(Dataset):
             raise FileNotFoundError(f"Embedding file not found: {embedding_path}")  
 
         embedding = np.load(embedding_path)
-        labels = label_row[[
-            'Afib'
-        ]].values
+        # Extract label values using the desired class columns
+        labels_series = label_row[[ 
+            'Sinusal', 'Regular', 'Monomorph', 
+                'QS complex in V1-V2-V3', 'R complex in V5-V6', 
+                'T wave inversion (inferior - II, III, aVF)', 
+                'Left bundle branch block', 'RaVL > 11 mm', 'SV1 + RV5 or RV6 > 35 mm', 
+                'T wave inversion (lateral -I, aVL, V5-V6)', 'T wave inversion (anterior - V3-V4)', 
+                'Left axis deviation', 'Left ventricular hypertrophy', 'Bradycardia', 
+                'Q wave (inferior - II, III, aVF)', 'Afib', 'Irregularly irregular', 
+                'Atrial tachycardia (>= 100 BPM)', 'Nonspecific intraventricular conduction delay', 
+                'Premature ventricular complex', 'Polymorph', 'T wave inversion (septal- V1-V2)', 
+                'Right bundle branch block', 'Ventricular paced', 'ST elevation (anterior - V3-V4)', 
+                'ST elevation (septal - V1-V2)', '1st degree AV block', 'Premature atrial complex', 
+                'Atrial flutter', "rSR' in V1-V2", 'qRS in V5-V6-I, aVL', 
+                'Left anterior fascicular block', 'Right axis deviation', '2nd degree AV block - mobitz 1', 
+                'ST depression (inferior - II, III, aVF)', 'Acute pericarditis', 
+                'ST elevation (inferior - II, III, aVF)', 'Low voltage', 'Regularly irregular', 
+                'Junctional rhythm', 'Left atrial enlargement', 'ST elevation (lateral - I, aVL, V5-V6)', 
+                'Atrial paced', 'Right ventricular hypertrophy', 'Delta wave', 'Wolff-Parkinson-White (Pre-excitation syndrome)', 
+                'Prolonged QT', 'ST depression (anterior - V3-V4)', 'QRS complex negative in III', 
+                'Q wave (lateral- I, aVL, V5-V6)', 'Supraventricular tachycardia', 'ST downslopping', 
+                'ST depression (lateral - I, avL, V5-V6)', '2nd degree AV block - mobitz 2', 'U wave', 
+                'R/S ratio in V1-V2 >1', 'RV1 + SV6 > 11 mm', 'Left posterior fascicular block', 
+                'Right atrial enlargement', 'ST depression (septal- V1-V2)', 'Q wave (septal- V1-V2)', 
+                'Q wave (anterior - V3-V4)', 'ST upslopping', 'Right superior axis', 'Ventricular tachycardia', 
+                'ST elevation (posterior - V7-V8-V9)', 'Ectopic atrial rhythm (< 100 BPM)', 
+                'Lead misplacement', 'Third Degree AV Block', 'Acute MI', 'Early repolarization', 
+                'Q wave (posterior - V7-V9)', 'Bi-atrial enlargement', 'LV pacing', 'Brugada', 
+                'Ventricular Rhythm', 'no_qrs'
+        ]]
 
-        labels = torch.tensor(labels.astype(np.int32), dtype=torch.float32)
-        return embedding, labels
+        labels_values = torch.tensor(labels_series.values.astype(np.int32), dtype=torch.float32)
+        labels = labels_series.index.tolist()
+        return embedding, labels_values, labels
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        embedding, labels = self.get_embedding_and_labels(idx)
+        embedding, labels_values, labels = self.get_embedding_and_labels(idx)
         embedding = torch.tensor(embedding, dtype=torch.float32)
 
-        sample = {'embedding': embedding, 'labels': labels}
+        sample = {'embedding': embedding, 'labels_values': labels_values, 'labels': labels}
 
         if self.transform:
             sample['embedding'] = self.transform(sample['embedding'])
