@@ -7,8 +7,6 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.cuda.amp import autocast
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 import argparse
 import wandb
 from metrics import compute_metrics
@@ -82,14 +80,9 @@ def evaluate(data_loader, classifier, criterion, labels):
             labels_values = batch['labels_values'].to(device)
             predictions = classifier(embeddings)
             loss = criterion(predictions, labels_values)
-            # total_loss += loss.item()
-            # pred_prob = torch.sigmoid(predictions)
-            # pred_vals = (pred_prob > 0.5).int().cpu()
-            # all_preds.extend(pred_vals)
-            # all_labels.extend(labels.int().cpu().detach().numpy())
             pred_prob = torch.sigmoid(predictions)
             labels_np = labels_values.int().cpu().detach().numpy()
-            predictions_list.append(pred_prob.int().cpu())
+            predictions_list.append(pred_prob.cpu())
             labels_list.append(labels_np)
 
     all_preds = np.vstack(predictions_list)
@@ -128,7 +121,7 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
 
             pred_prob = torch.sigmoid(predictions)
             labels_np = labels_values.int().cpu().detach().numpy()
-            predictions_list.append(pred_prob.int().cpu())
+            predictions_list.append(pred_prob.cpu())
             labels_list.append(labels_np)
 
         all_preds = np.vstack(predictions_list)
@@ -139,22 +132,9 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
         print(f"Epoch {epoch + 1}, Training Loss: {loss.item():.4f}")
         print(f"Metrics: {metrics['Regular']}")
 
-        # wandb.log({
-        #     "classification_loss": loss.item(),
-        #     "training_accuracy": train_accuracy * 100,
-        #     "training_precision": train_precision * 100,
-        #     "training_recall": train_recall * 100,
-        #     "training_f1": train_f1 * 100
-        # })
-
         if (epoch + 1) % 5 == 0:
             val_metrics = evaluate(val_loader, classifier, criterion, labels)
             print(f"Validation Metrics: {val_metrics['Regular']}")
-            # wandb.log({
-            #     "test_loss": val_loss,
-            #     "test_accuracy": val_accuracy * 100
-            # })
-
     return
 
 def main():
