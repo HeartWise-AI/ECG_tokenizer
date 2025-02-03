@@ -91,7 +91,6 @@ def evaluate(data_loader, classifier, criterion, labels):
     df_gt = pd.DataFrame(all_labels, columns=labels)
     metrics = compute_metrics(df_gt, df_preds)
     print(f"Epoch {epoch + 1}, Validation Loss: {loss.item():.4f}")
-    classifier.train()
     
     return metrics
 
