@@ -179,7 +179,7 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
     criterion = FocalLoss(logits=True)
     # criterion = nn.BCEWithLogitsLoss()
-    train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
+    train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
     test_metrics = evaluate(test_loader, classifier, criterion, labels)
     print(f"Test Metrics: {test_metrics}")
     wandb.log({'test/all_metrics': test_metrics})
