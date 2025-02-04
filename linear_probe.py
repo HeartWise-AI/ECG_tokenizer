@@ -94,7 +94,7 @@ def evaluate(data_loader, classifier, criterion, labels):
     return metrics
 
 
-def train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path):
+def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path):
     classifier.train()
 
     pbar = trange(num_epochs)
@@ -127,20 +127,20 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
         metrics = compute_metrics(df_gt, df_preds)
         print(f"Epoch {epoch + 1}, Training Loss: {loss.item():.4f}")
         print(f"Metrics: {metrics['Rhythm Disorders']}")
-        wandb.log({'Rhythm Disorders': metrics['Rhythm Disorders']})
-        wandb.log({'Enlargement of the heart chambers': metrics['Enlargement of the heart chambers']})
-        wandb.log({'Pericarditis': metrics['Pericarditis']})
-        wandb.log({'Infarction or ischemia': metrics['Infarction or ischemia']})
-        wandb.log({'Other diagnoses': metrics['Other diagnoses']})
+        wandb.log({'train/Rhythm Disorders': metrics['Rhythm Disorders']})
+        wandb.log({'train/Enlargement of the heart chambers': metrics['Enlargement of the heart chambers']})
+        wandb.log({'train/Pericarditis': metrics['Pericarditis']})
+        wandb.log({'train/Infarction or ischemia': metrics['Infarction or ischemia']})
+        wandb.log({'trainOther diagnoses': metrics['Other diagnoses']})
 
         if (epoch + 1) % 2 == 0:
             val_metrics = evaluate(val_loader, classifier, criterion, labels)
             print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
-            wandb.log({'Validation Rhythm Disorders': val_metrics['Rhythm Disorders']})
-            wandb.log({'Validation Enlargement of the heart chambersmetrics': val_metrics['Enlargement of the heart chambers']})
-            wandb.log({'Validation Pericarditis': val_metrics['Pericarditis']})
-            wandb.log({'Validation Infarction or ischemia': val_metrics['Infarction or ischemia']})
-            wandb.log({'Validation Other diagnoses': val_metrics['Other diagnoses']})
+            wandb.log({'val/Rhythm Disorders': val_metrics['Rhythm Disorders']})
+            wandb.log({'val/Enlargement of the heart chambersmetrics': val_metrics['Enlargement of the heart chambers']})
+            wandb.log({'val/Pericarditis': val_metrics['Pericarditis']})
+            wandb.log({'val/Infarction or ischemia': val_metrics['Infarction or ischemia']})
+            wandb.log({'val/Other diagnoses': val_metrics['Other diagnoses']})
 
             checkpoint_dir = checkpoint_path
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -180,6 +180,9 @@ def main():
     criterion = FocalLoss(logits=True)
     # criterion = nn.BCEWithLogitsLoss()
     train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
+    test_metrics = evaluate(test_loader, classifier, criterion, labels)
+    print(f"Test Metrics: {test_metrics}")
+    wandb.log({'test/all_metrics': test_metrics})
     
 if __name__ == '__main__':
     main()
