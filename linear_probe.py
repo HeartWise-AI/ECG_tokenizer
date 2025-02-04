@@ -74,7 +74,6 @@ def evaluate(data_loader, classifier, criterion, labels):
     with torch.no_grad():
         for batch in data_loader:
             embeddings = batch['embedding'].float()
-            # embeddings = embeddings[-1].unsqueeze(0)
             embeddings = embeddings.permute(1, 0, 2, 3)
             embeddings = embeddings.to(device)
             labels_values = batch['labels_values'].to(device)
@@ -90,12 +89,12 @@ def evaluate(data_loader, classifier, criterion, labels):
     df_preds = pd.DataFrame(all_preds, columns=labels)
     df_gt = pd.DataFrame(all_labels, columns=labels)
     metrics = compute_metrics(df_gt, df_preds)
-    print(f"Epoch {epoch + 1}, Validation Loss: {loss.item():.4f}")
+    print(f"Validation Loss: {loss.item():.4f}")
     
     return metrics
 
 
-def train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels):
+def train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path):
     classifier.train()
 
     pbar = trange(num_epochs)
@@ -109,7 +108,6 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
             embeddings = batch['embedding'].float().to(device)
             labels_values = batch['labels_values'].to(device)
 
-            # embeddings = embeddings[-1].unsqueeze(0)
             embeddings = embeddings.permute(1, 0, 2, 3)
             embeddings = embeddings.to(device)
             predictions = classifier(embeddings)
@@ -120,7 +118,7 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
 
             pred_prob = torch.sigmoid(predictions)
             labels_np = labels_values.int().cpu().detach().numpy()
-            predictions_list.append(pred_prob.cpu())
+            predictions_list.append(pred_prob.cpu().detach().numpy())
             labels_list.append(labels_np)
 
         all_preds = np.vstack(predictions_list)
@@ -129,19 +127,38 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
         df_gt = pd.DataFrame(all_labels, columns=labels)
         metrics = compute_metrics(df_gt, df_preds)
         print(f"Epoch {epoch + 1}, Training Loss: {loss.item():.4f}")
-        print(f"Metrics: {metrics['Regular']}")
+        print(f"Metrics: {metrics['Rhythm Disorders']}")
+        wandb.log({'Rhythm Disorders': metrics['Rhythm Disorders']})
+        wandb.log({'Enlargement of the heart chambersmetrics': metrics['Enlargement of the heart chambers']})
+        wandb.log({'Pericarditis': metrics['Pericarditis']})
+        wandb.log({'Infarction or ischemia': metrics['Infarction or ischemia']})
+        wandb.log({'Other diagnoses': metrics['Other diagnoses']})
 
         if (epoch + 1) % 5 == 0:
             val_metrics = evaluate(val_loader, classifier, criterion, labels)
-            print(f"Validation Metrics: {val_metrics['Regular']}")
+            print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
+            wandb.log({'Validation Rhythm Disorders': val_metrics['Rhythm Disorders']})
+            wandb.log({'Validation Enlargement of the heart chambersmetrics': val_metrics['Enlargement of the heart chambers']})
+            wandb.log({'Validation Pericarditis': val_metrics['Pericarditis']})
+            wandb.log({'Validation Infarction or ischemia': val_metrics['Infarction or ischemia']})
+            wandb.log({'Validation Other diagnoses': val_metrics['Other diagnoses']})
+
+            checkpoint_dir = checkpoint_path
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch+1}.pth")
+            torch.save(classifier.state_dict(), checkpoint_path)
+            print(f"Model weights saved to {checkpoint_path}")
+        
+        scheduler.step()
     return
 
 def main():
     seed = config["training"]["seed"]
     torch.random.manual_seed(seed)
-    wandb.init(project="ECG_tokenizer_linear_probing", entity="rohanbanerjee", name="test_run_one_codebook", config=config)
+    wandb.init(project="ECG_tokenizer_linear_probing", entity="mhi_ai", name="lp_shallow", config=config)
     parquet_file = config["dataset"]["parquet_file"]
     embedding_folder = config["evaluation"]["embedding_dir"]
+    checkpoint_path = config["evaluation"]["classifier_checkpoint"]
     num_classes = 77
     embedding_dim = 160
     prev_embedding_dim = 128
@@ -160,10 +177,10 @@ def main():
 
     classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim).to(device)
     optimizer = optim.Adam(classifier.parameters(), lr=1e-6, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
     criterion = FocalLoss(logits=True)
     # criterion = nn.BCEWithLogitsLoss()
-    train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels)
+    train(classifier, train_loader, val_loader, test_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
     
 if __name__ == '__main__':
     main()
