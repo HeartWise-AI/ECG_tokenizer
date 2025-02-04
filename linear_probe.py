@@ -99,7 +99,6 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
 
     pbar = trange(num_epochs)
     for epoch in pbar:
-        epoch_losses = []
         all_preds = []
         all_labels = []
         predictions_list = []
