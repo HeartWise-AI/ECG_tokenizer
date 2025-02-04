@@ -129,12 +129,12 @@ def train(classifier, train_loader, val_loader, test_loader, optimizer, criterio
         print(f"Epoch {epoch + 1}, Training Loss: {loss.item():.4f}")
         print(f"Metrics: {metrics['Rhythm Disorders']}")
         wandb.log({'Rhythm Disorders': metrics['Rhythm Disorders']})
-        wandb.log({'Enlargement of the heart chambersmetrics': metrics['Enlargement of the heart chambers']})
+        wandb.log({'Enlargement of the heart chambers': metrics['Enlargement of the heart chambers']})
         wandb.log({'Pericarditis': metrics['Pericarditis']})
         wandb.log({'Infarction or ischemia': metrics['Infarction or ischemia']})
         wandb.log({'Other diagnoses': metrics['Other diagnoses']})
 
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 2 == 0:
             val_metrics = evaluate(val_loader, classifier, criterion, labels)
             print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
             wandb.log({'Validation Rhythm Disorders': val_metrics['Rhythm Disorders']})
