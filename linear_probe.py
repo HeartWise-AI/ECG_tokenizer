@@ -74,7 +74,6 @@ def evaluate(data_loader, classifier, criterion, labels):
     with torch.no_grad():
         for batch in data_loader:
             embeddings = batch['embedding'].float()
-            embeddings = embeddings.permute(1, 0, 2, 3)
             embeddings = embeddings.to(device)
             labels_values = batch['labels_values'].to(device)
             predictions = classifier(embeddings)
@@ -107,7 +106,6 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
             embeddings = batch['embedding'].float().to(device)
             labels_values = batch['labels_values'].to(device)
 
-            embeddings = embeddings.permute(1, 0, 2, 3)
             embeddings = embeddings.to(device)
             predictions = classifier(embeddings)
             loss = criterion(predictions, labels_values)
@@ -125,15 +123,15 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
         df_preds = pd.DataFrame(all_preds, columns=labels)
         df_gt = pd.DataFrame(all_labels, columns=labels)
         metrics = compute_metrics(df_gt, df_preds)
-        print(f"Epoch {epoch + 1}, Training Loss: {loss.item():.4f}")
+        print(f"Epoch {epoch}, Training Loss: {loss.item():.4f}")
         print(f"Metrics: {metrics['Rhythm Disorders']}")
         wandb.log({'train/Rhythm Disorders': metrics['Rhythm Disorders']})
         wandb.log({'train/Enlargement of the heart chambers': metrics['Enlargement of the heart chambers']})
         wandb.log({'train/Pericarditis': metrics['Pericarditis']})
         wandb.log({'train/Infarction or ischemia': metrics['Infarction or ischemia']})
-        wandb.log({'trainOther diagnoses': metrics['Other diagnoses']})
+        wandb.log({'train/Other diagnoses': metrics['Other diagnoses']})
 
-        if (epoch + 1) % 2 == 0:
+        if (epoch) % 2 == 0 and epoch > 0:
             val_metrics = evaluate(val_loader, classifier, criterion, labels)
             print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
             wandb.log({'val/Rhythm Disorders': val_metrics['Rhythm Disorders']})
@@ -142,12 +140,12 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
             wandb.log({'val/Infarction or ischemia': val_metrics['Infarction or ischemia']})
             wandb.log({'val/Other diagnoses': val_metrics['Other diagnoses']})
 
-            checkpoint_dir = checkpoint_path
+            checkpoint_dir = os.path.dirname(checkpoint_path)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch+1}.pth")
-            torch.save(classifier.state_dict(), checkpoint_path)
-            print(f"Model weights saved to {checkpoint_path}")
-        
+            checkpoint_file = os.path.join(checkpoint_dir, f"model_epoch_{epoch}.pth")
+            torch.save(classifier.state_dict(), checkpoint_file)
+            print(f"Model weights saved to {checkpoint_file}")
+    
         scheduler.step()
     return
 
@@ -162,17 +160,17 @@ def main():
     embedding_dim = 160
     prev_embedding_dim = 128
     num_quantizers = 8
-    num_epochs = 1000
+    num_epochs = 10
 
     dataset_mimic_train = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='train')
-    train_loader = DataLoader(dataset_mimic_train, batch_size=8, shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
+    train_loader = DataLoader(dataset_mimic_train, batch_size=16, shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
     labels = dataset_mimic_train[0]['labels']
 
     dataset_mimic_val = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='val')
-    val_loader = DataLoader(dataset_mimic_val, batch_size=8, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(dataset_mimic_val, batch_size=32, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
     dataset_mimic_test = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='test')
-    test_loader = DataLoader(dataset_mimic_test, batch_size=128, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    test_loader = DataLoader(dataset_mimic_test, batch_size=2, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
     classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim).to(device)
     optimizer = optim.Adam(classifier.parameters(), lr=1e-6, weight_decay=1e-4)
