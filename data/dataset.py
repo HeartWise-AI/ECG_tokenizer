@@ -83,7 +83,7 @@ class ECGDataset(Dataset):
         return sample
 
 class ECGDatasetLLM(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, model=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
+    def __init__(self, embeddings_folder=None, model=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
         self.transform = transform
         self.split = split
         self.model = model
@@ -350,7 +350,7 @@ class ECGDatasetEmbeddings(Dataset):
     
 
 class ECGDatasetLinearProbe(Dataset):
-    def __init__(self, parquet_file=None, embedding_folder=None, transform=None, split='train', val_size=0.1, test_size=0.01, random_state=42):
+    def __init__(self, parquet_file=None, embedding_folder=None, transform=None, split='train', val_size=0.1, test_size=0.1, random_state=42):
         self.transform = transform
         self.split = split
         self.embedding_folder = embedding_folder

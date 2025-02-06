@@ -141,27 +141,32 @@ class ResVQAutoEncoder(nn.Module):
         return x.clamp(-1, 1), indices, commit_loss
     
 class CodebookClassifier(nn.Module):
-    def __init__(self, num_classes, num_quantizers, prev_embedding_dim, embedding_dim):
+    def __init__(self, num_classes, num_quantizers, prev_embedding_dim, embedding_dim, num_layers=5, hidden_dim=4096):
         super(CodebookClassifier, self).__init__()
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(num_quantizers * prev_embedding_dim * embedding_dim, 4096), 
-            nn.ReLU(),
-            nn.Dropout(p=0.3),
-            nn.Linear(4096, 2048),
-            nn.ReLU(),
-            nn.Dropout(p=0.3),
-            nn.Linear(2048, 1024),
-            nn.ReLU(),
-            nn.Dropout(p=0.3),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(p=0.3),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(p=0.3),
-            nn.Linear(256, num_classes)
-        )
+        layers = [nn.Flatten()]
+        input_dim = num_quantizers * prev_embedding_dim * embedding_dim
+
+        if num_layers == 0:
+            # Directly connect input to output.
+            layers.append(nn.Linear(input_dim, num_classes))
+        else:
+            # First hidden layer.
+            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            
+            current_dim = hidden_dim
+            # Create additional hidden layers with a reduction strategy.
+            for _ in range(num_layers - 1):
+                # For instance, reduce dimension by half each time (with a lower bound of 256).
+                next_dim = current_dim // 2
+                layers.append(nn.Linear(current_dim, next_dim))
+                layers.append(nn.ReLU())
+                current_dim = next_dim
+
+            # Final classification layer.
+            layers.append(nn.Linear(current_dim, num_classes))
+
+        self.classifier = nn.Sequential(*layers)
     
     def forward(self, codebook_embeddings):
         return self.classifier(codebook_embeddings)

@@ -13,7 +13,7 @@ from metrics import compute_metrics
 import pandas as pd
 
 from data.dataset import ECGDatasetLinearProbe
-from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
+from models.models import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
 import os
 from tqdm.auto import trange
 import wandb
@@ -62,6 +62,14 @@ class FocalLoss(nn.Module):
         else:
             return F_loss
 
+def get_criterion(criterion_name):
+    if criterion_name == "focal_loss":
+        return FocalLoss(logits=True)
+    elif criterion_name == "bce_loss":
+        return nn.BCEWithLogitsLoss()
+    else:
+        raise ValueError("criterion must be either 'focal_loss' or 'bce_loss'")
+
 def evaluate(data_loader, classifier, criterion, labels):
 
     classifier.eval()
@@ -89,6 +97,7 @@ def evaluate(data_loader, classifier, criterion, labels):
     df_gt = pd.DataFrame(all_labels, columns=labels)
     metrics = compute_metrics(df_gt, df_preds)
     print(f"Validation Loss: {loss.item():.4f}")
+    # wandb.log({'val/validation_loss': loss.item()})
     
     return metrics
 
@@ -125,26 +134,27 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
         metrics = compute_metrics(df_gt, df_preds)
         print(f"Epoch {epoch}, Training Loss: {loss.item():.4f}")
         print(f"Metrics: {metrics['Rhythm Disorders']}")
+        wandb.log({'train/train_loss': loss.item()})
         wandb.log({'train/Rhythm Disorders': metrics['Rhythm Disorders']})
+        wandb.log({'train/Conduction Disorder': metrics['Conduction Disorder']})
         wandb.log({'train/Enlargement of the heart chambers': metrics['Enlargement of the heart chambers']})
         wandb.log({'train/Pericarditis': metrics['Pericarditis']})
         wandb.log({'train/Infarction or ischemia': metrics['Infarction or ischemia']})
         wandb.log({'train/Other diagnoses': metrics['Other diagnoses']})
 
-        if (epoch) % 2 == 0 and epoch > 0:
-            val_metrics = evaluate(val_loader, classifier, criterion, labels)
-            print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
-            wandb.log({'val/Rhythm Disorders': val_metrics['Rhythm Disorders']})
-            wandb.log({'val/Enlargement of the heart chambersmetrics': val_metrics['Enlargement of the heart chambers']})
-            wandb.log({'val/Pericarditis': val_metrics['Pericarditis']})
-            wandb.log({'val/Infarction or ischemia': val_metrics['Infarction or ischemia']})
-            wandb.log({'val/Other diagnoses': val_metrics['Other diagnoses']})
+        os.makedirs(checkpoint_path, exist_ok=True)
+        checkpoint_file = os.path.join(checkpoint_path, f"model_epoch_{epoch}.pth")
+        torch.save(classifier.state_dict(), checkpoint_file)
+        print(f"Model weights saved to {checkpoint_file}")
 
-            checkpoint_dir = os.path.dirname(checkpoint_path)
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_file = os.path.join(checkpoint_dir, f"model_epoch_{epoch}.pth")
-            torch.save(classifier.state_dict(), checkpoint_file)
-            print(f"Model weights saved to {checkpoint_file}")
+        val_metrics = evaluate(val_loader, classifier, criterion, labels)
+        print(f"Validation Metrics: {val_metrics['Rhythm Disorders']}")
+        wandb.log({'val/Rhythm Disorders': val_metrics['Rhythm Disorders']})
+        wandb.log({'val/Conduction Disorder': metrics['Conduction Disorder']})
+        wandb.log({'val/Enlargement of the heart chambersmetrics': val_metrics['Enlargement of the heart chambers']})
+        wandb.log({'val/Pericarditis': val_metrics['Pericarditis']})
+        wandb.log({'val/Infarction or ischemia': val_metrics['Infarction or ischemia']})
+        wandb.log({'val/Other diagnoses': val_metrics['Other diagnoses']})
     
         scheduler.step()
     return
@@ -152,31 +162,31 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
 def main():
     seed = config["training"]["seed"]
     torch.random.manual_seed(seed)
-    wandb.init(project="ECG_tokenizer_linear_probing", entity="mhi_ai", name="lp_shallow", config=config)
+    experiment_name = config["classifier"]["experiment_name"]
+    wandb.init(project="ECG_tokenizer_linear_probing", entity="mhi_ai", name=experiment_name, config=config)
     parquet_file = config["dataset"]["parquet_file"]
     embedding_folder = config["evaluation"]["embedding_dir"]
-    checkpoint_path = config["evaluation"]["classifier_checkpoint"]
-    num_classes = 77
+    checkpoint_path = os.path.join(config["classifier"]["base_checkpoint_path"], experiment_name)
+    num_classes = config["classifier"]["num_classes"]
     embedding_dim = 160
     prev_embedding_dim = 128
-    num_quantizers = 8
-    num_epochs = 10
+    num_quantizers = config["classifier"]["num_quantizers"]
+    num_epochs = config["classifier"]["num_epochs"]
 
     dataset_mimic_train = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='train')
-    train_loader = DataLoader(dataset_mimic_train, batch_size=16, shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
+    train_loader = DataLoader(dataset_mimic_train, batch_size=config["classifier"]["batch_size"], shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
     labels = dataset_mimic_train[0]['labels']
 
     dataset_mimic_val = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='val')
-    val_loader = DataLoader(dataset_mimic_val, batch_size=32, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(dataset_mimic_val, batch_size=config["classifier"]["batch_size"], shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
     dataset_mimic_test = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='test')
-    test_loader = DataLoader(dataset_mimic_test, batch_size=2, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    test_loader = DataLoader(dataset_mimic_test, batch_size=config["classifier"]["batch_size"], shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
-    classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim).to(device)
-    optimizer = optim.Adam(classifier.parameters(), lr=1e-6, weight_decay=1e-4)
+    classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim, num_layers=config["classifier"]["num_layers"], hidden_dim=config["classifier"]["hidden_dim"]).to(device)
+    optimizer = optim.Adam(classifier.parameters(), lr=float(config["classifier"]["lr"]), weight_decay=float(config["classifier"]["weight_decay"]))
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
-    criterion = FocalLoss(logits=True)
-    # criterion = nn.BCEWithLogitsLoss()
+    criterion = criterion = get_criterion(config["classifier"]["criterion"])
     train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
     test_metrics = evaluate(test_loader, classifier, criterion, labels)
     print(f"Test Metrics: {test_metrics}")
