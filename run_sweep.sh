@@ -25,17 +25,13 @@ print_usage() {
 }
 
 # Default values
-SELECTED_GPUS="1,3" # Comma-separated list of GPU IDs to use
-SWEEP_CONFIG_PATH="config/sweep_config_3.yaml"
+
+SWEEP_CONFIG_PATH="config/sweep_config.yaml"
 COUNT="5" # Number of runs to execute
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --selected_gpus)
-            SELECTED_GPUS="$2"
-            shift 2
-            ;;
         --sweep_config)
             SWEEP_CONFIG_PATH="$2"
             shift 2
@@ -55,7 +51,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check if required arguments are provided
-if [ -z "${SELECTED_GPUS}" ] || [ -z "${SWEEP_CONFIG_PATH}" ]; then
+if [ -z "${SWEEP_CONFIG_PATH}" ]; then
     echo "Error: Missing required arguments"
     print_usage
 fi
@@ -76,20 +72,6 @@ fi
 
 # Backup the original sweep config
 cp "${SWEEP_CONFIG_PATH}" "${SWEEP_CONFIG_PATH}.bak"
-
-# Calculate number of GPUs
-NUM_GPUS=$(echo "${SELECTED_GPUS}" | tr ',' '\n' | wc -l)
-
-# Update the sweep config with the correct number of GPUs
-# This assumes your sweep config is in YAML format
-echo -e "${BLUE}Updating --nproc_per_node in ${SWEEP_CONFIG_PATH}...${NC}"
-if sed -i "s/--nproc_per_node=[0-9]*/--nproc_per_node=$NUM_GPUS/" "${SWEEP_CONFIG_PATH}"; then
-    echo -e "${GREEN}Updated --nproc_per_node to $NUM_GPUS in ${SWEEP_CONFIG_PATH}${NC}"
-    echo ""
-else
-    echo -e "${RED}Failed to update --nproc_per_node in ${SWEEP_CONFIG_PATH}${NC}"
-    exit 1
-fi
 
 # Extract configuration fields using yq
 mapfile -t COMMANDS < <(yq e '.command[]' "${SWEEP_CONFIG_PATH}")
@@ -122,15 +104,9 @@ echo ""
 
 # Print training configuration
 echo -e "${BLUE}Starting training with:${NC}"
-echo "Selected GPUs: ${SELECTED_GPUS} (Total: ${NUM_GPUS} GPUs)"
 echo "Sweep config path: ${SWEEP_CONFIG_PATH}"
 echo "Count: ${COUNT}"
 echo ""
-
-# Environment variables for better DDP performance
-export NCCL_DEBUG=INFO
-export CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}"
-export OMP_NUM_THREADS=1
 
 # Run the sweep and extract the SWEEP_ID while displaying logs
 echo -e "${BLUE}Initializing W&B Sweep...${NC}"
