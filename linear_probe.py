@@ -14,6 +14,8 @@ import pandas as pd
 
 from data.dataset import ECGDatasetLinearProbe
 from models.models import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
+from utils.parser import HeartWiseParser
+from utils.config import HeartWiseConfig
 import os
 from tqdm.auto import trange
 import wandb
@@ -23,9 +25,6 @@ import logging
 from tqdm import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-with open('config.yaml', 'r') as file:
-    config = yaml.safe_load(file)
 
 def print_class_distribution(loader, split_name):
     total_samples = 0
@@ -159,38 +158,39 @@ def train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs
         scheduler.step()
     return
 
-def main():
-    seed = config["training"]["seed"]
+def main(config: HeartWiseConfig):
+    seed = config.seed
     torch.random.manual_seed(seed)
-    experiment_name = config["classifier"]["experiment_name"]
+    experiment_name = config.classifier_experiment_name
     wandb.init(project="ECG_tokenizer_linear_probing", entity="mhi_ai", name=experiment_name, config=config)
-    parquet_file = config["dataset"]["parquet_file"]
-    embedding_folder = config["evaluation"]["embedding_dir"]
-    checkpoint_path = os.path.join(config["classifier"]["base_checkpoint_path"], experiment_name)
-    num_classes = config["classifier"]["num_classes"]
-    embedding_dim = 160
-    prev_embedding_dim = 128
-    num_quantizers = config["classifier"]["num_quantizers"]
-    num_epochs = config["classifier"]["num_epochs"]
+    parquet_file = config.parquet_file
+    embedding_folder = config.embedding_dir
+    checkpoint_path = os.path.join(config.base_checkpoint_path, experiment_name)
+    num_classes = config.num_classes
+    embedding_dim = config.embedding_dim
+    prev_embedding_dim = config.prev_embedding_dim
+    num_quantizers = config.num_quantizers
+    num_epochs = config.num_epochs
 
     dataset_mimic_train = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='train')
-    train_loader = DataLoader(dataset_mimic_train, batch_size=config["classifier"]["batch_size"], shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
+    train_loader = DataLoader(dataset_mimic_train, batch_size=config.batch_size, shuffle=True, num_workers=16, pin_memory=True, drop_last=True)
     labels = dataset_mimic_train[0]['labels']
 
     dataset_mimic_val = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='val')
-    val_loader = DataLoader(dataset_mimic_val, batch_size=config["classifier"]["batch_size"], shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(dataset_mimic_val, batch_size=config.batch_size, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
     dataset_mimic_test = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='test')
-    test_loader = DataLoader(dataset_mimic_test, batch_size=config["classifier"]["batch_size"], shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+    test_loader = DataLoader(dataset_mimic_test, batch_size=config.batch_size, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
-    classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim, num_layers=config["classifier"]["num_layers"], hidden_dim=config["classifier"]["hidden_dim"]).to(device)
-    optimizer = optim.Adam(classifier.parameters(), lr=float(config["classifier"]["lr"]), weight_decay=float(config["classifier"]["weight_decay"]))
+    classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim, num_layers=config.num_layers, hidden_dim=config.hidden_dim).to(device)
+    optimizer = optim.Adam(classifier.parameters(), lr=float(config.lr), weight_decay=float(config.weight_decay))
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
-    criterion = criterion = get_criterion(config["classifier"]["criterion"])
+    criterion = criterion = get_criterion(config.criterion)
     train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
     test_metrics = evaluate(test_loader, classifier, criterion, labels)
     print(f"Test Metrics: {test_metrics}")
     wandb.log({'test/all_metrics': test_metrics})
     
 if __name__ == '__main__':
-    main()
+    config: HeartWiseConfig = HeartWiseParser.parse_config()
+    main(config)
