@@ -7,12 +7,14 @@ num_workers: 4
 experiment_name: "experiment_deeper_1024_rvq_QINCo_debug"
 
 # classifier parameters
-experiment_name: "test"
+classifier_experiment_name: "sweep"
 num_classes: 77
 num_quantizers: 8
 num_epochs: 100
 num_layers: 5
 hidden_dim: 1024
+embedding_dim: 160
+prev_embedding_dim: 128
 lr: 1e-6
 weight_decay: 1e-4
 batch_size: 64
@@ -25,8 +27,7 @@ parquet_file: "/home/rbanerjee/mimic_labelbox_bert_v4_all.parquet"
 
 # evaluation parameters
 model_path: "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
-embedding_dir: "/home/rbanerjee/test_embeddings/"
-
+embedding_dir: "/home/rbanerjee/embeddings/experiment_deeper_1024_rvq_QINCo/"
 name: sweep
 project: ECG_tokenizer_linear_probing
 entity: mhi_ai

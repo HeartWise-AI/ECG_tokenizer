@@ -1,4 +1,9 @@
-command: ./linear_probe.py
+command:
+  - python
+  - ./linear_probe.py
+  - "--base_config"
+  - "config/base_config.yaml"
+  - ${args}
 
 method: bayes
 
@@ -7,8 +12,8 @@ project: "ECG_tokenizer_linear_probing"
 entity: "mhi_ai"
 
 metric:
-  name: val/metrics['Conduction Disorder']
-  goal: minimize
+  name: val/metrics['Rhythm Disorders']['macro_auprc']
+  goal: maximize
 
 parameters:
   lr:
@@ -20,13 +25,19 @@ parameters:
   weight_decay:
     values: [1e-4, 1e-3, 1e-2]
 
-  cirterion:
-    values: ["focal_loss", "cross_entropy"]
+  criterion:
+    values: ["focal_loss", "bce_loss"]
 
   num_layers:
     values: [3, 4, 5]
 
   hidden_dim:
     values: [256, 512, 1024, 2048, 4096]
+  name:
+    values: ["sweep"]
+  project:
+    values: ["ECG_tokenizer_linear_probing"]
+  entity:
+    values: ["mhi_ai"]
 
   
