@@ -1,6 +1,12 @@
 import os
 import argparse
 from utils.config import HeartWiseConfig
+from utils.parser_typing import (
+    str2bool,
+    parse_list,
+    parse_optional_int,
+    parse_optional_str
+)
 
 '''
 Adapted from: https://github.com/HeartWise-AI/DeepCORO_CLIP/blob/jd/support_multigpu-issue_7/utils/parser.py
@@ -30,12 +36,16 @@ class HeartWiseParser:
 
         # Loss and metrics parameters
         metrics_group = parser.add_argument_group('Loss and Metrics')
-        metrics_group.add_argument('--citerion', type=str)
+        metrics_group.add_argument('--criterion', type=str)
 
         # Checkpointing parameters
         checkpoint_group = parser.add_argument_group('Checkpointing')
         checkpoint_group.add_argument('--experiment_name', type=parse_optional_str)
-
+        sweep_group = parser.add_argument_group('Sweep')
+        sweep_group.add_argument('--tag', type=str)
+        sweep_group.add_argument('--name', type=str)
+        sweep_group.add_argument('--project', type=str)
+        sweep_group.add_argument('--entity', type=str)
         args = parser.parse_args()
 
         # Load base config from yaml
@@ -43,6 +53,5 @@ class HeartWiseParser:
         
         # Create sweep config from args
         config: HeartWiseConfig = HeartWiseConfig.update_config_with_args(config, args)
-
         
         return config

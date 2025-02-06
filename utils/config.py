@@ -10,24 +10,29 @@ Adapted from: https://github.com/HeartWise-AI/DeepCORO_CLIP/blob/jd/support_mult
 @dataclass
 class HeartWiseConfig:    
     # Training parameters
+    seed: int
     lr: float
     batch_size: int
     num_layers: int
     hidden_dim: int
-    
-    # Optimization parameters
+    embedding_dim: int
+    prev_embedding_dim: int
+    classifier_experiment_name: Optional[str]
+
     weight_decay: float
-
-    # Loss and metrics parameters
     criterion: str
-
-    # Checkpointing parameters
-    experiment_name: Optional[str]
-
+    num_classes: int
+    num_quantizers: int
+    num_epochs: int
+    base_checkpoint_path: str
+    csv_file: str
+    parquet_file: str
+    model_path: str
+    embedding_dir: str
     name: str
     project: str
     entity: str
-       
+
     @classmethod
     def update_config_with_args(cls, base_config: 'HeartWiseConfig', args: Any) -> 'HeartWiseConfig':  
         """Update a HeartWiseConfig instance with command line arguments."""
