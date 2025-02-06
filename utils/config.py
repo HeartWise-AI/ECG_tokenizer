@@ -12,19 +12,21 @@ class HeartWiseConfig:
     # Training parameters
     lr: float
     batch_size: int
-    num_epochs: int
+    num_layers: int
+    hidden_dim: int
     
     # Optimization parameters
     weight_decay: float
-
-    # System parameters
-    seed: int
 
     # Loss and metrics parameters
     criterion: str
 
     # Checkpointing parameters
     experiment_name: Optional[str]
+
+    name: str
+    project: str
+    entity: str
        
     @classmethod
     def update_config_with_args(cls, base_config: 'HeartWiseConfig', args: Any) -> 'HeartWiseConfig':  

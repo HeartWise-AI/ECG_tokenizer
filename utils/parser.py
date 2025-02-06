@@ -21,15 +21,12 @@ class HeartWiseParser:
         train_group = parser.add_argument_group('Training')
         train_group.add_argument('--lr', type=float)
         train_group.add_argument('--batch_size', type=int)
-        train_group.add_argument('--num_epochs', type=int)
+        train_group.add_argument('--num_layers', type=int)
+        train_group.add_argument('--hidden_dim', type=int)
 
         # Optimization parameters
         optim_group = parser.add_argument_group('Optimization')
         optim_group.add_argument('--weight_decay', type=float)
-
-        # System parameters
-        system_group = parser.add_argument_group('System')
-        system_group.add_argument('--seed', type=parse_optional_int)
 
         # Loss and metrics parameters
         metrics_group = parser.add_argument_group('Loss and Metrics')

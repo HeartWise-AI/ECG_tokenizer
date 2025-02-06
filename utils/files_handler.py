@@ -25,7 +25,7 @@ def generate_output_dir_name(args, run_id):
     project = args.project if args.project else "default_project"
 
     model_dir = (
-        f"{tag}_b{batch_size}_lr{lr}_{current_time}_{run_id}"
+        f"{tag}_b{batch_size}_l{num_layers}_d{hidden_dim}_lr{lr}_{current_time}_{run_id}"
     )
 
     dir_name = os.path.join(project, model_dir)

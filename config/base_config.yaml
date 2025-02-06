@@ -26,3 +26,7 @@ parquet_file: "/home/rbanerjee/mimic_labelbox_bert_v4_all.parquet"
 # evaluation parameters
 model_path: "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
 embedding_dir: "/home/rbanerjee/test_embeddings/"
+
+name: sweep
+project: ECG_tokenizer_linear_probing
+entity: mhi_ai
