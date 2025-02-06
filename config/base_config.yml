@@ -1,0 +1,28 @@
+# training parameters
+learning_rate: 3e-4
+train_iterations: 20000
+num_codes: 1024
+seed: 1234
+num_workers: 4
+experiment_name: "experiment_deeper_1024_rvq_QINCo_debug"
+
+# classifier parameters
+experiment_name: "test"
+num_classes: 77
+num_quantizers: 8
+num_epochs: 100
+num_layers: 5
+hidden_dim: 1024
+lr: 1e-6
+weight_decay: 1e-4
+batch_size: 64
+criterion: "focal_loss"
+base_checkpoint_path: "/mnt/checkpoints/experiment_deeper_1024_rvq_QINCo/"
+
+# data parameters
+csv_file: "/home/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
+parquet_file: "/home/rbanerjee/mimic_labelbox_bert_v4_all.parquet"
+
+# evaluation parameters
+model_path: "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
+embedding_dir: "/home/rbanerjee/test_embeddings/"
