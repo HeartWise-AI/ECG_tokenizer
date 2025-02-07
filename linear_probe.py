@@ -96,7 +96,7 @@ def evaluate(data_loader, classifier, criterion, labels):
     df_gt = pd.DataFrame(all_labels, columns=labels)
     metrics = compute_metrics(df_gt, df_preds)
     print(f"Validation Loss: {loss.item():.4f}")
-    # wandb.log({'val/validation_loss': loss.item()})
+    wandb.log({'val/validation_loss': loss.item()})
     
     return metrics
 
@@ -183,9 +183,12 @@ def main(config: HeartWiseConfig):
     test_loader = DataLoader(dataset_mimic_test, batch_size=config.batch_size, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
 
     classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim, num_layers=config.num_layers, hidden_dim=config.hidden_dim).to(device)
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        classifier = nn.DataParallel(classifier)
     optimizer = optim.Adam(classifier.parameters(), lr=float(config.lr), weight_decay=float(config.weight_decay))
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-7)
-    criterion = criterion = get_criterion(config.criterion)
+    criterion = get_criterion(config.criterion)
     train(classifier, train_loader, val_loader, optimizer, criterion, num_epochs, labels, scheduler, checkpoint_path)
     test_metrics = evaluate(test_loader, classifier, criterion, labels)
     print(f"Test Metrics: {test_metrics}")

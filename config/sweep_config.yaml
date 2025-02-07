@@ -29,10 +29,10 @@ parameters:
     values: ["focal_loss", "bce_loss"]
 
   num_layers:
-    values: [3, 4, 5]
+    values: [1, 2, 3]
 
   hidden_dim:
-    values: [256, 512, 1024, 2048, 4096]
+    values: [256, 512, 1024, 2048]
   name:
     values: ["sweep"]
   project:
