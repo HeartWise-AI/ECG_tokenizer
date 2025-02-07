@@ -16,6 +16,7 @@ from data.dataset import ECGDatasetLinearProbe
 from models.models import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
 from utils.parser import HeartWiseParser
 from utils.config import HeartWiseConfig
+from utils.files_handler import generate_output_dir_name
 import os
 from tqdm.auto import trange
 import wandb
@@ -165,7 +166,6 @@ def main(config: HeartWiseConfig):
     wandb.init(project="ECG_tokenizer_linear_probing", entity="mhi_ai", name=experiment_name, config=config)
     parquet_file = config.parquet_file
     embedding_folder = config.embedding_dir
-    checkpoint_path = os.path.join(config.base_checkpoint_path, experiment_name)
     num_classes = config.num_classes
     embedding_dim = config.embedding_dim
     prev_embedding_dim = config.prev_embedding_dim
@@ -181,6 +181,9 @@ def main(config: HeartWiseConfig):
 
     dataset_mimic_test = ECGDatasetLinearProbe(parquet_file=parquet_file, embedding_folder=embedding_folder, split='test')
     test_loader = DataLoader(dataset_mimic_test, batch_size=config.batch_size, shuffle=False, num_workers=16, pin_memory=True, drop_last=True)
+
+    output_subdir = generate_output_dir_name(config, wandb.run.id)
+    checkpoint_path = os.path.join(config.base_checkpoint_path, output_subdir)
 
     classifier = CodebookClassifier(num_classes=num_classes, num_quantizers=num_quantizers, prev_embedding_dim=prev_embedding_dim, embedding_dim=embedding_dim, num_layers=config.num_layers, hidden_dim=config.hidden_dim).to(device)
     if torch.cuda.device_count() > 1:
