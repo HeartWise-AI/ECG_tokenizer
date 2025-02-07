@@ -40,11 +40,11 @@ parameters:
   entity:
     values: ["mhi_ai"]
 
-  early_terminate:
-    type: hyperband
-    min_iter: 3
-    eta: 2
-    s: 2
+early_terminate:
+  type: hyperband
+  min_iter: 3
+  eta: 2
+  s: 2
 
 
 
