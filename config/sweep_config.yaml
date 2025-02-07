@@ -7,7 +7,7 @@ command:
 
 method: bayes
 
-name: "sweep"
+name: "final_sweep"
 project: "ECG_tokenizer_linear_probing"
 entity: "mhi_ai"
 
@@ -39,5 +39,13 @@ parameters:
     values: ["ECG_tokenizer_linear_probing"]
   entity:
     values: ["mhi_ai"]
+
+  early_terminate:
+    type: hyperband
+    min_iter: 3
+    eta: 2
+    s: 2
+
+
 
   
