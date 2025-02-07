@@ -8,10 +8,6 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
 
-with open('/home/rbanerjee/ECG_tokenizer/config.yaml', 'r') as file:
-    config = yaml.safe_load(file)
-
-
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
@@ -27,7 +23,7 @@ Author: Rohan Banerjee
 """
 
 class ECGDataset(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.0001, random_state=config["training"]["seed"]):
+    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.0001, random_state=1234):
         self.transform = transform
         self.split = split
 
@@ -83,7 +79,7 @@ class ECGDataset(Dataset):
         return sample
 
 class ECGDatasetLLM(Dataset):
-    def __init__(self, embeddings_folder=None, model=None, transform=None, split='train', test_size=0.2, random_state=config["training"]["seed"]):
+    def __init__(self, embeddings_folder=None, model=None, transform=None, split='train', test_size=0.2, random_state=42):
         self.transform = transform
         self.split = split
         self.model = model
@@ -162,7 +158,7 @@ class ECGDatasetLLM(Dataset):
         return encoded_tokens, report
     
 class ECGDatasetClassifier(Dataset):
-    def __init__(self, parquet_file=None, transform=None, split='train', val_size=0.01, test_size=0.01, random_state=config["training"]["seed"]):
+    def __init__(self, parquet_file=None, transform=None, split='train', val_size=0.01, test_size=0.01, random_state=42):
         self.transform = transform
         self.split = split
 
@@ -296,7 +292,7 @@ class ECGDatasetClassifier(Dataset):
         return sample
     
 class ECGDatasetEmbeddings(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.1, random_state=config["training"]["seed"]):
+    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.1, random_state=42):
         self.transform = transform
         self.split = split
 
