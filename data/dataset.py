@@ -23,9 +23,10 @@ Author: Rohan Banerjee
 """
 
 class ECGDataset(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.0001, random_state=1234):
+    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.0001, random_state=123, target_length=5000):
         self.transform = transform
         self.split = split
+        self.target_length = target_length
 
         if parquet_file:
             # Load data from parquet file for the first dataset
@@ -35,7 +36,9 @@ class ECGDataset(Dataset):
             self.data_frame = pd.read_csv(csv_file)
             self.data_frame = self._random_split(test_size, random_state)
 
-        self.waveform_length, self.leads = self.get_signal(1).shape
+        signal_shape = self.get_signal(1).shape
+        signal_shape = signal_shape[:-1] if len(signal_shape) == 3 else signal_shape
+        self.waveform_length, self.leads = signal_shape
 
     def _random_split(self, test_size, random_state):
         """
@@ -54,7 +57,7 @@ class ECGDataset(Dataset):
 
     def get_signal(self, idx):
         if 'npy_path' in self.data_frame.columns:
-            npy_path = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
+            npy_path = self.data_frame.iloc[idx]['npy_path']
             unnormalized_signal = np.load(npy_path)
         elif 'waveform_path' in self.data_frame.columns:
             # Load data for the MIMIC-IV dataset (with full waveform paths)
@@ -69,7 +72,13 @@ class ECGDataset(Dataset):
         unnormalized_signal = self.get_signal(idx)
         
         if np.isnan(unnormalized_signal).any():
-            return self.__getitem__((idx + 1) % len(self)) 
+            return self.__getitem__((idx + 1) % len(self))
+
+        current_length, num_leads = unnormalized_signal.shape
+        if current_length < self.target_length:
+            pad_size = self.target_length - current_length
+            # Pad timesteps dimension at the end
+            unnormalized_signal = np.pad(unnormalized_signal, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
 
         epsilon = 1e-8 
         signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1

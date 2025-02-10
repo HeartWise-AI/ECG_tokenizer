@@ -117,6 +117,7 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
                 "cmt_loss": f"{cmt_loss.mean().item():.4f}",
                 "active": f"{indices.unique().numel() / num_codes * 100:.4f}"
             })
+            progress_bar.update(1)
 
             wandb.log({
                 "epoch": epoch + 1,
@@ -125,6 +126,7 @@ def train(model, train_loader, test_loader, optimizer, num_codes, checkpoint_dir
                 "cmt_loss": cmt_loss.mean().item(),
                 "active_percentage": indices.unique().numel() / num_codes * 100
             })
+        progress_bar.close()
 
         if (epoch + 1) % 1 == 0:
             try:
@@ -144,23 +146,27 @@ def main():
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint file')
     args = parser.parse_args()
 
-    with open('config.yaml', 'r') as file:
+    with open('base_config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
     wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=config["training"]["experiment_name"], config=config)
 
     csv_file = config["dataset"]["csv_file"]
     dataset_mimic_train = ECGDataset(csv_file=csv_file, split='train')
+    dataset_mhi_train = ECGDataset(parquet_file="/media/data1/muse_ge/train_trial_v1.1.parquet", test_size=0, split='train')
     train_loader = DataLoader(dataset_mimic_train, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
 
-    dataset_mimic_test = ECGDataset(csv_file=csv_file, split='test')
+    combined_train_dataset = torch.utils.data.ConcatDataset([dataset_mimic_train, dataset_mhi_train])
+    combined_train_loader = DataLoader(combined_train_dataset, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
+
+    dataset_mimic_test = ECGDataset(parquet_file="/media/data1/anolin/for_achille_ssl/MIMIC/mimic_v4_clean_train.parquet", test_size=0, split='test')
     test_loader = DataLoader(dataset_mimic_test, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=16)
 
-    lr = float(config["training"]["learning_rate"])
-    train_iter = config["training"]["train_iterations"]
-    num_codes = config["training"]["num_codes"]
-    seed = config["training"]["seed"]
-    checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{config['training']['experiment_name']}"
+    lr = float(config.learning_rate)
+    train_iter = config.train_iterations
+    num_codes = config.num_codes
+    seed = config.seed
+    checkpoint_dir = f"/mnt/rbanerjee/checkpoints/{config.experiment_name}"
     torch.random.manual_seed(seed)
     model = ResVQAutoEncoder(
         timesteps=dataset_mimic_train.waveform_length,
