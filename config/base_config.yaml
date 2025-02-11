@@ -17,7 +17,7 @@ embedding_dim: 160
 prev_embedding_dim: 128
 lr: 1e-6
 weight_decay: 1e-4
-batch_size: 64
+batch_size: 16
 criterion: "focal_loss"
 base_checkpoint_path: "/mnt/checkpoints/experiment_deeper_1024_rvq_QINCo/"
 

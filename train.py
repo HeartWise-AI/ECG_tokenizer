@@ -2,16 +2,18 @@ import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
 import torch.nn as nn
-from torchvision import datasets, transforms
 from torch.cuda.amp import autocast
 import torch.distributed as dist
 import argparse
 
 from data.dataset import ECGDataset
-from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder
+from models.models import (
+    VQVAE, 
+    SimpleVQAutoEncoder, 
+    ResVQAutoEncoder
+)
 import os
 import tqdm
-from tqdm.auto import trange
 import wandb
 import yaml
 import logging
@@ -126,14 +128,12 @@ def train(
         progress_bar = tqdm.tqdm(train_loader, total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
         for batch_idx, batch in enumerate(train_loader):
             signals: torch.Tensor = batch["signal"].float().to(device)
-            signals = signals.permute(0, 2, 1)
             optimizer.zero_grad()
             out, indices, cmt_loss = model(signals)
             rec_loss: torch.Tensor = (out - signals).abs().mean()
             combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
             combined_loss.backward()
             optimizer.step()
-            torch.cuda.empty_cache()
 
             progress_bar.set_postfix({
                 "rec_loss": f"{rec_loss.item():.4f}",
@@ -149,6 +149,8 @@ def train(
                 "cmt_loss": cmt_loss.mean().item(),
                 "active_percentage": indices.unique().numel() / num_codes * 100
             })
+            
+        torch.cuda.empty_cache()
         progress_bar.close()
 
         if (epoch + 1) % 1 == 0:
@@ -167,29 +169,44 @@ def train(
 def main():
     parser: argparse.ArgumentParser = argparse.ArgumentParser(description='Train VQVAE model.')
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint file')
+    parser.add_argument('--base_config', type=str, help='Path to base_config file', required=True)
     args: argparse.Namespace = parser.parse_args()
 
-    with open('base_config.yaml', 'r') as file:
+    with open(args.base_config, 'r') as file:
         config = yaml.safe_load(file)
 
-    wandb.init(project="ECG_tokenizer", entity="rohanbanerjee", name=config["training"]["experiment_name"], config=config)
+    wandb.init(
+        project="ECG_tokenizer", 
+        entity="jacques-delfrate", 
+        name=config["experiment_name"], 
+        config=config
+    )
 
-    csv_file: str = config["dataset"]["csv_file"]
-    dataset_mimic_train: ECGDataset = ECGDataset(csv_file=csv_file, split='train')
-    dataset_mhi_train: ECGDataset = ECGDataset(parquet_file="/media/data1/muse_ge/train_trial_v1.1.parquet", test_size=0, split='train')
-    train_loader: DataLoader = DataLoader(dataset_mimic_train, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
+    dataset_mimic_train: ECGDataset = ECGDataset(parquet_file='/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet')
+    # dataset_mhi_train: ECGDataset = ECGDataset(parquet_file="/media/data1/muse_ge/train_trial_v1.1.parquet", test_size=0, split='train')
+    train_loader: DataLoader = DataLoader(
+        dataset_mimic_train, 
+        batch_size=config["batch_size"], 
+        shuffle=True, 
+        num_workers=16
+    )
 
-    combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset([dataset_mimic_train, dataset_mhi_train])
-    combined_train_loader: DataLoader = DataLoader(combined_train_dataset, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
+    # combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset([dataset_mimic_train, dataset_mhi_train])
+    # combined_train_loader: DataLoader = DataLoader(combined_train_dataset, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
 
-    dataset_mimic_test: ECGDataset = ECGDataset(parquet_file="/media/data1/anolin/for_achille_ssl/MIMIC/mimic_v4_clean_train.parquet", test_size=0, split='test')
-    test_loader: DataLoader = DataLoader(dataset_mimic_test, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=16)
+    dataset_mimic_test: ECGDataset = ECGDataset(parquet_file='/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_test.parquet')
+    test_loader: DataLoader = DataLoader(
+        dataset_mimic_test, 
+        batch_size=config["batch_size"], 
+        shuffle=False, 
+        num_workers=16
+    )
 
     lr: float = float(config["learning_rate"])
     train_iter: int = config["train_iterations"]
     num_codes: int = config["num_codes"]
     seed: int = config["seed"]
-    checkpoint_dir: str = f"/mnt/rbanerjee/checkpoints/{config["experiment_name"]}"
+    checkpoint_dir: str = f"checkpoints/{config["experiment_name"]}"
     torch.random.manual_seed(seed)
     model: ResVQAutoEncoder = ResVQAutoEncoder(
         timesteps=dataset_mimic_train.waveform_length,
@@ -202,8 +219,19 @@ def main():
             model = nn.DataParallel(model)
 
     opt: torch.optim.AdamW = torch.optim.AdamW(model.parameters(), lr=lr)
+    
     # start_iteration, model, optimizer = load_checkpoint(model, opt, checkpoint_dir='checkpoints/', checkpoint_path=args.checkpoint_path)
-    train(model, train_loader, test_loader, optimizer=opt, num_codes=num_codes, checkpoint_dir=checkpoint_dir, num_epochs=train_iter, start_epoch=0)
+    
+    train(
+        model=model, 
+        train_loader=train_loader, 
+        test_loader=test_loader, 
+        optimizer=opt, 
+        num_codes=num_codes, 
+        checkpoint_dir=checkpoint_dir, 
+        num_epochs=train_iter, 
+        start_epoch=0
+    )
     
 if __name__ == '__main__':
     main()

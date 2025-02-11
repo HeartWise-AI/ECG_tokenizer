@@ -30,13 +30,14 @@ class ECGDataset(Dataset):
         transform: callable = None, 
         split: str = 'train', 
         test_size: float = 0.0001, 
-        random_state: int = 123, 
-        target_length: int = 5000
+        random_state: int = 1234, 
+        waveform_length: int = 5000, 
+        num_leads: int = 12
     ):
         self.transform: callable = transform
         self.split: str = split
-        self.target_length: int = target_length
-
+        self.waveform_length: int = waveform_length
+        self.num_leads: int = num_leads
         if parquet_file:
             # Load data from parquet file for the first dataset
             self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
@@ -44,11 +45,6 @@ class ECGDataset(Dataset):
             # Load data from csv file for the MIMIC-IV dataset
             self.data_frame: pd.DataFrame = pd.read_csv(csv_file)
             self.data_frame: pd.DataFrame = self._random_split(test_size, random_state)
-
-        signal_shape: tuple[int, int] = self.get_signal(1).shape
-        signal_shape: tuple[int, int] = signal_shape[:-1] if len(signal_shape) == 3 else signal_shape
-        self.waveform_length: int = signal_shape[0]
-        self.leads: int = signal_shape[1]
 
     def _random_split(
         self, 
@@ -71,18 +67,11 @@ class ECGDataset(Dataset):
     def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_signal(
+    def load_signal(
         self, 
-        idx: int
+        waveform_path: str
     ) -> np.ndarray:
-        if 'npy_path' in self.data_frame.columns:
-            npy_path: str = self.data_frame.iloc[idx]['npy_path']
-            unnormalized_signal: np.ndarray = np.load(npy_path)
-        elif 'waveform_path' in self.data_frame.columns:
-            # Load data for the MIMIC-IV dataset (with full waveform paths)
-            waveform_path: str = self.data_frame.iloc[idx]['waveform_path']
-            unnormalized_signal: np.ndarray = np.load(waveform_path) 
-        return unnormalized_signal
+        return np.load(waveform_path) 
 
     def __getitem__(
         self, 
@@ -91,21 +80,21 @@ class ECGDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal: np.ndarray = self.get_signal(idx)
+        unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data_frame.iloc[idx]['waveform_path'])
         
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))
 
-        current_length: int = unnormalized_signal.shape[0]
-        if current_length < self.target_length:
-            pad_size: int = self.target_length - current_length
-            # Pad timesteps dimension at the end
-            unnormalized_signal = np.pad(unnormalized_signal, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
+        # current_length: int = unnormalized_signal.shape[0]
+        # if current_length < self.target_length:
+        #     pad_size: int = self.target_length - current_length
+        #     # Pad timesteps dimension at the end
+        #     unnormalized_signal = np.pad(unnormalized_signal, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
 
         epsilon: float = 1e-8 
         signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
-
-        return {'signal': signal}
+        signal: torch.Tensor = torch.from_numpy(signal).float()
+        return {'signal': signal.permute(1, 0)}
 
 class ECGDatasetLLM(Dataset):
     def __init__(
@@ -464,11 +453,13 @@ class ECGDatasetEmbeddings(Dataset):
 class ECGDatasetLinearProbe(Dataset):
     def __init__(
         self, 
-        parquet_file: str | None, 
-        embedding_folder: str | None, 
-        transform: callable | None, 
-        split: str, 
-        val_size: float, test_size: float, random_state: int
+        parquet_file: Optional[str] = None, 
+        embedding_folder: Optional[str] = None, 
+        transform: Optional[callable] = None, 
+        split: Optional[str] = 'train', 
+        val_size: Optional[float] = 0.01, 
+        test_size: Optional[float] = 0.01, 
+        random_state: Optional[int] = 1234
     ):
         self.transform: Optional[callable] = transform
         self.split: str = split
