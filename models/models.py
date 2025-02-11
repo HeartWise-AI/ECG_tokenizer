@@ -105,37 +105,40 @@ class SimpleVQAutoEncoder(nn.Module):
         return x.clamp(-1, 1), indices, commit_loss
     
 class ResVQAutoEncoder(nn.Module):
-    def __init__(self, timesteps, **vq_kwargs):
-            super().__init__()
-            if timesteps == 5000:
-                ResidualVQ_input = 160
-                final_padding = 16
-            else:
-                ResidualVQ_input = 82
-                final_padding = 18
-            self.layers = nn.ModuleList(
-                [
-                    nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=16), 
-                    nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
-                    nn.GELU(),
-                    nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=8),
-                    nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
-                    nn.GELU(),
-                    nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
-                    ResidualVQ(dim=ResidualVQ_input,
-                                num_quantizers = 8,
-                                commitment_weight = 0.25,
-                                **vq_kwargs),
-                    nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=2),
-                    nn.GELU(),
-                    nn.Upsample(scale_factor=2, mode="nearest"),
-                    nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
-                    nn.GELU(),
-                    nn.Upsample(scale_factor=2, mode="nearest"),
-                    nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=final_padding)
-                ]
-            )
-            return
+    def __init__(
+        self, 
+        timesteps, 
+        **vq_kwargs
+    ):
+        super().__init__()
+        if timesteps == 5000:
+            ResidualVQ_input = 160
+            final_padding = 16
+        else:
+            ResidualVQ_input = 82
+            final_padding = 18
+        self.layers = nn.ModuleList(
+            [
+                nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=16), 
+                nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
+                nn.GELU(),
+                nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=8),
+                nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
+                nn.GELU(),
+                nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
+                ResidualVQ(dim=ResidualVQ_input,
+                            num_quantizers = 8,
+                            commitment_weight = 0.25,
+                            **vq_kwargs),
+                nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=2),
+                nn.GELU(),
+                nn.Upsample(scale_factor=2, mode="nearest"),
+                nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
+                nn.GELU(),
+                nn.Upsample(scale_factor=2, mode="nearest"),
+                nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=final_padding)
+            ]
+        )
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
