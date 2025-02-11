@@ -26,6 +26,7 @@ Author: Rohan Banerjee
 Relevant issues from lucid-rains repos: #28, #44, #102
 """
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_checkpoint(
@@ -125,6 +126,12 @@ def train(
 ) -> None:
     model.train()
     for epoch in range(start_epoch, num_epochs):
+        # Track epoch metrics
+        epoch_rec_loss = 0.0
+        epoch_cmt_loss = 0.0
+        epoch_active_codes = 0.0
+        n_batches = len(train_loader)
+        
         progress_bar = tqdm.tqdm(train_loader, total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
         for batch_idx, batch in enumerate(train_loader):
             signals: torch.Tensor = batch["signal"].float().to(device)
@@ -135,23 +142,45 @@ def train(
             combined_loss.backward()
             optimizer.step()
 
+            # Accumulate metrics
+            epoch_rec_loss += rec_loss.item()
+            epoch_cmt_loss += cmt_loss.mean().item()
+            epoch_active_codes += indices.unique().numel() / num_codes * 100
+
+            # Calculate running means
+            current_mean_rec = epoch_rec_loss / (batch_idx + 1)
+            current_mean_cmt = epoch_cmt_loss / (batch_idx + 1)
+            current_mean_active = epoch_active_codes / (batch_idx + 1)
+
             progress_bar.set_postfix({
                 "rec_loss": f"{rec_loss.item():.4f}",
+                "mean_rec": f"{current_mean_rec:.4f}",
                 "cmt_loss": f"{cmt_loss.mean().item():.4f}",
-                "active": f"{indices.unique().numel() / num_codes * 100:.4f}"
+                "mean_cmt": f"{current_mean_cmt:.4f}",
+                "active": f"{indices.unique().numel() / num_codes * 100:.2f}%",
+                "mean_active": f"{current_mean_active:.2f}%"
             })
             progress_bar.update(1)
 
-            wandb.log({
-                "epoch": epoch + 1,
-                "batch_idx": batch_idx,
-                "rec_loss": rec_loss.item(),
-                "cmt_loss": cmt_loss.mean().item(),
-                "active_percentage": indices.unique().numel() / num_codes * 100
-            })
-            
         torch.cuda.empty_cache()
         progress_bar.close()
+
+        # Log epoch summary
+        epoch_rec_loss /= n_batches
+        epoch_cmt_loss /= n_batches
+        epoch_active_codes /= n_batches
+        
+        logging.info(f"Epoch {epoch + 1}/{num_epochs} Summary:")
+        logging.info(f"Average Reconstruction Loss: {epoch_rec_loss:.4f}")
+        logging.info(f"Average Commitment Loss: {epoch_cmt_loss:.4f}")
+        logging.info(f"Average Active Codes (%): {epoch_active_codes:.2f}")
+        
+        wandb.log({
+            "epoch": epoch + 1,
+            "epoch_avg_rec_loss": epoch_rec_loss,
+            "epoch_avg_cmt_loss": epoch_cmt_loss,
+            "epoch_avg_active_codes": epoch_active_codes
+        })
 
         if (epoch + 1) % 1 == 0:
             try:
@@ -215,8 +244,9 @@ def main():
     ).to(device)
 
     if torch.cuda.device_count() > 1:
-            print(f"Using {torch.cuda.device_count()} GPUs")
-            model = nn.DataParallel(model)
+        print(f"Using GPUs 2 and 3")
+        os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+        model = nn.DataParallel(model)
 
     opt: torch.optim.AdamW = torch.optim.AdamW(model.parameters(), lr=lr)
     
