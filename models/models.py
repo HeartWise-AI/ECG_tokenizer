@@ -107,6 +107,12 @@ class SimpleVQAutoEncoder(nn.Module):
 class ResVQAutoEncoder(nn.Module):
     def __init__(self, timesteps, **vq_kwargs):
             super().__init__()
+            if timesteps == 5000:
+                ResidualVQ_input = 160
+                final_padding = 16
+            else:
+                ResidualVQ_input = 82
+                final_padding = 18
             self.layers = nn.ModuleList(
                 [
                     nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=16), 
@@ -116,7 +122,7 @@ class ResVQAutoEncoder(nn.Module):
                     nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
                     nn.GELU(),
                     nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
-                    ResidualVQ(dim=160,
+                    ResidualVQ(dim=ResidualVQ_input,
                                 num_quantizers = 8,
                                 commitment_weight = 0.25,
                                 **vq_kwargs),
@@ -126,7 +132,7 @@ class ResVQAutoEncoder(nn.Module):
                     nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
                     nn.GELU(),
                     nn.Upsample(scale_factor=2, mode="nearest"),
-                    nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=16)
+                    nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=final_padding)
                 ]
             )
             return
