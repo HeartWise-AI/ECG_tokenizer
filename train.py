@@ -203,7 +203,7 @@ def main():
     )
 
     lr: float = float(config["learning_rate"])
-    train_iter: int = config["train_iterations"]
+    num_epochs: int = config["num_epochs"]
     num_codes: int = config["num_codes"]
     seed: int = config["seed"]
     checkpoint_dir: str = f"checkpoints/{config["experiment_name"]}"
@@ -229,7 +229,7 @@ def main():
         optimizer=opt, 
         num_codes=num_codes, 
         checkpoint_dir=checkpoint_dir, 
-        num_epochs=train_iter, 
+        num_epochs=num_epochs, 
         start_epoch=0
     )
     
