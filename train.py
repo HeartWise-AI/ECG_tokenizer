@@ -104,7 +104,6 @@ def evaluate(
         for i, batch in enumerate(data_loader):
             logging.debug(f"Evaluating batch {i+1}/{len(data_loader)}")
             signals: torch.Tensor = batch['signal'].float().to(device)
-            signals = signals.permute(0, 2, 1)
             with autocast():
                 out, indices, cmt_loss = model(signals)
                 rec_loss: torch.Tensor = (out - signals).abs().mean()
@@ -140,6 +139,7 @@ def train(
             rec_loss: torch.Tensor = (out - signals).abs().mean()
             combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
             combined_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             # Accumulate metrics
@@ -189,9 +189,7 @@ def train(
                 save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
                 model.train()  # Ensure model is back in training mode
             except Exception as e:
-                print(f"An error occurred during evaluation: {e}")
-                model.train()
-                return
+                raise Exception(f"An error occurred during evaluation: {e}")
 
     print("Training complete!")
 
