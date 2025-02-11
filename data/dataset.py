@@ -7,7 +7,7 @@ import random
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
-
+from typing import Optional
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
@@ -23,28 +23,44 @@ Author: Rohan Banerjee
 """
 
 class ECGDataset(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.0001, random_state=123, target_length=5000):
-        self.transform = transform
-        self.split = split
-        self.target_length = target_length
+    def __init__(
+        self, 
+        parquet_file: str = None, 
+        csv_file: str = None, 
+        transform: callable = None, 
+        split: str = 'train', 
+        test_size: float = 0.0001, 
+        random_state: int = 123, 
+        target_length: int = 5000
+    ):
+        self.transform: callable = transform
+        self.split: str = split
+        self.target_length: int = target_length
 
         if parquet_file:
             # Load data from parquet file for the first dataset
-            self.data_frame = pd.read_parquet(parquet_file)
+            self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
         elif csv_file:
             # Load data from csv file for the MIMIC-IV dataset
-            self.data_frame = pd.read_csv(csv_file)
-            self.data_frame = self._random_split(test_size, random_state)
+            self.data_frame: pd.DataFrame = pd.read_csv(csv_file)
+            self.data_frame: pd.DataFrame = self._random_split(test_size, random_state)
 
-        signal_shape = self.get_signal(1).shape
-        signal_shape = signal_shape[:-1] if len(signal_shape) == 3 else signal_shape
-        self.waveform_length, self.leads = signal_shape
+        signal_shape: tuple[int, int] = self.get_signal(1).shape
+        signal_shape: tuple[int, int] = signal_shape[:-1] if len(signal_shape) == 3 else signal_shape
+        self.waveform_length: int = signal_shape[0]
+        self.leads: int = signal_shape[1]
 
-    def _random_split(self, test_size, random_state):
+    def _random_split(
+        self, 
+        test_size: float, 
+        random_state: int
+    ) -> pd.DataFrame:
         """
         Perform a random train-test split (MIMIC-IV dataset).
         """
         # Random train-test split
+        train_df: pd.DataFrame
+        test_df: pd.DataFrame
         train_df, test_df = train_test_split(self.data_frame, test_size=test_size, random_state=random_state)
 
         if self.split == 'train':
@@ -52,59 +68,80 @@ class ECGDataset(Dataset):
         else:
             return test_df
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_signal(self, idx):
+    def get_signal(
+        self, 
+        idx: int
+    ) -> np.ndarray:
         if 'npy_path' in self.data_frame.columns:
-            npy_path = self.data_frame.iloc[idx]['npy_path']
-            unnormalized_signal = np.load(npy_path)
+            npy_path: str = self.data_frame.iloc[idx]['npy_path']
+            unnormalized_signal: np.ndarray = np.load(npy_path)
         elif 'waveform_path' in self.data_frame.columns:
             # Load data for the MIMIC-IV dataset (with full waveform paths)
-            waveform_path = self.data_frame.iloc[idx]['waveform_path']
-            unnormalized_signal = np.load(waveform_path) 
+            waveform_path: str = self.data_frame.iloc[idx]['waveform_path']
+            unnormalized_signal: np.ndarray = np.load(waveform_path) 
         return unnormalized_signal
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, 
+        idx: int
+    ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal = self.get_signal(idx)
+        unnormalized_signal: np.ndarray = self.get_signal(idx)
         
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))
 
-        current_length, num_leads = unnormalized_signal.shape
+        current_length: int = unnormalized_signal.shape[0]
         if current_length < self.target_length:
-            pad_size = self.target_length - current_length
+            pad_size: int = self.target_length - current_length
             # Pad timesteps dimension at the end
             unnormalized_signal = np.pad(unnormalized_signal, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
 
-        epsilon = 1e-8 
-        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
-    
-        sample = {'signal': signal}
+        epsilon: float = 1e-8 
+        signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
 
-        return sample
+        return {'signal': signal}
 
 class ECGDatasetLLM(Dataset):
-    def __init__(self, embeddings_folder=None, model=None, transform=None, split='train', test_size=0.2, random_state=42):
-        self.transform = transform
-        self.split = split
-        self.model = model
-
+    def __init__(
+        self, 
+        embeddings_folder: str = None, 
+        model: callable = None, 
+        transform: callable = None, 
+        split: str = 'train', 
+        test_size: float = 0.2, 
+        random_state: int = 42
+    ):
+        self.transform: callable = transform
+        self.split: str = split
+        self.model: callable = model
+    
         if parquet_file:
-            self.data_frame = pd.read_parquet(parquet_file)
+            self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
         elif csv_file:
-            self.data_frame = pd.read_csv(csv_file)
-            self.data_frame = self._random_split(test_size, random_state)
+            self.data_frame: pd.DataFrame = pd.read_csv(csv_file)
+            self.data_frame: pd.DataFrame = self._random_split(test_size, random_state)
 
-        self.waveform_length, self.leads = self.get_signal(1).shape
+        signal_shape: tuple[int, int] = self.get_signal(1).shape
+        signal_shape: tuple[int, int] = signal_shape[:-1] if len(signal_shape) == 3 else signal_shape
+        self.waveform_length: int = signal_shape[0]
+        self.leads: int = signal_shape[1]
 
-    def _random_split(self, test_size, random_state):
+    def _random_split(
+        self, 
+        test_size: float, 
+        random_state: int
+    ) -> pd.DataFrame:
         """
         Perform a random train-test split (MIMIC-IV dataset).
         """
+        train_df: pd.DataFrame
+        test_df: pd.DataFrame
         train_df, test_df = train_test_split(self.data_frame, test_size=test_size, random_state=random_state)
 
         if self.split == 'train':
@@ -112,30 +149,42 @@ class ECGDatasetLLM(Dataset):
         else:
             return test_df
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data_frame)
 
 
-    def get_signal(self, idx):
+    def get_signal(
+        self, 
+        idx: int
+    ) -> np.ndarray:
         if 'npy_path' in self.data_frame.columns:
-            npy_path = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
-            unnormalized_signal = np.load(npy_path)
+            npy_path: str = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
+            unnormalized_signal: np.ndarray = np.load(npy_path)
         elif 'waveform_path' in self.data_frame.columns:
-            waveform_path = self.data_frame.iloc[idx]['waveform_path']
-            unnormalized_signal = np.load(waveform_path)
+            waveform_path: str = self.data_frame.iloc[idx]['waveform_path']
+            unnormalized_signal: np.ndarray = np.load(waveform_path)
 
         return unnormalized_signal
     
-    def get_report(self, idx):
+    def get_report(
+        self, 
+        idx: int
+    ) -> str:
         return self.data_frame.iloc[idx]['report']
     
-    def set_model(self, model):
+    def set_model(
+        self, 
+        model: callable
+    ):
         """Set the model only if it hasn't been set before."""
         if self.model is not None:
             raise ValueError("Model has already been set.")
         self.model = model
     
-    def encode_ecg_to_tokens(self, ecg_signal):
+    def encode_ecg_to_tokens(
+        self, 
+        ecg_signal: np.ndarray
+    ) -> np.ndarray:
         if self.model is None:
             raise ValueError("Model has not been set in the dataset.")
         
@@ -143,36 +192,49 @@ class ECGDatasetLLM(Dataset):
             _, encoded_tokens, _ = self.model(ecg_signal) 
         return encoded_tokens
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, 
+        idx: int
+    ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal = self.get_signal(idx)
-        report = self.get_report(idx)
+        unnormalized_signal: np.ndarray = self.get_signal(idx)
+        report: str = self.get_report(idx)
         
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))  
 
 
-        epsilon = 1e-8  
-        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
-        signal = torch.from_numpy(signal).float()
-        signal = signal.permute(1, 0).unsqueeze(0)
+        epsilon: float = 1e-8  
+        signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
+        signal: torch.Tensor = torch.from_numpy(signal).float()
+        signal: torch.Tensor = signal.permute(1, 0).unsqueeze(0)
 
-        device = next(self.model.parameters()).device
-        signal = signal.to(device)
+        device: torch.device = next(self.model.parameters()).device
+        signal: torch.Tensor = signal.to(device)
         
-        encoded_tokens = self.encode_ecg_to_tokens(signal)
+        encoded_tokens: torch.Tensor = self.encode_ecg_to_tokens(signal)
 
         return encoded_tokens, report
     
 class ECGDatasetClassifier(Dataset):
-    def __init__(self, parquet_file=None, transform=None, split='train', val_size=0.01, test_size=0.01, random_state=42):
-        self.transform = transform
-        self.split = split
+    def __init__(self, 
+        parquet_file: str = None, 
+        transform: callable = None, 
+        split: str = 'train', 
+        val_size: float = 0.01, 
+        test_size: float = 0.01, 
+        random_state: int = 42
+    ):
+        self.transform: callable = transform
+        self.split: str = split
 
         if parquet_file:
-            self.data_frame = pd.read_parquet(parquet_file)
+            self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
+            self.train_df: pd.DataFrame
+            self.val_df: pd.DataFrame
+            self.test_df: pd.DataFrame
             self.train_df, self.val_df, self.test_df = self._stratified_split(val_size, test_size, random_state)
             if self.split == 'train':
                 self.data_frame = self.train_df
@@ -181,13 +243,21 @@ class ECGDatasetClassifier(Dataset):
             elif self.split == 'test':
                 self.data_frame = self.test_df
 
+        unnormalized_signal: np.ndarray
         unnormalized_signal, _ = self.get_signal(0)
-        self.waveform_length, self.leads = unnormalized_signal.shape
+        self.waveform_length: int = unnormalized_signal.shape[0]
+        self.leads: int = unnormalized_signal.shape[1]
 
-    def _random_split(self, test_size, random_state):
+    def _random_split(
+        self, 
+        test_size: float, 
+        random_state: int
+    ) -> pd.DataFrame:
         """
         Perform a random train-test split (MIMIC-IV dataset).
-        """
+        """ 
+        train_df: pd.DataFrame
+        test_df: pd.DataFrame
         train_df, test_df = train_test_split(self.data_frame, test_size=test_size, random_state=random_state)
 
         if self.split == 'train':
@@ -195,11 +265,16 @@ class ECGDatasetClassifier(Dataset):
         else:
             return test_df
         
-    def _stratified_split(self, val_size, test_size, random_state):
+    def _stratified_split(
+        self, 
+        val_size: float, 
+        test_size: float, 
+        random_state: int
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Stratified train-validation-test split based on the label distribution.
         """
-        labels = self.data_frame[[
+        labels: np.ndarray = self.data_frame[[
             'Sinusal', 'Regular', 'Monomorph', 
                 'QS complex in V1-V2-V3', 'R complex in V5-V6', 
                 'T wave inversion (inferior - II, III, aVF)', 
@@ -229,28 +304,31 @@ class ECGDatasetClassifier(Dataset):
                 'Ventricular Rhythm', 'no_qrs'
         ]].values
         
-        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+        stratifier: MultilabelStratifiedShuffleSplit = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
         train_idx, test_idx = next(stratifier.split(self.data_frame, labels))
         
-        train_val_df = self.data_frame.iloc[train_idx].reset_index(drop=True)
-        test_df = self.data_frame.iloc[test_idx].reset_index(drop=True)
+        train_val_df: pd.DataFrame = self.data_frame.iloc[train_idx].reset_index(drop=True)
+        test_df: pd.DataFrame = self.data_frame.iloc[test_idx].reset_index(drop=True)
         
-        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
+        stratifier: MultilabelStratifiedShuffleSplit = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
         train_idx, val_idx = next(stratifier.split(train_val_df, labels[train_idx]))
-        train_df = train_val_df.iloc[train_idx].reset_index(drop=True)
-        val_df = train_val_df.iloc[val_idx].reset_index(drop=True)
+        train_df: pd.DataFrame = train_val_df.iloc[train_idx].reset_index(drop=True)
+        val_df: pd.DataFrame = train_val_df.iloc[val_idx].reset_index(drop=True)
 
         return train_df, val_df, test_df
 
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_signal(self, idx):
+    def get_signal(
+        self, 
+        idx: int
+    ) -> tuple[np.ndarray, np.ndarray]:
         if 'npy_path' in self.data_frame.columns:
-            npy_path = self.data_frame.iloc[idx]['npy_path']
-            unnormalized_signal = np.load(npy_path)
-            labels = self.data_frame.iloc[idx][[
+            npy_path: str = self.data_frame.iloc[idx]['npy_path']
+            unnormalized_signal: np.ndarray = np.load(npy_path)
+            labels: np.ndarray = self.data_frame.iloc[idx][[
                 'Sinusal', 'Regular', 'Monomorph', 
                 'QS complex in V1-V2-V3', 'R complex in V5-V6', 
                 'T wave inversion (inferior - II, III, aVF)', 
@@ -280,44 +358,65 @@ class ECGDatasetClassifier(Dataset):
                 'Ventricular Rhythm', 'no_qrs']]
     
 
-        labels = torch.tensor(labels.values.astype(np.int32), dtype=torch.int32)
-        labels = labels.to(torch.float)
+        labels: torch.Tensor = torch.tensor(labels.values.astype(np.int32), dtype=torch.int32)
+        labels: torch.Tensor = labels.to(torch.float)
         return unnormalized_signal, labels
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, 
+        idx: int
+    ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal, labels = self.get_signal(idx)
+        signal_info: tuple[np.ndarray, np.ndarray] = self.get_signal(idx)
+        unnormalized_signal: np.ndarray = signal_info[0]
+        labels: np.ndarray = signal_info[1]
     
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))
 
-        epsilon = 1e-8 
-        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
-        signal = torch.tensor(signal, dtype=torch.float32)
-        sample = {'signal': signal, 'labels': labels}
+        epsilon: float = 1e-8 
+        signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
+        signal: torch.Tensor = torch.tensor(signal, dtype=torch.float32)
+        sample: dict = {'signal': signal, 'labels': labels}
         sample['signal'] = sample['signal'].permute(1, 0)
         return sample
     
 class ECGDatasetEmbeddings(Dataset):
-    def __init__(self, parquet_file=None, csv_file=None, transform=None, split='train', test_size=0.1, random_state=42):
-        self.transform = transform
-        self.split = split
+    def __init__(
+        self, 
+        parquet_file: Optional[str] = None, 
+        csv_file: Optional[str] = None, 
+        transform: Optional[callable] = None, 
+        split: Optional[str] = 'train', 
+        test_size: Optional[float] = 0.1, 
+        random_state: Optional[int] = 42
+    ):
+        self.transform: Optional[callable] = transform
+        self.split: str = split
 
         if parquet_file:
-            self.data_frame = pd.read_parquet(parquet_file)
+            self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
         elif csv_file:
-            self.data_frame = pd.read_csv(csv_file)
-            self.data_frame = self._random_split(test_size, random_state)
+            self.data_frame: pd.DataFrame = pd.read_csv(csv_file)
+            self.data_frame: pd.DataFrame = self._random_split(test_size, random_state)
 
+        unnormalized_signal: np.ndarray
         unnormalized_signal, _ = self.get_signal(1)
-        self.waveform_length, self.leads = unnormalized_signal.shape
+        self.waveform_length: int = unnormalized_signal.shape[0]
+        self.leads: int = unnormalized_signal.shape[1]
 
-    def _random_split(self, test_size, random_state):
+    def _random_split(
+        self, 
+        test_size: float, 
+        random_state: int
+    ) -> pd.DataFrame:
         """
         Perform a random train-test split (MIMIC-IV dataset).
         """
+        train_df: pd.DataFrame
+        test_df: pd.DataFrame
         train_df, test_df = train_test_split(self.data_frame, test_size=test_size, random_state=random_state)
 
         if self.split == 'train':
@@ -325,46 +424,61 @@ class ECGDatasetEmbeddings(Dataset):
         else:
             return test_df
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_signal(self, idx):
+    def get_signal(
+        self, 
+        idx: int
+    ) -> tuple[np.ndarray, str]:
         if 'npy_path' in self.data_frame.columns:
-            npy_path = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
-            unnormalized_signal = np.load(npy_path)
+            npy_path: str = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
+            unnormalized_signal: np.ndarray = np.load(npy_path)
             return unnormalized_signal, npy_path
         elif 'waveform_path' in self.data_frame.columns:
             waveform_path = self.data_frame.iloc[idx]['waveform_path']
             unnormalized_signal = np.load(waveform_path)
             return unnormalized_signal, waveform_path
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, 
+        idx: int
+    ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal, waveform_path = self.get_signal(idx)
+        signal_info: tuple[np.ndarray, str] = self.get_signal(idx)
+        unnormalized_signal: np.ndarray = signal_info[0]
+        waveform_path: str = signal_info[1]
         
         if np.isnan(unnormalized_signal).any():
             return self.__getitem__((idx + 1) % len(self))
 
-        epsilon = 1e-8 
-        signal = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
+        epsilon: float = 1e-8 
+        signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
     
         sample = {'signal': signal, 'waveform_path': waveform_path}
         return sample
     
 
 class ECGDatasetLinearProbe(Dataset):
-    def __init__(self, parquet_file=None, embedding_folder=None, transform=None, split='train', val_size=0.1, test_size=0.1, random_state=42):
-        self.transform = transform
-        self.split = split
-        self.embedding_folder = embedding_folder
+    def __init__(
+        self, 
+        parquet_file: str | None, 
+        embedding_folder: str | None, 
+        transform: callable | None, 
+        split: str, 
+        val_size: float, test_size: float, random_state: int
+    ):
+        self.transform: Optional[callable] = transform
+        self.split: str = split
+        self.embedding_folder: Optional[str] = embedding_folder
 
         if parquet_file:
-            self.data_frame = pd.read_parquet(parquet_file)
+            self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
 
-            embedding_files = set(f.replace('_embedding.npy', '') for f in os.listdir(self.embedding_folder) if f.endswith('_embedding.npy'))
-            self.data_frame = self.data_frame[self.data_frame['npy_path'].apply(lambda x: os.path.splitext(os.path.basename(x))[0] in embedding_files)]
+            embedding_files: set[str] = set(f.replace('_embedding.npy', '') for f in os.listdir(self.embedding_folder) if f.endswith('_embedding.npy'))
+            self.data_frame: pd.DataFrame = self.data_frame[self.data_frame['npy_path'].apply(lambda x: os.path.splitext(os.path.basename(x))[0] in embedding_files)]
 
             self.train_df, self.val_df, self.test_df = self._stratified_split(val_size, test_size, random_state)
             if self.split == 'train':
@@ -374,11 +488,16 @@ class ECGDatasetLinearProbe(Dataset):
             elif self.split == 'test':
                 self.data_frame = self.test_df
 
-    def _stratified_split(self, val_size, test_size, random_state):
+    def _stratified_split(
+        self, 
+        val_size: float, 
+        test_size: float, 
+        random_state: int
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Stratified train-validation-test split based on the label distribution.
         """
-        labels = self.data_frame[[
+        labels: np.ndarray = self.data_frame[[
             'Sinusal', 'Regular', 'Monomorph', 
                 'QS complex in V1-V2-V3', 'R complex in V5-V6', 
                 'T wave inversion (inferior - II, III, aVF)', 
@@ -408,7 +527,7 @@ class ECGDatasetLinearProbe(Dataset):
                 'Ventricular Rhythm', 'no_qrs'
         ]].values
 
-        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+        stratifier: MultilabelStratifiedShuffleSplit = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
         train_idx, test_idx = next(stratifier.split(self.data_frame, labels))
 
         train_val_df = self.data_frame.iloc[train_idx].reset_index(drop=True)
@@ -420,20 +539,23 @@ class ECGDatasetLinearProbe(Dataset):
 
         return train_df, val_df, test_df
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_embedding_and_labels(self, idx):
-        label_row = self.data_frame.iloc[idx]
-        base_id = os.path.splitext(os.path.basename(label_row['npy_path']))[0]
-        embedding_path = os.path.join(self.embedding_folder, f"{base_id}_embedding.npy")
+    def get_embedding_and_labels(
+        self, 
+        idx: int
+    ) -> tuple[np.ndarray, torch.Tensor, list[str]]:
+        label_row: pd.Series = self.data_frame.iloc[idx]
+        base_id: str = os.path.splitext(os.path.basename(label_row['npy_path']))[0]
+        embedding_path: str = os.path.join(self.embedding_folder, f"{base_id}_embedding.npy")
 
         if not os.path.exists(embedding_path):
             raise FileNotFoundError(f"Embedding file not found: {embedding_path}")  
 
-        embedding = np.load(embedding_path)
+        embedding: np.ndarray = np.load(embedding_path)
         # Extract label values using the desired class columns
-        labels_series = label_row[[ 
+        labels_series: pd.Series = label_row[[ 
             'Sinusal', 'Regular', 'Monomorph', 
                 'QS complex in V1-V2-V3', 'R complex in V5-V6', 
                 'T wave inversion (inferior - II, III, aVF)', 
@@ -463,18 +585,21 @@ class ECGDatasetLinearProbe(Dataset):
                 'Ventricular Rhythm', 'no_qrs'
         ]]
 
-        labels_values = torch.tensor(labels_series.values.astype(np.int32), dtype=torch.float32)
-        labels = labels_series.index.tolist()
+        labels_values: torch.Tensor = torch.tensor(labels_series.values.astype(np.int32), dtype=torch.float32)
+        labels: list[str] = labels_series.index.tolist()
         return embedding, labels_values, labels
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self, 
+        idx: int
+    ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
         embedding, labels_values, labels = self.get_embedding_and_labels(idx)
-        embedding = torch.tensor(embedding, dtype=torch.float32)
+        embedding: torch.Tensor = torch.tensor(embedding, dtype=torch.float32)
 
-        sample = {'embedding': embedding, 'labels_values': labels_values, 'labels': labels}
+        sample: dict = {'embedding': embedding, 'labels_values': labels_values, 'labels': labels}
 
         if self.transform:
             sample['embedding'] = self.transform(sample['embedding'])
