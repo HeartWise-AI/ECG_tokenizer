@@ -31,12 +31,12 @@ class ECGDataset(Dataset):
         split: str = 'train', 
         test_size: float = 0.0001, 
         random_state: int = 1234, 
-        waveform_length: int = 5000, 
+        expected_waveform_length: int = 5000, 
         num_leads: int = 12
     ):
         self.transform: callable = transform
         self.split: str = split
-        self.waveform_length: int = waveform_length
+        self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
         if parquet_file:
             # Load data from parquet file for the first dataset
@@ -57,7 +57,11 @@ class ECGDataset(Dataset):
         # Random train-test split
         train_df: pd.DataFrame
         test_df: pd.DataFrame
-        train_df, test_df = train_test_split(self.data_frame, test_size=test_size, random_state=random_state)
+        train_df, test_df = train_test_split(
+            self.data_frame, 
+            test_size=test_size, 
+            random_state=random_state, 
+        )
 
         if self.split == 'train':
             return train_df
@@ -80,21 +84,52 @@ class ECGDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data_frame.iloc[idx]['waveform_path'])
-        
-        if np.isnan(unnormalized_signal).any():
+        try:
+            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data_frame.iloc[idx]['waveform_path'])
+            
+            # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
+            if len(unnormalized_signal.shape) == 3:
+                unnormalized_signal = unnormalized_signal.squeeze(-1)
+            
+            if np.isnan(unnormalized_signal).any():
+                return self.__getitem__((idx + 1) % len(self))
+
+            current_length: int = unnormalized_signal.shape[0]
+            if current_length < self.expected_waveform_length:
+                pad_size: int = self.expected_waveform_length - current_length
+                # Pad timesteps dimension at the end
+                unnormalized_signal = np.pad(
+                    unnormalized_signal, 
+                    ((0, pad_size), (0, 0)), 
+                    mode='constant', 
+                    constant_values=0
+                )
+            elif current_length > self.expected_waveform_length:
+                step: int = unnormalized_signal.shape[0] // self.expected_waveform_length
+                unnormalized_signal = unnormalized_signal[::step, :]
+            
+            if unnormalized_signal.shape[0] != self.expected_waveform_length:
+                return self.__getitem__((idx + 1) % len(self))
+
+            if unnormalized_signal.shape[1] != self.num_leads:
+                return self.__getitem__((idx + 1) % len(self))
+            
+            epsilon: float = 1e-8
+            signal_min: float = unnormalized_signal.min()
+            signal_max: float = unnormalized_signal.max()
+            signal_range: float = signal_max - signal_min
+            
+            # Skip samples with zero or near-zero range
+            if signal_range == 0:
+                print(f"Skipping {self.data_frame.iloc[idx]['waveform_path']}: signal has no variation (min={signal_min}, max={signal_max})")
+                return self.__getitem__((idx + 1) % len(self))
+            
+            signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
+            
+            return {'signal': np.transpose(signal, (1, 0))}
+        except Exception as e:
+            print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
-
-        # current_length: int = unnormalized_signal.shape[0]
-        # if current_length < self.target_length:
-        #     pad_size: int = self.target_length - current_length
-        #     # Pad timesteps dimension at the end
-        #     unnormalized_signal = np.pad(unnormalized_signal, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
-
-        epsilon: float = 1e-8 
-        signal: np.ndarray = (unnormalized_signal - unnormalized_signal.min()) / (unnormalized_signal.max() - unnormalized_signal.min() + epsilon) * 2 - 1
-        signal: torch.Tensor = torch.from_numpy(signal).float()
-        return {'signal': signal.permute(1, 0)}
 
 class ECGDatasetLLM(Dataset):
     def __init__(
