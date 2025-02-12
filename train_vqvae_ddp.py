@@ -5,8 +5,9 @@ import torch.nn as nn
 from torch.cuda.amp import autocast
 import torch.distributed as dist
 import argparse
-
-
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 from data.dataset import ECGDataset
 from models.models import (
     VQVAE, 
@@ -28,7 +29,6 @@ Relevant issues from lucid-rains repos: #28, #44, #102
 """
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_checkpoint(
     model: nn.Module,
@@ -95,8 +95,9 @@ def load_checkpoint(
     return checkpoint['iteration'], model, optimizer
 
 def evaluate(
-    model: nn.Module,
-    data_loader: DataLoader
+    model: nn.Module, 
+    data_loader: DataLoader, 
+    rank: int
 ) -> float:
     logging.debug("Starting evaluation...")
     model.eval()
@@ -104,9 +105,9 @@ def evaluate(
     with torch.no_grad():
         for i, batch in enumerate(data_loader):
             logging.debug(f"Evaluating batch {i+1}/{len(data_loader)}")
-            signals: torch.Tensor = batch['signal'].float().to(device)
+            signals: torch.Tensor = batch['signal'].float().to(rank)
             with autocast():
-                out, indices, cmt_loss = model(signals)
+                out, _, _ = model(signals)
                 rec_loss: torch.Tensor = (out - signals).abs().mean()
             total_loss += rec_loss.item()
     model.train()
@@ -122,19 +123,26 @@ def train(
     checkpoint_dir: str,
     num_epochs: int = 10,
     alpha: float = 1.0,
-    start_epoch: int = 0
+    start_epoch: int = 0,
+    rank: int = 0
 ) -> None:
     model.train()
     for epoch in range(start_epoch, num_epochs):
+        train_loader.sampler.set_epoch(epoch)  # Important for proper shuffling
+        
         # Track epoch metrics
         epoch_rec_loss = 0.0
         epoch_cmt_loss = 0.0
         epoch_active_codes = 0.0
         n_batches = len(train_loader)
         
-        progress_bar = tqdm.tqdm(train_loader, total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
+        # Only show progress bar on rank 0
+        if rank == 0:
+            progress_bar = tqdm.tqdm(train_loader, total=len(train_loader), 
+                                   desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
+        
         for batch_idx, batch in enumerate(train_loader):
-            signals: torch.Tensor = batch["signal"].float().to(device)
+            signals: torch.Tensor = batch["signal"].float().to(rank)
             optimizer.zero_grad()
             out, indices, cmt_loss = model(signals)
             rec_loss: torch.Tensor = (out - signals).abs().mean()
@@ -142,6 +150,10 @@ def train(
             combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+
+            # Add barrier for gradient synchronization
+            if dist.get_world_size() > 1:
+                dist.barrier()
 
             # Accumulate metrics
             epoch_rec_loss += rec_loss.item()
@@ -153,154 +165,165 @@ def train(
             current_mean_cmt = epoch_cmt_loss / (batch_idx + 1)
             current_mean_active = epoch_active_codes / (batch_idx + 1)
 
-            progress_bar.set_postfix({
-                "rec_loss": f"{rec_loss.item():.4f}",
-                "mean_rec": f"{current_mean_rec:.4f}",
-                "cmt_loss": f"{cmt_loss.mean().item():.4f}",
-                "mean_cmt": f"{current_mean_cmt:.4f}",
-                "active": f"{indices.unique().numel() / num_codes * 100:.2f}%",
-                "mean_active": f"{current_mean_active:.2f}%"
-            })
-            progress_bar.update(1)
+            if rank == 0:
+                progress_bar.set_postfix({
+                    "rec_loss": f"{rec_loss.item():.4f}",
+                    "mean_rec": f"{current_mean_rec:.4f}",
+                    "cmt_loss": f"{cmt_loss.mean().item():.4f}",
+                    "mean_cmt": f"{current_mean_cmt:.4f}",
+                    "active": f"{indices.unique().numel() / num_codes * 100:.2f}%",
+                    "mean_active": f"{current_mean_active:.2f}%"
+                })
+                progress_bar.update(1)
 
         torch.cuda.empty_cache()
-        progress_bar.close()
+        if rank == 0:
+            progress_bar.close()
 
-        # Log epoch summary
+        # Calculate epoch averages
         epoch_rec_loss /= n_batches
         epoch_cmt_loss /= n_batches
         epoch_active_codes /= n_batches
-        
-        logging.info(f"Epoch {epoch + 1}/{num_epochs} Summary:")
-        logging.info(f"Average Reconstruction Loss: {epoch_rec_loss:.4f}")
-        logging.info(f"Average Commitment Loss: {epoch_cmt_loss:.4f}")
-        logging.info(f"Average Active Codes (%): {epoch_active_codes:.2f}")
-        
-        wandb.log({
-            "epoch": epoch + 1,
-            "epoch_avg_rec_loss": epoch_rec_loss,
-            "epoch_avg_cmt_loss": epoch_cmt_loss,
-            "epoch_avg_active_codes": epoch_active_codes
-        })
 
-        if (epoch + 1) % 1 == 0:
+        # Synchronize before logging
+        if dist.get_world_size() > 1:
+            dist.barrier()
+        
+        # Log epoch summary only on rank 0
+        if rank == 0:
+            logging.info(f"Epoch {epoch + 1}/{num_epochs} Summary:")
+            logging.info(f"Average Reconstruction Loss: {epoch_rec_loss:.4f}")
+            logging.info(f"Average Commitment Loss: {epoch_cmt_loss:.4f}")
+            logging.info(f"Average Active Codes (%): {epoch_active_codes:.2f}")
+            
+            # Log to wandb
+            wandb.log({
+                "epoch": epoch + 1,
+                "epoch_avg_rec_loss": epoch_rec_loss,
+                "epoch_avg_cmt_loss": epoch_cmt_loss,
+                "epoch_avg_active_codes": epoch_active_codes
+            })
+
+        # Synchronize before evaluation
+        if dist.get_world_size() > 1:
+            dist.barrier()
+
+        # Only save checkpoints and evaluate on rank 0
+        if rank == 0:
             try:
-                test_loss = evaluate(model, test_loader)
+                test_loss = evaluate(model, test_loader, rank)
                 wandb.log({"test_loss": test_loss, "epoch": epoch + 1})
                 save_checkpoint(model, optimizer, epoch + 1, checkpoint_dir)
-                model.train()  # Ensure model is back in training mode
+                model.train()
             except Exception as e:
                 raise Exception(f"An error occurred during evaluation: {e}")
+        
+        # Synchronize after evaluation before next epoch
+        if dist.get_world_size() > 1:
+            dist.barrier()
 
     print("Training complete!")
 
+def setup(rank, world_size):
+    try:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    except Exception as e:
+        raise Exception(f"Failed to initialize process group: {e}")
+
+def cleanup():
+    dist.destroy_process_group()
+
+def main_worker(rank, world_size, config):
+    try:
+        setup(rank, world_size)
+        
+        # Initialize wandb only on rank 0
+        if rank == 0:
+            wandb.init(
+                project="ECG_tokenizer",
+                entity="jacques-delfrate",
+                config=config
+            )
+        
+        # Create datasets
+        dataset_mimic_train = ECGDataset(parquet_file=config["train_parquet_file"])
+        dataset_mimic_test = ECGDataset(parquet_file=config["test_parquet_file"])
+        
+        # Create model and move it to GPU with id rank
+        model = ResVQAutoEncoder(
+            timesteps=dataset_mimic_train.waveform_length,
+            codebook_size=config["num_codes"],
+            implicit_neural_codebook=True
+        ).to(rank)
+        
+        model = DDP(model, device_ids=[rank])
+        
+        # Create optimizer
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+        
+        # Create sampler for DDP
+        train_sampler = DistributedSampler(dataset_mimic_train)
+        test_sampler = DistributedSampler(dataset_mimic_test, shuffle=False)
+        
+        # Update DataLoader to use sampler
+        train_loader = DataLoader(
+            dataset_mimic_train,
+            batch_size=config["batch_size"],
+            sampler=train_sampler,
+            num_workers=4,  # Reduce num_workers per process
+            pin_memory=True
+        )
+        
+        test_loader = DataLoader(
+            dataset_mimic_test,
+            batch_size=config["batch_size"],
+            sampler=test_sampler,
+            num_workers=4,
+            pin_memory=True
+        )
+        
+        train(
+            model=model, 
+            train_loader=train_loader, 
+            test_loader=test_loader, 
+            optimizer=optimizer, 
+            num_codes=config["num_codes"], 
+            checkpoint_dir=config["checkpoint_dir"], 
+            num_epochs=config["num_epochs"], 
+            alpha=config["alpha"], 
+            start_epoch=config["start_epoch"],
+            rank=rank
+        )
+    except Exception as e:
+        logging.error(f"Error in worker {rank}: {e}")
+        raise e
+    finally:
+        cleanup()
+
 def main():
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(description='Train VQVAE model.')
+    parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint_path', type=str, help='Path to checkpoint file')
     parser.add_argument('--base_config', type=str, help='Path to base_config file', required=True)
-    args: argparse.Namespace = parser.parse_args()
+    args = parser.parse_args()
 
     with open(args.base_config, 'r') as file:
         config = yaml.safe_load(file)
 
-    wandb.init(
-        project="ECG_tokenizer", 
-        entity="jacques-delfrate", 
-        name=config["experiment_name"], 
-        config=config
-    )
-
-    dataset_mimic_train: ECGDataset = ECGDataset(
-        parquet_file=config["train_parquet_MIMIC_file"],
-        expected_waveform_length=config["waveform_length"],
-        num_leads=config["num_leads"]
-    )
-    print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
-    dataset_mhi_train: ECGDataset = ECGDataset(
-        parquet_file=config["train_parquet_MHI_file"],
-        expected_waveform_length=config["waveform_length"],
-        num_leads=config["num_leads"]
-    )
-    print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
-    dataset_code_15_train: ECGDataset = ECGDataset(
-        parquet_file=config["code_15_dataset_path"],
-        expected_waveform_length=config["waveform_length"],
-        num_leads=config["num_leads"]
-    )
-    print(f"len(dataset_code_15_train): {len(dataset_code_15_train)}")
-    combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
-        [
-            dataset_mimic_train, 
-            dataset_mhi_train,
-            dataset_code_15_train
-        ]
-    )
-    print(f"len(combined_train_dataset): {len(combined_train_dataset)}")
-    train_loader: DataLoader = DataLoader(
-        combined_train_dataset, 
-        batch_size=config["batch_size"], 
-        shuffle=True, 
-        num_workers=16, 
-        pin_memory=True,
-        drop_last=True
-    )
-
-    dataset_mimic_test: ECGDataset = ECGDataset(
-        parquet_file=config["test_parquet_MIMIC_file"],
-        expected_waveform_length=config["waveform_length"],
-        num_leads=config["num_leads"]
-    )
-    print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
-    dataset_mhi_test: ECGDataset = ECGDataset(
-        parquet_file=config["test_parquet_MHI_file"],
-        expected_waveform_length=config["waveform_length"],
-        num_leads=config["num_leads"]
-    )
-    print(f"len(dataset_mhi_test): {len(dataset_mhi_test)}")
-    combined_test_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
-        [
-            dataset_mimic_test, 
-            dataset_mhi_test
-        ]
-    )
-    print(f"len(combined_test_dataset): {len(combined_test_dataset)}")
-    test_loader: DataLoader = DataLoader(
-        combined_test_dataset, 
-        batch_size=config["batch_size"], 
-        shuffle=False, 
-        num_workers=16, 
-        pin_memory=True,
-        drop_last=True
-    )
+    n_gpus = torch.cuda.device_count()
+    if n_gpus < 2:
+        print(f"Requires at least 2 GPUs to run, but got {n_gpus}")
+        return
+        
+    world_size = 2  # Number of GPUs you want to use
     
-    seed: int = config["seed"]
-    torch.random.manual_seed(seed)
-    
-    model: ResVQAutoEncoder = ResVQAutoEncoder(
-        timesteps=config["waveform_length"],
-        codebook_size=config["num_codes"],
-        implicit_neural_codebook=True
-    ).to(device)
-
-    if torch.cuda.device_count() > 1:
-        print(f"Using GPUs 2 and 3")
-        os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
-        model = nn.DataParallel(model)
-
-    lr: float = float(config["learning_rate"])
-    optimizer: torch.optim.AdamW = torch.optim.AdamW(model.parameters(), lr=lr)
-      
-    checkpoint_dir: str = f"checkpoints/{config["experiment_name"]}"  
-    train(
-        model=model, 
-        train_loader=train_loader, 
-        test_loader=test_loader, 
-        optimizer=optimizer, 
-        num_codes=config["num_codes"], 
-        checkpoint_dir=checkpoint_dir, 
-        num_epochs=config["num_epochs"], 
-        start_epoch=0
+    mp.spawn(
+        main_worker,
+        args=(world_size, config),
+        nprocs=world_size,
+        join=True
     )
-    
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
