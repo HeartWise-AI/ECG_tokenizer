@@ -6,6 +6,7 @@ from torch.cuda.amp import autocast
 import torch.distributed as dist
 import argparse
 
+
 from data.dataset import ECGDataset
 from models.models import (
     VQVAE, 
@@ -209,35 +210,75 @@ def main():
         config=config
     )
 
-    dataset_mimic_train: ECGDataset = ECGDataset(parquet_file='/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet')
-    # dataset_mhi_train: ECGDataset = ECGDataset(parquet_file="/media/data1/muse_ge/train_trial_v1.1.parquet", test_size=0, split='train')
+    dataset_mimic_train: ECGDataset = ECGDataset(
+        parquet_file=config["train_parquet_MIMIC_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
+    dataset_mhi_train: ECGDataset = ECGDataset(
+        parquet_file=config["train_parquet_MHI_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
+    dataset_code_15_train: ECGDataset = ECGDataset(
+        parquet_file=config["code_15_dataset_path"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_code_15_train): {len(dataset_code_15_train)}")
+    combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+        [
+            dataset_mimic_train, 
+            dataset_mhi_train,
+            dataset_code_15_train
+        ]
+    )
+    print(f"len(combined_train_dataset): {len(combined_train_dataset)}")
     train_loader: DataLoader = DataLoader(
-        dataset_mimic_train, 
+        combined_train_dataset, 
         batch_size=config["batch_size"], 
         shuffle=True, 
-        num_workers=16
+        num_workers=16, 
+        pin_memory=True,
+        drop_last=True
     )
 
-    # combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset([dataset_mimic_train, dataset_mhi_train])
-    # combined_train_loader: DataLoader = DataLoader(combined_train_dataset, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
-
-    dataset_mimic_test: ECGDataset = ECGDataset(parquet_file='/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_test.parquet')
+    dataset_mimic_test: ECGDataset = ECGDataset(
+        parquet_file=config["test_parquet_MIMIC_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
+    dataset_mhi_test: ECGDataset = ECGDataset(
+        parquet_file=config["test_parquet_MHI_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mhi_test): {len(dataset_mhi_test)}")
+    combined_test_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+        [
+            dataset_mimic_test, 
+            dataset_mhi_test
+        ]
+    )
+    print(f"len(combined_test_dataset): {len(combined_test_dataset)}")
     test_loader: DataLoader = DataLoader(
-        dataset_mimic_test, 
+        combined_test_dataset, 
         batch_size=config["batch_size"], 
         shuffle=False, 
-        num_workers=16
+        num_workers=16, 
+        pin_memory=True,
+        drop_last=True
     )
-
-    lr: float = float(config["learning_rate"])
-    num_epochs: int = config["num_epochs"]
-    num_codes: int = config["num_codes"]
+    
     seed: int = config["seed"]
-    checkpoint_dir: str = f"checkpoints/{config["experiment_name"]}"
     torch.random.manual_seed(seed)
+    
     model: ResVQAutoEncoder = ResVQAutoEncoder(
-        timesteps=dataset_mimic_train.waveform_length,
-        codebook_size=num_codes,
+        timesteps=config["waveform_length"],
+        codebook_size=config["num_codes"],
         implicit_neural_codebook=True
     ).to(device)
 
@@ -246,18 +287,18 @@ def main():
         os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
         model = nn.DataParallel(model)
 
-    opt: torch.optim.AdamW = torch.optim.AdamW(model.parameters(), lr=lr)
-    
-    # start_iteration, model, optimizer = load_checkpoint(model, opt, checkpoint_dir='checkpoints/', checkpoint_path=args.checkpoint_path)
-    
+    lr: float = float(config["learning_rate"])
+    optimizer: torch.optim.AdamW = torch.optim.AdamW(model.parameters(), lr=lr)
+      
+    checkpoint_dir: str = f"checkpoints/{config["experiment_name"]}"  
     train(
         model=model, 
         train_loader=train_loader, 
         test_loader=test_loader, 
-        optimizer=opt, 
-        num_codes=num_codes, 
+        optimizer=optimizer, 
+        num_codes=config["num_codes"], 
         checkpoint_dir=checkpoint_dir, 
-        num_epochs=num_epochs, 
+        num_epochs=config["num_epochs"], 
         start_epoch=0
     )
     
