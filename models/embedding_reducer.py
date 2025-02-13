@@ -7,12 +7,28 @@ class EmbeddingReducer(nn.Module):
         output_size: int = 768
     ):
         super(EmbeddingReducer, self).__init__()
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(in_channels=input_shape[0], out_channels=32, kernel_size=3, stride=2, padding=1),  # -> (32, 64, 80)
+        self.input_shape: tuple[int, int, int] = input_shape
+        self.output_size: int = output_size
+        self.conv_layers: nn.Sequential = nn.Sequential(
+            nn.Conv2d(
+                in_channels=input_shape[0], 
+                out_channels=32, 
+                kernel_size=3, 
+                stride=2, 
+                padding=1
+            ),  # -> (32, 64, 80)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # -> (64, 32, 40)
+            nn.Conv2d(
+                in_channels=32, 
+                out_channels=64, 
+                kernel_size=3, 
+                stride=2, 
+                padding=1
+            ),  # -> (64, 32, 40)
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # -> (128, 16, 20)
+            nn.Conv2d(
+                in_channels=64, 
+                out_channels=128, kernel_size=3, stride=2, padding=1),  # -> (128, 16, 20)
             nn.ReLU()
         )
         self.flatten = nn.Flatten()  # -> 128 * 16 * 20 = 40960
