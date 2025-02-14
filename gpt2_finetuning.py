@@ -7,6 +7,8 @@ from tqdm import tqdm
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from models.embedding_reducer import EmbeddingReducer
 import wandb
+import os
+from pathlib import Path
 
 # Initialize wandb
 wandb.init(
@@ -22,6 +24,10 @@ wandb.init(
     },
     entity="jacques-delfrate",     
 )
+
+# Create checkpoint directory
+save_dir = Path("checkpoints")
+save_dir.mkdir(exist_ok=True)
 
 # Initialize components
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
@@ -79,6 +85,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
 num_epochs = 3
 
 # Training Loop
+best_val_loss = float('inf')
 for epoch in range(num_epochs):
     model.train()
     total_loss = 0
@@ -146,6 +153,10 @@ for epoch in range(num_epochs):
     
     avg_val_loss = val_loss / len(val_loader)
     print(f'Epoch {epoch+1}/{num_epochs} - Validation Loss: {avg_val_loss:.4f}')
+    
+    # Save model
+    checkpoint_path = save_dir / f"model_epoch_{epoch+1}.pt"
+    torch.save(model.state_dict(), checkpoint_path)
     
     # Log epoch metrics
     wandb.log({

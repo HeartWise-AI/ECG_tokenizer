@@ -1,4 +1,4 @@
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel
 import torch.nn as nn
 import torch
 
@@ -47,6 +47,11 @@ class GPT2WithEmbedding(nn.Module):
         if attention_mask is not None:
             ecg_mask: torch.Tensor = torch.ones((batch_size, 1)).to(attention_mask.device)
             attention_mask: torch.Tensor = torch.cat([ecg_mask, attention_mask], dim=1)  # (batch, seq_length + 1)
+        
+        if labels is not None:
+            # Add -100 as label for the ECG token position (will be ignored in loss calculation)
+            label_ignore: torch.Tensor = torch.full((batch_size, 1), -100, dtype=labels.dtype).to(labels.device)
+            labels: torch.Tensor = torch.cat([label_ignore, labels], dim=1)  # (batch, seq_length + 1)
         
         # Forward through GPT-2
         outputs: torch.Tensor = self.gpt2(
