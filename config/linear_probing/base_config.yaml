@@ -1,3 +1,6 @@
+# pipeline project
+pipeline_project: !!str "ECG_tokenizer_linear_probing"
+
 # waveform parameters
 waveform_length: !!int 2500
 num_leads: !!int 12
@@ -8,7 +11,7 @@ train_iterations: !!int 20000
 seed: !!int 1234
 num_workers: !!int 4
 experiment_name: !!str "experiment_deeper_1024_rvq_QINCo_debug"
-num_epochs: !!int 2
+num_epochs: !!int 1
 
 # VQVAE parameters
 num_quantizers: !!int 8
@@ -40,5 +43,6 @@ code_15_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split
 model_path: !!str "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
 embedding_dir: !!str "/home/rbanerjee/embeddings/experiment_deeper_1024_rvq_QINCo/"
 name: !!str "sweep"
-project: !!str "ECG_tokenizer_linear_probing"
-entity: !!str "mhi_ai"
+wandb_project: !!str "ECG_tokenizer_linear_probing"
+wandb_entity: !!str "mhi_ai"
+parquet_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
