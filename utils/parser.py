@@ -1,16 +1,12 @@
 import os
 import argparse
-from utils.config import HeartWiseConfig
+from utils.config.heartwise_config import HeartWiseConfig
 from utils.parser_typing import (
     str2bool,
     parse_list,
     parse_optional_int,
     parse_optional_str
 )
-
-'''
-Adapted from: https://github.com/HeartWise-AI/DeepCORO_CLIP/blob/jd/support_multigpu-issue_7/utils/parser.py
-'''
 
 class HeartWiseParser:
 
