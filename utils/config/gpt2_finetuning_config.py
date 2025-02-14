@@ -17,9 +17,13 @@ class GPT2FinetuningConfig(HeartWiseConfig):
     num_epochs: int
     criterion: str
     optimizer: str
-    
+
+    # Tokenizer parameters
+    tokenizer_name: str
+    max_token_length: int
+
     # Data and checkpoint paths
     base_checkpoint_path: str
     train_dataset_path: str
-    test_dataset_path: str
-    embedding_dir: str
+    validation_dataset_path: str
+    embeddings_path: str

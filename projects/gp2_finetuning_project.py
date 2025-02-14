@@ -1,8 +1,10 @@
 
+from transformers import GPT2Tokenizer
+
 from utils.registry import ProjectRegistry
 from utils.config import GPT2FinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
-
+from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 @ProjectRegistry.register("ECG_tokenizer_gpt2_finetuning")
 class GPT2FinetuningProject:
     def __init__(
@@ -10,8 +12,24 @@ class GPT2FinetuningProject:
         config: GPT2FinetuningConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config = config
-        self.wandb_wrapper = wandb_wrapper
+        self.config: GPT2FinetuningConfig = config
+        self.wandb_wrapper: WandbWrapper = wandb_wrapper
 
     def run(self):
-        pass
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        tokenizer.pad_token = tokenizer.eos_token
+
+        training_set = ECGClinicalReportDataset(
+            embeddings_path=self.config.embeddings_path,
+            reports_path=self.config.train_dataset_path,
+            tokenizer=tokenizer,
+            max_length=self.config.max_token_length
+        )
+
+        validation_set = ECGClinicalReportDataset(
+            embeddings_path=self.config.embeddings_path,
+            reports_path=self.config.validation_dataset_path,
+            tokenizer=tokenizer,
+            max_length=self.config.max_token_length
+        )
+        

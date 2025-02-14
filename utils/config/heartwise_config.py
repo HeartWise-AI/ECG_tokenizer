@@ -10,6 +10,7 @@ class HeartWiseConfig:
     
     wandb_project: str
     wandb_entity: str
+    use_wandb: bool
 
     @classmethod
     def update_config_with_args(cls, base_config: 'HeartWiseConfig', args: Any) -> 'HeartWiseConfig':  
