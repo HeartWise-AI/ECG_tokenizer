@@ -14,20 +14,17 @@ from typing import Union
 from utils.parser import HeartWiseParser
 from utils.registry import ProjectRegistry
 from projects import GPT2FinetuningProject
+from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
-
 def main(config: HeartWiseConfig):
-    wandb.init(
-        project=config.wandb_project,
-        entity=config.wandb_entity,
-        config=config,
-    )
+    wandb_wrapper: WandbWrapper = WandbWrapper(config) if config.use_wandb else None
     
     project: Union[GPT2FinetuningProject] = ProjectRegistry.get(
         name=config.pipeline_project
     )(
-        config=config
+        config=config,
+        wandb_wrapper=wandb_wrapper
     )
     project.run()
 
