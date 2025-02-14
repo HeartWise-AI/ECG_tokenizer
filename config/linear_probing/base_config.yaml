@@ -46,3 +46,4 @@ name: !!str "sweep"
 wandb_project: !!str "ECG_tokenizer_linear_probing"
 wandb_entity: !!str "mhi_ai"
 parquet_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
+use_wandb: !!bool true
