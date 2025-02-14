@@ -1,3 +1,3 @@
-from .gp2_finetuning_project import GPT2FinetuningProject
+from .llm_finetuning_project import LLMFinetuningProject
 
-__all__ = ["GPT2FinetuningProject"]
+__all__ = ["LLMFinetuningProject"]

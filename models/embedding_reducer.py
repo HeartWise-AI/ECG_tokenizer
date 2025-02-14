@@ -1,5 +1,8 @@
 import torch.nn as nn
 
+from utils.registry import ModelRegistry
+
+@ModelRegistry.register("GPT2_EmbeddingReducer")
 class EmbeddingReducer(nn.Module):
     def __init__(
         self, 

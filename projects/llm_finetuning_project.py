@@ -3,21 +3,25 @@ import torch
 
 from transformers import GPT2Tokenizer
 
-from utils.registry import ProjectRegistry
-from utils.config import GPT2FinetuningConfig
+from utils.registry import (
+    ProjectRegistry, 
+    ModelRegistry
+)
+from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
 from models.embedding_reducer import EmbeddingReducer
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 
+
 @ProjectRegistry.register("ECG_tokenizer_LLM_finetuning")
-class GPT2FinetuningProject:
+class LLMFinetuningProject:
     def __init__(
         self,
-        config: GPT2FinetuningConfig,
+        config: LLMFinetuningConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config: GPT2FinetuningConfig = config
+        self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
 
     def run(self):
@@ -39,12 +43,14 @@ class GPT2FinetuningProject:
         )
         
         device = torch.device(self.config.device)
-        model = GPT2WithEmbedding(
-            gpt2_model_name=self.config.model_name, 
+        
+        reducer: EmbeddingReducer = ModelRegistry.get(self.config.embedding_reducer_name)(
+            output_size=self.config.embedding_size
+        )
+        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
+            gpt2_model_name=self.config.huggingface_model_name, 
             embedding_size=self.config.embedding_size, 
-            reducer=EmbeddingReducer(
-                output_size=self.config.embedding_size
-            )
+            reducer=reducer
         ).to(device)
         
-        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.lr)

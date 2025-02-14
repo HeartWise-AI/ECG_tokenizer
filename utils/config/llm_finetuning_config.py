@@ -23,7 +23,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     max_token_length: int
 
     # Model parameters
-    model_name: str
+    huggingface_model_name: str
+    trainable_model_name: str
+    embedding_reducer_name: str
     embedding_size: int
     device: str
 

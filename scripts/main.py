@@ -13,14 +13,14 @@ from typing import Union
 
 from utils.parser import HeartWiseParser
 from utils.registry import ProjectRegistry
-from projects import GPT2FinetuningProject
+from projects import LLMFinetuningProject
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
 def main(config: HeartWiseConfig):
     wandb_wrapper: WandbWrapper = WandbWrapper(config) if config.use_wandb else None
     
-    project: Union[GPT2FinetuningProject] = ProjectRegistry.get(
+    project: Union[LLMFinetuningProject] = ProjectRegistry.get(
         name=config.pipeline_project
     )(
         config=config,

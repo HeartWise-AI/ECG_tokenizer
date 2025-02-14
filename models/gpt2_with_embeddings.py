@@ -1,7 +1,10 @@
-from transformers import GPT2LMHeadModel
-import torch.nn as nn
 import torch
+import torch.nn as nn
+from transformers import GPT2LMHeadModel
 
+from utils.registry import ModelRegistry
+
+@ModelRegistry.register("GPT2_WithEmbedding")
 class GPT2WithEmbedding(nn.Module):
     def __init__(
         self, 
