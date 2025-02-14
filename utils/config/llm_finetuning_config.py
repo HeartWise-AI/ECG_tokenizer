@@ -6,8 +6,8 @@ from utils.registry import ConfigRegistry
 from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
-@ConfigRegistry.register("ECG_tokenizer_gpt2_finetuning")
-class GPT2FinetuningConfig(HeartWiseConfig):   
+@ConfigRegistry.register("ECG_tokenizer_LLM_finetuning")
+class LLMFinetuningConfig(HeartWiseConfig):   
     # Training hyperparameters
     seed: int
     lr: float

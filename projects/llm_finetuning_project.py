@@ -10,7 +10,7 @@ from models.embedding_reducer import EmbeddingReducer
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 
-@ProjectRegistry.register("ECG_tokenizer_gpt2_finetuning")
+@ProjectRegistry.register("ECG_tokenizer_LLM_finetuning")
 class GPT2FinetuningProject:
     def __init__(
         self,
