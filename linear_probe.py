@@ -15,7 +15,7 @@ import pandas as pd
 from data.dataset import ECGDatasetLinearProbe
 from models.models import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
 from utils.parser import HeartWiseParser
-from utils.config import HeartWiseConfig
+from utils.config.heartwise_config import HeartWiseConfig
 from utils.files_handler import generate_output_dir_name
 import os
 from tqdm.auto import trange
