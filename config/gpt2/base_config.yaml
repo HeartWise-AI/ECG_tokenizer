@@ -16,6 +16,11 @@ optimizer: !!str "adamw"
 tokenizer_name: !!str "gpt2"
 max_token_length: !!int 512
 
+# model parameters
+model_name: !!str "gpt2"
+embedding_size: !!int 768
+device: !!str "cuda"
+
 # data parameters
 train_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
 validation_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_test.parquet"

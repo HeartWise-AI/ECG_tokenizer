@@ -22,6 +22,11 @@ class GPT2FinetuningConfig(HeartWiseConfig):
     tokenizer_name: str
     max_token_length: int
 
+    # Model parameters
+    model_name: str
+    embedding_size: int
+    device: str
+
     # Data and checkpoint paths
     base_checkpoint_path: str
     train_dataset_path: str
