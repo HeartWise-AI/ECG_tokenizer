@@ -1,8 +1,10 @@
 import torch
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
 from transformers import GPT2Tokenizer
+from torch.utils.data import Dataset, DataLoader
+
+
 class ECGClinicalReportDataset(Dataset):
     def __init__(
         self, 
@@ -64,3 +66,28 @@ class ECGClinicalReportDataset(Dataset):
                 return self.__getitem__(idx + 1)
             else:
                 raise Exception("No valid items found in the remaining dataset")
+            
+            
+def get_clinical_report_dataloader(
+    embeddings_path: str, 
+    reports_path: str, 
+    tokenizer: GPT2Tokenizer, 
+    max_length: int = 512,
+    batch_size: int = 32,
+    shuffle: bool = True,
+    num_workers: int = 16,
+    pin_memory: bool = True
+):
+    dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
+        embeddings_path=embeddings_path, 
+        reports_path=reports_path, 
+        tokenizer=tokenizer, 
+        max_length=max_length
+    )
+    return DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=shuffle, 
+        num_workers=num_workers, 
+        pin_memory=pin_memory
+    )

@@ -17,6 +17,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     num_epochs: int
     criterion: str
     optimizer: str
+    runner_name: str
 
     # Tokenizer parameters
     tokenizer_name: str
