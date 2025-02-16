@@ -33,17 +33,30 @@ class ECGClinicalReportDataset(Dataset):
 
     def __getitem__(self, idx):
         try:
-            waveform_path = self.df.iloc[idx]['waveform_path']
+            row = self.df.iloc[idx]
+            if pd.isnull(row['waveform_path']) or pd.isnull(row['report']):
+                print(f"Missing waveform_path or report for index {idx}, skipping sample. "
+                      f"waveform_path: {row.get('waveform_path')}, report: {row.get('report')}")
+                return None
+
+            # Get the embedding path
+            waveform_path = row['waveform_path']
             waveform_path = waveform_path.split('/')[-1]
             waveform_path = waveform_path.split('.')[0]
             embedding_path = self.embeddings_path + waveform_path + '_embedding.npy'
             
             # Try to load the embedding
-            embedding = torch.tensor(
-                np.load(embedding_path), 
-                dtype=torch.float
-            )  # Shape: (8, 128, 160)
-            report = self.df.iloc[idx]['report']
+            try:
+                embedding = torch.tensor(
+                    np.load(embedding_path),
+                    dtype=torch.float
+                )  # Shape: (8, 128, 160)
+            except (FileNotFoundError, OSError) as e:
+                print(f"Could not load embedding for index {idx}, skipping this item. "
+                      f"embedding_path: {embedding_path}")
+                return None
+            
+            report = row['report']
             
             encoding = self.tokenizer.encode_plus(
                 report,
@@ -63,12 +76,9 @@ class ECGClinicalReportDataset(Dataset):
                 'attention_mask': attention_mask  # (max_length)
             }
             
-        except (FileNotFoundError, OSError) as e:
-            print(f"Could not load embedding for index {idx}, trying next item...")
-            if idx + 1 < len(self):
-                return self.__getitem__(idx + 1)
-            else:
-                raise Exception("No valid items found in the remaining dataset")
+        except Exception as e:
+            print(f"Error processing index {idx}: {e}")
+            return None
             
             
 def get_clinical_report_dataloader(
@@ -87,7 +97,8 @@ def get_clinical_report_dataloader(
         batch_size=config.batch_size, 
         shuffle=shuffle, 
         num_workers=config.num_workers, 
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        collate_fn=custom_collate_fn
     )
     
 def get_distributed_clinical_report_dataloader(
@@ -116,5 +127,15 @@ def get_distributed_clinical_report_dataloader(
         pin_memory=pin_memory, 
         num_replicas=num_replicas, 
         rank=rank,
-        shuffle=shuffle
+        shuffle=shuffle,
+        collate_fn=custom_collate_fn
     )
+
+def custom_collate_fn(batch):
+    """
+    Custom collate function which filters out any None items in the batch.
+    """
+    filtered_batch = [item for item in batch if item is not None]
+    if len(filtered_batch) == 0:
+        raise ValueError("All items in the batch were invalid. Check dataset integrity or file paths.")
+    return torch.utils.data.default_collate(filtered_batch)

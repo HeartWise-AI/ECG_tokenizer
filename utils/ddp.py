@@ -80,7 +80,8 @@ class DistributedUtils:
         pin_memory: bool,
         num_replicas: int,
         rank: int,
-        shuffle: bool = True
+        shuffle: bool = True,
+        collate_fn: callable = None
     ) -> DataLoader:
         sampler: DS.DistributedSampler = DS.DistributedSampler(
             dataset,
@@ -93,5 +94,6 @@ class DistributedUtils:
             batch_size=batch_size,  
             num_workers=num_workers, 
             pin_memory=pin_memory, 
-            sampler=sampler
+            sampler=sampler,
+            collate_fn=collate_fn
         )
