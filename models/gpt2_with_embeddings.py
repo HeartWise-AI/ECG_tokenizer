@@ -18,7 +18,8 @@ class GPT2WithEmbedding(nn.Module):
             output_size=embedding_size
         )
         
-        # If embedding size differs from GPT-2's hidden size, project it
+        # If embedding size differs from GPT-2's hidden size, project it - 
+        # this is done to ensure that the embedding size is the same as the hidden size of the GPT-2 model
         if embedding_size != self.gpt2.config.n_embd:
             self.proj: nn.Linear = nn.Linear(embedding_size, self.gpt2.config.n_embd)
         else:
@@ -77,14 +78,23 @@ class GPT2WithEmbedding(nn.Module):
         if self.proj:
             reduced = self.proj(reduced)  # (batch, hidden_size)
         
-        # Create an initial prefix embedding - you may choose to use the special token's embedding or the reduced vector.
-        # Here we simply use the reduced vector as the first token embedding.
+        # Create an initial prefix embedding - here we simply use the reduced vector as the first token embedding.
         prefix = reduced.unsqueeze(1)  # (batch, 1, hidden_size)
+        
+        # Ensure that attention_mask and pad_token_id are provided for reliable generation.
+        # This is done to avoid warnings when calling .generate() function.
+        gen_kwargs = generate_kwargs.copy()
+        if "attention_mask" not in gen_kwargs:
+            # Create an attention mask of ones for the prefix tokens.
+            gen_kwargs["attention_mask"] = prefix.new_ones(prefix.shape[:-1])
+        if "pad_token_id" not in gen_kwargs:
+            # Explicitly set pad_token_id to eos_token_id to avoid warnings.
+            gen_kwargs["pad_token_id"] = self.gpt2.config.eos_token_id
         
         # Now call GPT-2's generate using inputs_embeds instead of input_ids.
         generated_ids = self.gpt2.generate(
             inputs_embeds=prefix,
             max_length=max_length, 
-            **generate_kwargs
+            **gen_kwargs
         )
         return generated_ids    
