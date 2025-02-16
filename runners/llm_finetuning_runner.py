@@ -259,9 +259,16 @@ class LLMFinetuningRunner:
             'config': self.config
         }
         
-        # Save regular checkpoint
+        # Save regular checkpoint for current epoch
         checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
         torch.save(checkpoint, checkpoint_path)
+        
+        # Delete the checkpoint from the previous epoch if it exists
+        if epoch > 0:
+            prev_checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch - 1}.pt')
+            if os.path.exists(prev_checkpoint_path):
+                os.remove(prev_checkpoint_path)
+                print(f"Deleted old checkpoint: {prev_checkpoint_path}")
         
         # If this is the best model, save it separately
         if is_best:
