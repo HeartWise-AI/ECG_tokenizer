@@ -56,7 +56,7 @@ echo "Selected GPUs: $SELECTED_GPUS (Total: $NUM_GPUS GPUs)"
 echo "Config path: $CONFIG_PATH"
 
 # Environment variables for better DDP performance
-export NCCL_DEBUG=INFO
+export NCCL_DEBUG=WARNING
 export CUDA_VISIBLE_DEVICES=$SELECTED_GPUS
 export OMP_NUM_THREADS=1
 
