@@ -8,11 +8,25 @@ from utils.parser_typing import (
     parse_optional_str
 )
 
-class HeartWiseParser:
+from typing import Any
 
+class HeartWiseParser:
+    """Parser for HeartWise configuration with sweep support.
+    
+    Handles loading base configuration from YAML files and updating it with
+    command line arguments for parameter sweeps. Supports arguments for:
+    - Training (lr, batch_size, layers, dimensions)
+    - Optimization (weight decay)
+    - Loss functions and metrics
+    - Experiment tracking (name, project, tags)
+    """
+    
     @staticmethod
     def parse_config() -> HeartWiseConfig:
-        """Parse command line arguments and load config file."""
+        """Parse command line arguments and return HeartWiseConfig.
+        
+        Loads base config from YAML file and updates it with any provided command line arguments.
+        """
         parser = argparse.ArgumentParser(description="Train ECG_tokenizer linear probing model")
 
         # base config
@@ -49,5 +63,8 @@ class HeartWiseParser:
         
         # Create sweep config from args
         config: HeartWiseConfig = HeartWiseConfig.update_config_with_args(config, args)
+        
+        # Set GPU info
+        HeartWiseConfig.set_gpu_info_in_place(config)
         
         return config

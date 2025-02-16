@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LRScheduler
 
 from utils.enums import RunMode
+from utils.ddp import DistributedUtils
 from utils.registry import RunnerRegistry
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
@@ -26,7 +27,6 @@ class LLMFinetuningRunner:
         scaler: GradScaler,
         model: GPT2WithEmbedding,
         loss_fn: torch.nn.Module,
-        device: torch.device
     ):
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
@@ -37,32 +37,48 @@ class LLMFinetuningRunner:
         self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
         self.loss_fn: torch.nn.Module = loss_fn
-        self.device: torch.device = device
         
     def train(self):
         for epoch in range(self.config.num_epochs):
+            # Sync the process group
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
+            
             train_loss: float = self._run_epoch(
                 RunMode.TRAIN,
                 epoch
             )
-            
-            if self.wandb_wrapper.is_initialized():
+                        
+            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
                     "train/loss": train_loss,
                     "train/step": epoch
                 })
             
+            # Sync the process group
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
             
             val_loss: float = self._run_epoch(
                 RunMode.VALIDATION,
                 epoch
             )
             
-            if self.wandb_wrapper.is_initialized():
+            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
                     "val/loss": val_loss,
                     "val/step": epoch
                 })
+                
+            # Sync the process group
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
             
     def _run_epoch(
         self,
@@ -84,12 +100,18 @@ class LLMFinetuningRunner:
         # Initialize the total loss
         total_loss: float = 0.0
         
+        # Sync the process group before starting the epoch
+        DistributedUtils.sync_process_group(
+            world_size=self.config.world_size,
+            device_ids=self.config.device
+        )
+        
         # Iterate over the dataloader
         for batch_idx, batch in enumerate(data_iter):
             # Preprocess the batch
-            embeddings: torch.Tensor = batch['embedding'].to(self.device)
-            input_ids: torch.Tensor = batch['input_ids'].to(self.device)
-            attention_mask: torch.Tensor = batch['attention_mask'].to(self.device)
+            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
+            input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
+            attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
@@ -100,16 +122,28 @@ class LLMFinetuningRunner:
                 labels=labels
             )
             
+            # Sync the process group
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
+            
             # Update the total loss
             total_loss += loss.item()
             mean_loss: float = total_loss / (batch_idx + 1)
             
             # Log the loss to wandb
-            if self.wandb_wrapper.is_initialized():
+            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
                     f"{mode}/loss": mean_loss,
                     f"{mode}/step": batch_idx + (epoch * len(dataloader))
                 })
+                
+            # Sync the process group
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
             
             # Update progress bar
             data_iter.set_postfix({

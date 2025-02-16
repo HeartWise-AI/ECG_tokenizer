@@ -1,8 +1,11 @@
 import torch
 import numpy as np
 import pandas as pd
+
+from utils.ddp import DistributedUtils
 from transformers import GPT2Tokenizer
 from torch.utils.data import Dataset, DataLoader
+from utils.config.heartwise_config import HeartWiseConfig
 
 
 class ECGClinicalReportDataset(Dataset):
@@ -69,25 +72,49 @@ class ECGClinicalReportDataset(Dataset):
             
             
 def get_clinical_report_dataloader(
-    embeddings_path: str, 
-    reports_path: str, 
-    tokenizer: GPT2Tokenizer, 
-    max_length: int = 512,
-    batch_size: int = 32,
+    config: HeartWiseConfig,
     shuffle: bool = True,
+    pin_memory: bool = True
+):
+    dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
+        embeddings_path=config.embeddings_path, 
+        reports_path=config.reports_path, 
+        tokenizer=config.tokenizer, 
+        max_length=config.max_length
+    )
+    return DataLoader(
+        dataset, 
+        batch_size=config.batch_size, 
+        shuffle=shuffle, 
+        num_workers=config.num_workers, 
+        pin_memory=pin_memory
+    )
+    
+def get_distributed_clinical_report_dataloader(
+    reports_path: str,
+    embeddings_path: str,
+    tokenizer: GPT2Tokenizer,
+    max_token_length: int = 512,
+    batch_size: int = 32,
     num_workers: int = 16,
+    num_replicas: int = 1,
+    rank: int = 0,
+    shuffle: bool = True,
     pin_memory: bool = True
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         embeddings_path=embeddings_path, 
         reports_path=reports_path, 
         tokenizer=tokenizer, 
-        max_length=max_length
+        max_length=max_token_length
     )
-    return DataLoader(
-        dataset, 
+    
+    return DistributedUtils.get_distributed_dataloader(
+        dataset=dataset,
         batch_size=batch_size, 
-        shuffle=shuffle, 
         num_workers=num_workers, 
-        pin_memory=pin_memory
+        pin_memory=pin_memory, 
+        num_replicas=num_replicas, 
+        rank=rank,
+        shuffle=shuffle
     )

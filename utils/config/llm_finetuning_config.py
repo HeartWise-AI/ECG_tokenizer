@@ -28,7 +28,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
     trainable_model_name: str
     embedding_reducer_name: str
     embedding_size: int
-    device: str
 
     # Data and checkpoint paths
     base_checkpoint_path: str

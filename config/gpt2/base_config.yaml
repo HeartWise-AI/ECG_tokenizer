@@ -22,7 +22,6 @@ huggingface_model_name: !!str "gpt2"
 trainable_model_name: !!str "GPT2_WithEmbedding"
 embedding_reducer_name: !!str "GPT2_EmbeddingReducer"
 embedding_size: !!int 768
-device: !!str "cuda"
 
 # data parameters
 train_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"

@@ -15,7 +15,7 @@ print_usage() {
 
 # Default values
 SELECTED_GPUS="0"
-CONFIG_PATH="config/base_config.yaml"
+CONFIG_PATH="config/gpt2/base_config.yaml"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do

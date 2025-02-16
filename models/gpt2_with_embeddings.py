@@ -3,18 +3,20 @@ import torch.nn as nn
 from transformers import GPT2LMHeadModel
 
 from utils.registry import ModelRegistry
-
+from models.embedding_reducer import EmbeddingReducer
 @ModelRegistry.register("GPT2_WithEmbedding")
 class GPT2WithEmbedding(nn.Module):
     def __init__(
         self, 
         gpt2_model_name: str = 'gpt2', 
         embedding_size: int = 768, 
-        reducer: nn.Module = None
+        reducer_name: str = None
     ):
         super(GPT2WithEmbedding, self).__init__()
         self.gpt2: GPT2LMHeadModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
-        self.embedding_reducer: nn.Module = reducer
+        self.embedding_reducer: EmbeddingReducer = ModelRegistry.get(reducer_name)(
+            output_size=embedding_size
+        )
         
         # If embedding size differs from GPT-2's hidden size, project it
         if embedding_size != self.gpt2.config.n_embd:
