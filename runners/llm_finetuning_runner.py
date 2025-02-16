@@ -13,7 +13,7 @@ from utils.wandb_wrapper import WandbWrapper
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 
 from tqdm import tqdm
-
+from typing import Any
 @RunnerRegistry.register("LLM_finetuning_runner")
 class LLMFinetuningRunner:
     def __init__(
@@ -191,7 +191,7 @@ class LLMFinetuningRunner:
             device_type='cuda',
             dtype=torch.bfloat16
         ):
-            outputs = self.model(
+            outputs: dict[str, torch.Tensor] = self.model(
                 ecg_embeddings=embeddings,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -223,15 +223,14 @@ class LLMFinetuningRunner:
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         with torch.no_grad():
-            outputs = self.model(
+            outputs: dict[str, torch.Tensor] = self.model(
                 ecg_embeddings=embeddings,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
             )
-            
             generated_ids: torch.Tensor = self.model.module.generate_report(embeddings)
-            
+           
             return {
                 "loss": outputs.loss,
                 "generated_ids": generated_ids
@@ -247,11 +246,11 @@ class LLMFinetuningRunner:
         is_best: bool = False
     ):
         """Save model checkpoint and optionally mark as best model."""
-        save_dir = self.config.checkpoint_dir
+        save_dir: str = self.config.checkpoint_dir
         os.makedirs(save_dir, exist_ok=True)
         
         # Prepare checkpoint - get the underlying model's state dict for DDP models
-        checkpoint = {
+        checkpoint: dict[str, Any] = {
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict() if hasattr(self.model, 'module') else self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -262,19 +261,19 @@ class LLMFinetuningRunner:
         }
         
         # Save regular checkpoint for current epoch
-        checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
+        checkpoint_path: str = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
         torch.save(checkpoint, checkpoint_path)
         
         # Delete the checkpoint from the previous epoch if it exists
         if epoch > 0:
-            prev_checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch - 1}.pt')
+            prev_checkpoint_path: str = os.path.join(save_dir, f'checkpoint_epoch_{epoch - 1}.pt')
             if os.path.exists(prev_checkpoint_path):
                 os.remove(prev_checkpoint_path)
                 print(f"Deleted old checkpoint: {prev_checkpoint_path}")
         
         # If this is the best model, save it separately
         if is_best:
-            best_model_path = os.path.join(save_dir, 'best_model.pt')
+            best_model_path: str = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_model_path)
             
         if self.wandb_wrapper.is_initialized():
