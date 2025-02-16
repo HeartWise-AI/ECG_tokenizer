@@ -229,7 +229,11 @@ class LLMFinetuningRunner:
                 attention_mask=attention_mask,
                 labels=labels
             )
-            generated_ids: torch.Tensor = self.model.module.generate_report(embeddings)
+            
+            if hasattr(self.model, 'module'):
+                generated_ids: torch.Tensor = self.model.module.generate_report(embeddings)
+            else:
+                generated_ids: torch.Tensor = self.model.generate_report(embeddings)
            
             return {
                 "loss": outputs.loss,
