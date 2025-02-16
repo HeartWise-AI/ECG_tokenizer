@@ -1,4 +1,3 @@
-
 import torch
 from torch.optim import AdamW
 from torch.amp import GradScaler
@@ -40,7 +39,7 @@ class LLMFinetuningRunner:
         
     def train(self):
         for epoch in range(self.config.num_epochs):
-            # Sync the process group
+            # Sync before starting each epoch
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
                 device_ids=self.config.device
@@ -68,6 +67,7 @@ class LLMFinetuningRunner:
                 epoch
             )
             
+            # Sync after validation epoch, before next epoch            
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
                     "val/loss": val_loss,
@@ -79,7 +79,7 @@ class LLMFinetuningRunner:
                 world_size=self.config.world_size,
                 device_ids=self.config.device
             )
-            
+                
     def _run_epoch(
         self,
         mode: RunMode,
@@ -100,7 +100,7 @@ class LLMFinetuningRunner:
         # Initialize the total loss
         total_loss: float = 0.0
         
-        # Sync the process group before starting the epoch
+        # Sync before starting batch iterations
         DistributedUtils.sync_process_group(
             world_size=self.config.world_size,
             device_ids=self.config.device
@@ -151,6 +151,12 @@ class LLMFinetuningRunner:
                 'mean_loss': f'{mean_loss:.4f}'
             })
         
+        # Sync at the end of epoch
+        DistributedUtils.sync_process_group(
+            world_size=self.config.world_size,
+            device_ids=self.config.device
+        )
+        
         # Return the total loss
         return total_loss
 
@@ -161,15 +167,34 @@ class LLMFinetuningRunner:
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> torch.Tensor:
-        outputs = self.model(
-            ecg_embeddings=embeddings,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels
+        # Clear gradients
+        self.optimizer.zero_grad()
+        
+        # Forward pass with autocast for mixed precision
+        with torch.amp.autocast(
+            device_type='cuda',
+            dtype=torch.bfloat16
+        ):
+            outputs = self.model(
+                ecg_embeddings=embeddings,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            loss: torch.Tensor = outputs.loss
+
+        # Backward pass with gradient scaling
+        self.scaler.scale(loss).backward()
+        
+        # Sync gradients across processes before optimizer step
+        DistributedUtils.sync_process_group(
+            world_size=self.config.world_size,
+            device_ids=self.config.device
         )
-        loss: torch.Tensor = outputs.loss
-        loss.backward()
-        self.optimizer.step()
+        
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        
         return loss
 
     def _val_step(
