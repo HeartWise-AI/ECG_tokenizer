@@ -136,7 +136,7 @@ class LLMFinetuningRunner:
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
-            loss: torch.Tensor = step_fn(
+            metrics: dict[str, torch.Tensor] = step_fn(
                 embeddings=embeddings, 
                 input_ids=input_ids, 
                 attention_mask=attention_mask, 
@@ -145,7 +145,7 @@ class LLMFinetuningRunner:
             
             # Gather and average loss across all GPUs
             gathered_loss: float = DistributedUtils.gather_loss(
-                [loss.item()], 
+                [metrics['loss'].item()], 
                 self.config.device
             )
             
@@ -211,7 +211,9 @@ class LLMFinetuningRunner:
         self.scaler.step(self.optimizer)
         self.scaler.update()
         
-        return loss
+        return {
+            "loss": loss
+        }
 
     def _val_step(
         self, 
@@ -228,7 +230,7 @@ class LLMFinetuningRunner:
                 labels=labels
             )
             
-            generated_ids: torch.Tensor = self.model.generate_report(embeddings)
+            generated_ids: torch.Tensor = self.model.module.generate_report(embeddings)
             
             return {
                 "loss": outputs.loss,
