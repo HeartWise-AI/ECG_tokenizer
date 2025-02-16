@@ -79,7 +79,8 @@ class LLMFinetuningProject:
             "scheduler": scheduler,
             "scaler": scaler,
             "model": model,
-            "loss_fn": loss_fn
+            "loss_fn": loss_fn,
+            "device": device
         }
     
     def run(self):
@@ -94,7 +95,8 @@ class LLMFinetuningProject:
             scheduler=training_objects["scheduler"],
             scaler=training_objects["scaler"],
             model=training_objects["model"],
-            loss_fn=training_objects["loss_fn"]
+            loss_fn=training_objects["loss_fn"],
+            device=training_objects["device"]
         )
 
         runner.train()

@@ -18,16 +18,26 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
 def main(config: HeartWiseConfig):
-    wandb_wrapper: WandbWrapper = WandbWrapper(config) if config.use_wandb else None
+    # Initialize wandb wrapper
+    wandb_wrapper: WandbWrapper = WandbWrapper(
+        config=config, # The config object
+        initialized=config.use_wandb # If wandb is not initialized, it will not be initialized
+    )
     
     project: Union[LLMFinetuningProject] = ProjectRegistry.get(
-        name=config.pipeline_project
+        name=config.pipeline_project # The project to run
     )(
-        config=config,
-        wandb_wrapper=wandb_wrapper
+        config=config, # The config object
+        wandb_wrapper=wandb_wrapper # The wandb wrapper
     )
+    
+    # Run the project
     project.run()
 
+
 if __name__ == "__main__":
+    # Parse the config
     config: HeartWiseConfig = HeartWiseParser.parse_config()
+    
+    # Run the main function
     main(config)

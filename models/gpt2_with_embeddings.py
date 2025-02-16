@@ -63,3 +63,26 @@ class GPT2WithEmbedding(nn.Module):
             labels=labels
         )
         return outputs
+    
+    
+    def generate_report(self, ecg_embeddings: torch.Tensor, max_length: int = 50, **generate_kwargs):
+        """
+        Generate a clinical report conditioned solely on the ECG embeddings.
+        This method uses GPT-2's generate() function with inputs_embeds.
+        """
+        # Reduce the ECG embeddings to a vector of GPT-2 hidden size.
+        reduced = self.embedding_reducer(ecg_embeddings)  # (batch, 768)
+        if self.proj:
+            reduced = self.proj(reduced)  # (batch, hidden_size)
+        
+        # Create an initial prefix embedding - you may choose to use the special token's embedding or the reduced vector.
+        # Here we simply use the reduced vector as the first token embedding.
+        prefix = reduced.unsqueeze(1)  # (batch, 1, hidden_size)
+        
+        # Now call GPT-2's generate using inputs_embeds instead of input_ids.
+        generated_ids = self.gpt2.generate(
+            inputs_embeds=prefix,
+            max_length=max_length, 
+            **generate_kwargs
+        )
+        return generated_ids    

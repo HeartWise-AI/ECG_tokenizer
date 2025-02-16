@@ -1,5 +1,6 @@
 # pipeline project
 pipeline_project: !!str "ECG_tokenizer_LLM_finetuning"
+runner_name: !!str "LLM_finetuning_runner"
 
 # training parameters
 lr: !!float 5e-5
