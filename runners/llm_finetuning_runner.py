@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.optim import AdamW
 from torch.amp import GradScaler
@@ -38,6 +39,8 @@ class LLMFinetuningRunner:
         self.loss_fn: torch.nn.Module = loss_fn
         
     def train(self):
+        best_val_loss: float = float('inf')
+        
         for epoch in range(self.config.num_epochs):
             # Sync before starting each epoch
             DistributedUtils.sync_process_group(
@@ -45,14 +48,14 @@ class LLMFinetuningRunner:
                 device_ids=self.config.device
             )
             
-            train_loss: float = self._run_epoch(
+            mean_train_loss: float = self._run_epoch(
                 RunMode.TRAIN,
                 epoch
             )
                         
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
-                    "train/loss": train_loss,
+                    "train/loss": mean_train_loss,
                     "train/step": epoch
                 })
             
@@ -62,16 +65,34 @@ class LLMFinetuningRunner:
                 device_ids=self.config.device
             )
             
-            val_loss: float = self._run_epoch(
+            mean_val_loss: float = self._run_epoch(
                 RunMode.VALIDATION,
                 epoch
             )
             
+            # Save best model (only on reference device)
+            if self.config.is_ref_device:
+                if mean_val_loss < best_val_loss:
+                    best_val_loss = mean_val_loss
+                    self._save_model(
+                        epoch=epoch,
+                        loss=mean_val_loss,
+                        is_best=True
+                    )
+                
+                # Also save regular checkpoint
+                self._save_model(
+                    epoch=epoch,
+                    loss=mean_val_loss,
+                    is_best=False
+                )
+            
             # Sync after validation epoch, before next epoch            
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
-                    "val/loss": val_loss,
-                    "val/step": epoch
+                    "val/loss": mean_val_loss,
+                    "val/step": epoch,
+                    "val/best_loss": best_val_loss
                 })
                 
             # Sync the process group
@@ -122,43 +143,38 @@ class LLMFinetuningRunner:
                 labels=labels
             )
             
-            # Sync the process group
-            DistributedUtils.sync_process_group(
-                world_size=self.config.world_size,
-                device_ids=self.config.device
+            # Gather and average loss across all GPUs
+            gathered_loss: float = DistributedUtils.gather_loss(
+                [loss.item()], 
+                self.config.device
             )
             
-            # Update the total loss
-            total_loss += loss.item()
+            # Update the total loss with gathered loss
+            total_loss += gathered_loss
             mean_loss: float = total_loss / (batch_idx + 1)
             
             # Log the loss to wandb
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
-                    f"{mode}/loss": mean_loss,
+                    f"{mode}/loss": gathered_loss,  # Log the gathered loss for current batch
+                    f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
                     f"{mode}/step": batch_idx + (epoch * len(dataloader))
                 })
-                
-            # Sync the process group
+            
+            # Update progress bar with gathered losses
+            data_iter.set_postfix({
+                'batch_loss': f'{gathered_loss:.4f}',
+                'mean_loss': f'{mean_loss:.4f}'
+            })
+            
+            # Sync after logging
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
                 device_ids=self.config.device
             )
-            
-            # Update progress bar
-            data_iter.set_postfix({
-                'loss': f'{loss.item():.4f}',
-                'mean_loss': f'{mean_loss:.4f}'
-            })
-        
-        # Sync at the end of epoch
-        DistributedUtils.sync_process_group(
-            world_size=self.config.world_size,
-            device_ids=self.config.device
-        )
-        
-        # Return the total loss
-        return total_loss
+                
+        # Return the mean loss for the epoch
+        return total_loss / len(dataloader)
 
     def _train_step(
         self, 
@@ -222,5 +238,39 @@ class LLMFinetuningRunner:
     def validate(self):
         raise NotImplementedError("Validation not implemented")
 
-    def save_model(self):
-        raise NotImplementedError("Saving model not implemented")
+    def _save_model(
+        self,
+        epoch: int,
+        loss: float,
+        is_best: bool = False
+    ):
+        """Save model checkpoint and optionally mark as best model."""
+        save_dir = self.config.checkpoint_dir
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Prepare checkpoint - get the underlying model's state dict for DDP models
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.module.state_dict() if hasattr(self.model, 'module') else self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+            'scaler_state_dict': self.scaler.state_dict(),
+            'loss': loss,
+            'config': self.config
+        }
+        
+        # Save regular checkpoint
+        checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
+        torch.save(checkpoint, checkpoint_path)
+        
+        # If this is the best model, save it separately
+        if is_best:
+            best_model_path = os.path.join(save_dir, 'best_model.pt')
+            torch.save(checkpoint, best_model_path)
+            
+        if self.wandb_wrapper.is_initialized():
+            self.wandb_wrapper.log({
+                "checkpoint/epoch": epoch,
+                "checkpoint/loss": loss,
+                "checkpoint/is_best": is_best
+            })
