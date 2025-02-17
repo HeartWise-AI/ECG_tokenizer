@@ -44,7 +44,9 @@ class LLMFinetuningProject:
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
-            rank=self.config.device
+            rank=self.config.device,
+            shuffle=True, 
+            pin_memory=True
         )
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
@@ -55,7 +57,9 @@ class LLMFinetuningProject:
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
-            rank=self.config.device
+            rank=self.config.device,
+            shuffle=False, 
+            pin_memory=True
         )
 
         # Get the model
