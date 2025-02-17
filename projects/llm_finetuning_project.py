@@ -65,7 +65,8 @@ class LLMFinetuningProject:
         model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
             embedding_size=self.config.embedding_size, 
-            reducer_name=self.config.embedding_reducer_name
+            reducer_name=self.config.embedding_reducer_name,
+            reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
 
         # Wrap the model in DDP

@@ -36,7 +36,7 @@ class HeartWiseParser:
         train_group = parser.add_argument_group('Training')
         train_group.add_argument('--lr', type=float)
         train_group.add_argument('--batch_size', type=int)
-
+        train_group.add_argument('--reducer_dropout', type=float)
         # Optimization parameters
         optim_group = parser.add_argument_group('Optimization')
         optim_group.add_argument('--optimizer', type=str)

@@ -4,17 +4,26 @@ from transformers import GPT2LMHeadModel
 
 from utils.registry import ModelRegistry
 from models.embedding_reducer import EmbeddingReducer
+from models.linear_reducer import LinearReducer
+from models.simple_embedding_reducer import SimpleEmbeddingReducer
+from typing import Union
+
 @ModelRegistry.register("GPT2_WithEmbedding")
 class GPT2WithEmbedding(nn.Module):
     def __init__(
         self, 
         gpt2_model_name: str = 'gpt2', 
         embedding_size: int = 768, 
-        reducer_name: str = None
+        reducer_name: str = None,
+        reducer_dropout: float = 0.2
     ):
         super(GPT2WithEmbedding, self).__init__()
         self.gpt2: GPT2LMHeadModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
-        self.embedding_reducer: EmbeddingReducer = ModelRegistry.get(reducer_name)(
+        self.embedding_reducer: Union[
+            EmbeddingReducer, 
+            LinearReducer, 
+            SimpleEmbeddingReducer
+        ] = ModelRegistry.get(reducer_name)(
             output_size=embedding_size
         )
         

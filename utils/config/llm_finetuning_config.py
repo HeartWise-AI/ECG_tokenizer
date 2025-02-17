@@ -22,7 +22,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     step_size: int
     gamma: float
     run_mode: str
-
+    reducer_dropout: float
     # Tokenizer parameters
     tokenizer_name: str
     max_token_length: int
