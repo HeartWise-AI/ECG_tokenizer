@@ -7,13 +7,22 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from utils.enums import RunMode
 from utils.ddp import DistributedUtils
-from utils.registry import RunnerRegistry
+from utils.registry import (
+    RunnerRegistry,
+    MetricRegistry
+)
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
 from models.gpt2_with_embeddings import GPT2WithEmbedding
+from utils.metrics.llm_metrics import (
+    RougeMetric,
+    BleuMetric,
+    MeteorMetric
+)
 
 from tqdm import tqdm
-from typing import Any
+from typing import Any, Union
+
 @RunnerRegistry.register("LLM_finetuning_runner")
 class LLMFinetuningRunner:
     def __init__(
@@ -26,7 +35,6 @@ class LLMFinetuningRunner:
         scheduler: LRScheduler,
         scaler: GradScaler,
         model: GPT2WithEmbedding,
-        loss_fn: torch.nn.Module,
     ):
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
@@ -36,28 +44,26 @@ class LLMFinetuningRunner:
         self.scheduler: LRScheduler = scheduler
         self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
-        self.loss_fn: torch.nn.Module = loss_fn
         
     def train(self):
         best_val_loss: float = float('inf')
         
-        for epoch in range(self.config.num_epochs):
+        for epoch in range(1, self.config.num_epochs + 1):
             # Sync before starting each epoch
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
                 device_ids=self.config.device
             )
             
-            mean_train_loss: float = self._run_epoch(
+            epoch_metrics: dict[str, float] = self._run_epoch(
                 RunMode.TRAIN,
                 epoch
             )
                         
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                self.wandb_wrapper.log({
-                    "train/loss": mean_train_loss,
-                    "train/step": epoch
-                })
+                self.wandb_wrapper.log(
+                    epoch_metrics
+                )
             
             # Sync the process group
             DistributedUtils.sync_process_group(
@@ -65,34 +71,33 @@ class LLMFinetuningRunner:
                 device_ids=self.config.device
             )
             
-            mean_val_loss: float = self._run_epoch(
+            epoch_metrics: dict[str, float] = self._run_epoch(
                 RunMode.VALIDATION,
                 epoch
             )
             
             # Save best model (only on reference device)
             if self.config.is_ref_device:
-                if mean_val_loss < best_val_loss:
-                    best_val_loss = mean_val_loss
+                if epoch_metrics[f'{RunMode.VALIDATION}/loss'] < best_val_loss:
+                    best_val_loss = epoch_metrics[f'{RunMode.VALIDATION}/loss']
                     self._save_model(
                         epoch=epoch,
-                        loss=mean_val_loss,
+                        loss=epoch_metrics[f'{RunMode.VALIDATION}/loss'],
                         is_best=True
                     )
                 
                 # Also save regular checkpoint
                 self._save_model(
                     epoch=epoch,
-                    loss=mean_val_loss,
+                    loss=epoch_metrics[f'{RunMode.VALIDATION}/loss'],
                     is_best=False
                 )
             
             # Sync after validation epoch, before next epoch            
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
-                    "val/loss": mean_val_loss,
-                    "val/step": epoch,
-                    "val/best_loss": best_val_loss
+                    **epoch_metrics,
+                    f"{RunMode.VALIDATION}/best_loss": best_val_loss
                 })
                 
             # Sync the process group
@@ -105,7 +110,7 @@ class LLMFinetuningRunner:
         self,
         mode: RunMode,
         epoch: int
-    )->float:
+    )->dict[str, float]:
         assert mode in [RunMode.TRAIN, RunMode.VALIDATION]
         
         # Set the model to training or evaluation mode
@@ -116,7 +121,7 @@ class LLMFinetuningRunner:
         step_fn: callable = self._train_step if mode == RunMode.TRAIN else self._val_step
         
         # Create a progress bar for the epoch
-        data_iter: tqdm = tqdm(dataloader, desc=f"{mode} epoch {epoch+1}/{self.config.num_epochs}", leave=True)
+        data_iter: tqdm = tqdm(dataloader, desc=f"{mode} epoch {epoch}/{self.config.num_epochs}", leave=True)
         
         # Initialize the total loss
         total_loss: float = 0.0
@@ -128,7 +133,9 @@ class LLMFinetuningRunner:
         )
         
         # Iterate over the dataloader
-        for batch_idx, batch in enumerate(data_iter):
+        epoch_metrics: dict[str, float] = {}
+        total_elements: int = 0
+        for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
@@ -136,45 +143,76 @@ class LLMFinetuningRunner:
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
-            metrics: dict[str, torch.Tensor] = step_fn(
+            outputs: dict[str, torch.Tensor] = step_fn(
                 embeddings=embeddings, 
                 input_ids=input_ids, 
                 attention_mask=attention_mask, 
                 labels=labels
             )
             
+            # initialize metrics
+            metrics: dict[str, float] = {}
+            metrics['loss'] = outputs['loss'].item()
+            
+            # Compute rouge score, bleu score, and meteor score
+            if mode == RunMode.VALIDATION:
+                for metric in self.config.metrics:
+                    registered_metrics: Union[
+                        RougeMetric, 
+                        BleuMetric, 
+                        MeteorMetric
+                    ] = MetricRegistry.get(metric)
+                    metrics.update(
+                        registered_metrics.compute_score(
+                            outputs['generated_ids'], 
+                            labels, 
+                            dataloader.dataset.tokenizer
+                        )
+                    )
+                    
+            
             # Gather and average loss across all GPUs
-            gathered_loss: float = DistributedUtils.gather_loss(
-                [metrics['loss'].item()], 
-                self.config.device
-            )
+            gathered_metrics: dict[str, float] = {}
+            for k in metrics:
+                gathered_metrics[f"{mode}/{k}"] = DistributedUtils.gather_loss(
+                    [metrics[k]], 
+                    self.config.device
+                )
+                            
+            # Update the epoch metrics
+            for k, v in gathered_metrics.items():
+                epoch_metrics[k] = epoch_metrics.get(k, 0.0) + float(v)
             
             # Update the total loss with gathered loss
-            total_loss += gathered_loss
+            total_loss += gathered_metrics[f'{mode}/loss']
             mean_loss: float = total_loss / (batch_idx + 1)
             
             # Log the loss to wandb
-            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                self.wandb_wrapper.log({
-                    f"{mode}/loss": gathered_loss,  # Log the gathered loss for current batch
-                    f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
-                    f"{mode}/step": batch_idx + (epoch * len(dataloader))
-                })
-            
-            # Update progress bar with gathered losses
-            data_iter.set_postfix({
-                'batch_loss': f'{gathered_loss:.4f}',
-                'mean_loss': f'{mean_loss:.4f}'
-            })
+            if mode == RunMode.TRAIN:
+                if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+                    self.wandb_wrapper.log({
+                        f"{mode}/loss": gathered_metrics[f'{mode}/loss'],  # Log the gathered loss for current batch
+                        f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
+                    })
             
             # Sync after logging
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
                 device_ids=self.config.device
             )
+            
+            # Update progress bar with gathered losses
+            data_iter.set_postfix({
+                f"{mode}/loss": f'{gathered_metrics[f"{mode}/loss"]:.4f}',
+                f"{mode}/mean_loss": f'{mean_loss:.4f}'
+            })
                 
-        # Return the mean loss for the epoch
-        return total_loss / len(dataloader)
+        # Normalize the epoch metrics
+        for k in epoch_metrics:
+            epoch_metrics[k] /= len(dataloader)
+        
+        # Return the epoch metrics
+        return epoch_metrics
 
     def _train_step(
         self, 
@@ -231,10 +269,16 @@ class LLMFinetuningRunner:
             )
             
             if hasattr(self.model, 'module'):
-                generated_ids: torch.Tensor = self.model.module.generate_report(embeddings)
+                generated_ids: torch.Tensor = self.model.module.generate_report(
+                    ecg_embeddings=embeddings, 
+                    max_token_length=self.config.max_token_length
+                )
             else:
-                generated_ids: torch.Tensor = self.model.generate_report(embeddings)
-           
+                generated_ids: torch.Tensor = self.model.generate_report(
+                    ecg_embeddings=embeddings, 
+                    max_token_length=self.config.max_token_length
+                )
+
             return {
                 "loss": outputs.loss,
                 "generated_ids": generated_ids
@@ -250,7 +294,7 @@ class LLMFinetuningRunner:
         is_best: bool = False
     ):
         """Save model checkpoint and optionally mark as best model."""
-        save_dir: str = self.config.checkpoint_dir
+        save_dir: str = self.config.output_dir
         os.makedirs(save_dir, exist_ok=True)
         
         # Prepare checkpoint - get the underlying model's state dict for DDP models
@@ -284,5 +328,4 @@ class LLMFinetuningRunner:
             self.wandb_wrapper.log({
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,
-                "checkpoint/is_best": is_best
             })

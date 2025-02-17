@@ -80,9 +80,6 @@ class LLMFinetuningProject:
 
         # Get the scaler
         scaler: GradScaler = torch.amp.GradScaler()
-
-        # Get the loss function
-        loss_fn: torch.nn.Module = torch.nn.CrossEntropyLoss()
                 
         return {
             "training_dataloader": training_dataloader,
@@ -91,7 +88,6 @@ class LLMFinetuningProject:
             "scheduler": scheduler,
             "scaler": scaler,
             "model": model,
-            "loss_fn": loss_fn,
         }
     
     def run(self):
@@ -105,8 +101,7 @@ class LLMFinetuningProject:
             optimizer=training_objects["optimizer"],
             scheduler=training_objects["scheduler"],
             scaler=training_objects["scaler"],
-            model=training_objects["model"],
-            loss_fn=training_objects["loss_fn"],
+            model=training_objects["model"]
         )
 
         runner.train()

@@ -29,8 +29,12 @@ class LLMFinetuningConfig(HeartWiseConfig):
     embedding_reducer_name: str
     embedding_size: int
 
+    # Metrics
+    metrics: list[str]
+
     # Data and checkpoint paths
     base_checkpoint_path: str
     train_dataset_path: str
     validation_dataset_path: str
     embeddings_path: str
+    output_dir: str

@@ -1,5 +1,5 @@
 import wandb
-
+from typing import Any
 from utils.config.heartwise_config import HeartWiseConfig
 
 class WandbWrapper:
@@ -41,7 +41,7 @@ class WandbWrapper:
     def is_initialized(self)->bool:
         return self.initialized
         
-    def log(self, **kwargs):
+    def log(self, kwargs: dict[str, Any]):
         wandb.log(kwargs)
 
     def finish(self):

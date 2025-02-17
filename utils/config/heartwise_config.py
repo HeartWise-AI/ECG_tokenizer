@@ -41,7 +41,6 @@ class HeartWiseConfig:
         data_parameters: Dict[str, Any] = {}
         for key, value in yaml_config.items():
             if key in registered_config.__dataclass_fields__:
-                print(key, value)
                 data_parameters[key] = value
         return registered_config(**data_parameters)    
 

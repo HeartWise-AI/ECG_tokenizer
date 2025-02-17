@@ -68,7 +68,12 @@ class GPT2WithEmbedding(nn.Module):
         return outputs
     
     
-    def generate_report(self, ecg_embeddings: torch.Tensor, max_length: int = 50, **generate_kwargs):
+    def generate_report(
+        self, 
+        ecg_embeddings: torch.Tensor, 
+        max_token_length: int = 512, 
+        **generate_kwargs
+    ):
         """
         Generate a clinical report conditioned solely on the ECG embeddings.
         This method uses GPT-2's generate() function with inputs_embeds.
@@ -94,7 +99,7 @@ class GPT2WithEmbedding(nn.Module):
         # Now call GPT-2's generate using inputs_embeds instead of input_ids.
         generated_ids = self.gpt2.generate(
             inputs_embeds=prefix,
-            max_length=max_length, 
+            max_length=max_token_length, 
             **gen_kwargs
         )
         return generated_ids    

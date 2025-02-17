@@ -70,7 +70,8 @@ def main(config: HeartWiseConfig):
 if __name__ == "__main__":
     # Parse the config
     config: HeartWiseConfig = HeartWiseParser.parse_config()
-    print(f"Config - device {config.device}: {config}")
+    if config.is_ref_device:
+        print(f"Config - device {config.device}: {config}")
         
     # Run the main function
     main(config)

@@ -59,3 +59,8 @@ class ConfigRegistry(BaseRegistry):
     """Registry for configs."""
     _registry: Dict[str, Type[Any]] = {}
     _registry_type: str = "config"
+
+class MetricRegistry(BaseRegistry):
+    """Registry for metrics."""
+    _registry: Dict[str, Type[Any]] = {}
+    _registry_type: str = "metric"

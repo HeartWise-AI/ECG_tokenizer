@@ -8,7 +8,6 @@ from utils.parser_typing import (
     parse_optional_str
 )
 
-from typing import Any
 
 class HeartWiseParser:
     """Parser for HeartWise configuration with sweep support.
