@@ -1,0 +1,44 @@
+# waveform parameters
+waveform_length: !!int 2500
+num_leads: !!int 12
+
+# training parameters
+learning_rate: !!float 3e-4
+train_iterations: !!int 20000
+seed: !!int 1234
+num_workers: !!int 4
+experiment_name: !!str "experiment_deeper_1024_rvq_QINCo_debug"
+num_epochs: !!int 2
+
+# VQVAE parameters
+num_quantizers: !!int 8
+num_codes: !!int 1024
+alpha: !!float 1.0 # used for loss function
+
+# classifier parameters
+classifier_experiment_name: !!str "sweep"
+num_classes: !!int 77
+num_layers: !!int 5
+hidden_dim: !!int 1024
+embedding_dim: !!int 160
+prev_embedding_dim: !!int 128
+lr: !!float 1e-6
+weight_decay: !!float 1e-4
+batch_size: !!int 16
+criterion: !!str "focal_loss"
+base_checkpoint_path: !!str "checkpoints"
+
+# data parameters
+csv_file: !!str "/home/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
+train_parquet_MIMIC_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
+train_parquet_MHI_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/mhi/train_trial_v1.1.parquet"
+test_parquet_MIMIC_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_test.parquet"
+test_parquet_MHI_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/mhi/test_trial_v1.1.parquet"
+code_15_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/code15/code_15_dataset.parquet"
+
+# evaluation parameters
+model_path: !!str "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
+embedding_dir: !!str "/home/rbanerjee/embeddings/experiment_deeper_1024_rvq_QINCo/"
+name: !!str "sweep"
+project: !!str "ECG_tokenizer_linear_probing"
+entity: !!str "mhi_ai"
