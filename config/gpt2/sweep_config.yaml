@@ -1,6 +1,6 @@
 command:
   - torchrun
-  - "--nproc_per_node=2"
+  - "--nproc_per_node=4"
   - "--master_port=29500"
   - "scripts/main.py"
   - "--base_config"
@@ -21,6 +21,11 @@ parameters:
     distribution: log_uniform_values
     min: 5e-5
     max: 1e-3
+
+  reducer_dropout:
+    distribution: uniform
+    min: 0.0
+    max: 0.5
 
   batch_size:
     values: [8, 16, 32]
