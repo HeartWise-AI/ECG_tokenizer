@@ -26,6 +26,7 @@ huggingface_model_name: !!str "gpt2"
 trainable_model_name: !!str "GPT2_WithEmbedding"
 embedding_reducer_name: !!str "GPT2_EmbeddingReducer"
 embedding_size: !!int 768
+reducer_dropout: !!float 0.2
 
 # metrics
 metrics:
