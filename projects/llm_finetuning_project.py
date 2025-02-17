@@ -1,7 +1,7 @@
 
 import torch
-from torch.optim import AdamW
 from torch.amp import GradScaler
+from torch.optim import AdamW, RAdam
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
@@ -14,7 +14,6 @@ from utils.registry import (
 from utils.ddp import DistributedUtils
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
-from models.embedding_reducer import EmbeddingReducer
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from runners.llm_finetuning_runner import LLMFinetuningRunner
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
@@ -77,10 +76,16 @@ class LLMFinetuningProject:
         )
 
         # Get the optimizer
-        optimizer: AdamW = torch.optim.AdamW(model.parameters(), lr=self.config.lr)
+        if self.config.optimizer == "AdamW":
+            optimizer: AdamW = torch.optim.AdamW(model.parameters(), lr=self.config.lr)
+        elif self.config.optimizer == "RAdam":
+            optimizer: RAdam = torch.optim.RAdam(model.parameters(), lr=self.config.lr)
 
         # Get the scheduler
-        scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.config.num_epochs)
+        if self.config.scheduler_type == "step":
+            scheduler: LRScheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=self.config.step_size, gamma=self.config.gamma)
+        elif self.config.scheduler_type == "cosine":
+            scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.config.num_epochs)
 
         # Get the scaler
         scaler: GradScaler = torch.amp.GradScaler()

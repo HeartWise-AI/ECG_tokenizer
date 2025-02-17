@@ -18,6 +18,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     criterion: str
     optimizer: str
     runner_name: str
+    scheduler_type: str
+    step_size: int
+    gamma: float
 
     # Tokenizer parameters
     tokenizer_name: str
