@@ -1,4 +1,4 @@
-
+import os
 import torch
 from torch.amp import GradScaler
 from torch.optim import AdamW, RAdam
@@ -91,26 +91,81 @@ class LLMFinetuningProject:
         scaler: GradScaler = torch.amp.GradScaler()
                 
         return {
-            "training_dataloader": training_dataloader,
-            "validation_dataloader": validation_dataloader,
+            "train_dataloader": training_dataloader,
+            "val_dataloader": validation_dataloader,
             "optimizer": optimizer,
             "scheduler": scheduler,
             "scaler": scaler,
             "model": model,
         }
     
-    def run(self):
-        training_objects: dict[str, Any] = self._setup_training_objects()
+    def _setup_inference_objects(self)->dict[str, Any]:
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        tokenizer.pad_token = tokenizer.eos_token
+        
+        validation_dataloader = get_distributed_clinical_report_dataloader(
+            reports_path=self.config.validation_dataset_path,
+            embeddings_path=self.config.embeddings_path,
+            tokenizer=tokenizer,
+            max_token_length=self.config.max_token_length,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=False, 
+            pin_memory=True
+        )        
+        
+        # Get the model
+        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
+            gpt2_model_name=self.config.huggingface_model_name, 
+            embedding_size=self.config.embedding_size, 
+            reducer_name=self.config.embedding_reducer_name
+        ).to(self.config.device)
 
-        runner: LLMFinetuningRunner = RunnerRegistry.get(self.config.runner_name)(
-            config=self.config,
-            wandb_wrapper=self.wandb_wrapper,
-            train_dataloader=training_objects["training_dataloader"],
-            val_dataloader=training_objects["validation_dataloader"],
-            optimizer=training_objects["optimizer"],
-            scheduler=training_objects["scheduler"],
-            scaler=training_objects["scaler"],
-            model=training_objects["model"]
+        # Wrap the model in DDP
+        model = DistributedUtils.DDP(
+            model,
+            device_ids=[self.config.device],
+            find_unused_parameters=True
         )
+        
+        # Load the checkpoint
+        checkpoint = self._load_checkpoint(self.config.checkpoint_dir)
+        
+        # Load the model state dict
+        model.module.load_state_dict(checkpoint["model_state_dict"])
+        
+        return {
+            "model": model,
+            "val_dataloader": validation_dataloader
+        }
+    
+    def run(self):
+        runner_args = {
+            "config": self.config,
+            "wandb_wrapper": self.wandb_wrapper
+        }
+        if self.config.run_mode == "train":
+            training_objects: dict[str, Any] = self._setup_training_objects()
+            runner_args.update(training_objects)
+        elif self.config.run_mode == "inference":
+            inference_objects: dict[str, Any] = self._setup_inference_objects()
+            runner_args.update(inference_objects)
 
-        runner.train()
+        runner: LLMFinetuningRunner = RunnerRegistry.get(self.config.runner_name)(**runner_args)
+        runner.execute(mode=self.config.run_mode)
+        
+        
+    def _load_checkpoint(
+        self, 
+        checkpoint_path: str
+    )->dict[str, Any]:
+        if not os.path.exists(checkpoint_path):
+            raise ValueError(f"Checkpoint file does not exist: {checkpoint_path}")
+        
+        print(
+            f"[LLMFinetuningProject] Loading checkpoint: {checkpoint_path}"
+        )
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        return checkpoint

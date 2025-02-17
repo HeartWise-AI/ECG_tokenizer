@@ -1,7 +1,9 @@
 import os
 import torch
+import pandas as pd
 from torch.optim import AdamW
 from torch.amp import GradScaler
+from transformers import GPT2Tokenizer
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LRScheduler
 
@@ -27,14 +29,14 @@ from typing import Any, Union
 class LLMFinetuningRunner:
     def __init__(
         self, 
-        config: LLMFinetuningConfig, 
-        wandb_wrapper: WandbWrapper,
-        train_dataloader: DataLoader,
-        val_dataloader: DataLoader,
-        optimizer: AdamW,
-        scheduler: LRScheduler,
-        scaler: GradScaler,
         model: GPT2WithEmbedding,
+        config: LLMFinetuningConfig, 
+        val_dataloader: DataLoader,
+        wandb_wrapper: WandbWrapper | None = None,
+        train_dataloader: DataLoader | None = None,
+        optimizer: AdamW | None = None,
+        scheduler: LRScheduler | None = None,
+        scaler: GradScaler | None = None,
     ):
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
@@ -44,6 +46,19 @@ class LLMFinetuningRunner:
         self.scheduler: LRScheduler = scheduler
         self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
+    
+    def execute(
+        self, 
+        mode: RunMode
+    ):
+        if mode == RunMode.TRAIN:
+            self.train()
+        elif mode == RunMode.INFERENCE:
+            self.inference()
+        elif mode == RunMode.VALIDATE:
+            self.validate()
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
         
     def train(self):
         best_val_loss: float = float('inf')
@@ -72,24 +87,24 @@ class LLMFinetuningRunner:
             )
             
             epoch_metrics: dict[str, float] = self._run_epoch(
-                RunMode.VALIDATION,
+                RunMode.VALIDATE,
                 epoch
             )
             
             # Save best model (only on reference device)
             if self.config.is_ref_device:
-                if epoch_metrics[f'{RunMode.VALIDATION}/loss'] < best_val_loss:
-                    best_val_loss = epoch_metrics[f'{RunMode.VALIDATION}/loss']
+                if epoch_metrics[f'{RunMode.VALIDATE}/loss'] < best_val_loss:
+                    best_val_loss = epoch_metrics[f'{RunMode.VALIDATE}/loss']
                     self._save_model(
                         epoch=epoch,
-                        loss=epoch_metrics[f'{RunMode.VALIDATION}/loss'],
+                        loss=epoch_metrics[f'{RunMode.VALIDATE}/loss'],
                         is_best=True
                     )
                 
                 # Also save regular checkpoint
                 self._save_model(
                     epoch=epoch,
-                    loss=epoch_metrics[f'{RunMode.VALIDATION}/loss'],
+                    loss=epoch_metrics[f'{RunMode.VALIDATE}/loss'],
                     is_best=False
                 )
             
@@ -97,7 +112,7 @@ class LLMFinetuningRunner:
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log({
                     **epoch_metrics,
-                    f"{RunMode.VALIDATION}/best_loss": best_val_loss
+                    f"{RunMode.VALIDATE}/best_loss": best_val_loss
                 })
                 
             # Sync the process group
@@ -111,7 +126,7 @@ class LLMFinetuningRunner:
         mode: RunMode,
         epoch: int
     )->dict[str, float]:
-        assert mode in [RunMode.TRAIN, RunMode.VALIDATION]
+        assert mode in [RunMode.TRAIN, RunMode.VALIDATE]
         
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
@@ -155,7 +170,7 @@ class LLMFinetuningRunner:
             metrics['loss'] = outputs['loss'].item()
             
             # Compute rouge score, bleu score, and meteor score
-            if mode == RunMode.VALIDATION:
+            if mode == RunMode.VALIDATE:
                 for metric in self.config.metrics:
                     registered_metrics: Union[
                         RougeMetric, 
@@ -284,8 +299,51 @@ class LLMFinetuningRunner:
                 "generated_ids": generated_ids
             }
 
+    def _inference_step(
+        self,
+        embeddings: torch.Tensor,
+    ) -> torch.Tensor:
+        with torch.no_grad():
+            if hasattr(self.model, 'module'):
+                generated_ids: torch.Tensor = self.model.module.generate_report(
+                    ecg_embeddings=embeddings, 
+                    max_token_length=self.config.max_token_length
+                )
+            else:
+                generated_ids: torch.Tensor = self.model.generate_report(
+                    ecg_embeddings=embeddings, 
+                    max_token_length=self.config.max_token_length
+                )   
+        return generated_ids     
+
+    def inference(self):
+        self.model.eval()
+        
+        predicted_reports: list[str] = []
+        reference_reports: list[str] = []
+        tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer
+        for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader)):
+            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
+            labels: torch.Tensor = batch['input_ids'].to(self.config.device)
+            generated_ids: torch.Tensor = self._inference_step(
+                embeddings=embeddings,
+            )
+                        
+            for gen, lab in zip(generated_ids, labels):
+                # Decode both predictions and references as strings.
+                decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
+                decoded_reference  = tokenizer.decode(lab.tolist(), skip_special_tokens=True)
+                predicted_reports.append(decoded_prediction)
+                reference_reports.append(decoded_reference)
+                
+        df = pd.DataFrame({
+            'predicted_report': predicted_reports,
+            'reference_report': reference_reports
+        })
+        df.to_csv(os.path.join(self.config.checkpoint_dir.replace('.pt', '_inference.csv')), index=False) 
+
     def validate(self):
-        raise NotImplementedError("Validation not implemented")
+        raise NotImplementedError("Validate not implemented")
 
     def _save_model(
         self,

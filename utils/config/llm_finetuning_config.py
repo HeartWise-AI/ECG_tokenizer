@@ -21,6 +21,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     scheduler_type: str
     step_size: int
     gamma: float
+    run_mode: str
 
     # Tokenizer parameters
     tokenizer_name: str
@@ -41,3 +42,4 @@ class LLMFinetuningConfig(HeartWiseConfig):
     validation_dataset_path: str
     embeddings_path: str
     output_dir: str
+    checkpoint_dir: str
