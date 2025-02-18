@@ -72,8 +72,7 @@ class LLMFinetuningProject:
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
-            device_ids=[self.config.device],
-            find_unused_parameters=True
+            device_ids=[self.config.device]
         )
 
         # Get the optimizer
@@ -127,8 +126,7 @@ class LLMFinetuningProject:
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
-            device_ids=[self.config.device],
-            find_unused_parameters=True
+            device_ids=[self.config.device]
         )
         
         # Load the checkpoint
