@@ -24,17 +24,16 @@ class GPT2WithEmbedding(nn.Module):
             LinearReducer, 
             SimpleEmbeddingReducer
         ] = ModelRegistry.get(reducer_name)(
-            output_size=embedding_size
+            output_size=embedding_size, 
+            dropout=reducer_dropout
         )
         
-        # If embedding size differs from GPT-2's hidden size, project it - 
-        # this is done to ensure that the embedding size is the same as the hidden size of the GPT-2 model
+        # Check if embedding size matches GPT-2's hidden size.
         if embedding_size != self.gpt2.config.n_embd:
-            self.proj: nn.Linear = nn.Linear(embedding_size, self.gpt2.config.n_embd)
-        else:
-            self.proj: nn.Linear = None
+            raise ValueError(f"Embedding size {embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
         
-        # Optional: Add a special token to represent ECG embedding
+        # Optional: Maintain the special token ID (if needed elsewhere).
+        # We still resize token embeddings for compatibility during generation.
         self.gpt2.resize_token_embeddings(len(self.gpt2.get_input_embeddings().weight) + 1)
         self.ecg_token_id = len(self.gpt2.get_input_embeddings().weight) - 1  # New token ID
 
@@ -46,37 +45,47 @@ class GPT2WithEmbedding(nn.Module):
         labels: torch.Tensor = None
     ):
         # Reduce ECG embeddings
-        reduced: torch.Tensor = self.embedding_reducer(ecg_embeddings)  # (batch, 768)
-        if self.proj:
-            reduced: torch.Tensor = self.proj(reduced)  # (batch, hidden_size)
+        reduced: torch.Tensor = self.embedding_reducer(ecg_embeddings)  # (batch, embedding_size)
         
-        # Expand the reduced embedding to match the sequence length
-        batch_size: int = reduced.size(0)
-        seq_length: int = input_ids.size(1)
-        condition: torch.Tensor = reduced.unsqueeze(1).repeat(1, 1, 1)  # (batch, 1, hidden_size)
+        # Prepend the special ECG token ID to input_ids
+        batch_size: int = input_ids.size(0)
+        ecg_token = torch.full(
+            (batch_size, 1),
+            self.ecg_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device
+        )  # (batch, 1)
+        input_ids = torch.cat([ecg_token, input_ids], dim=1)  # (batch, seq_length + 1)
         
-        # Prepend a special ECG token to the input_ids
-        ecg_token: torch.Tensor = torch.tensor([self.ecg_token_id] * batch_size).unsqueeze(1).to(input_ids.device)  # (batch, 1)
-        input_ids: torch.Tensor = torch.cat([ecg_token, input_ids], dim=1)  # (batch, seq_length + 1)
-        
+        # Adjust attention_mask if provided
         if attention_mask is not None:
-            ecg_mask: torch.Tensor = torch.ones((batch_size, 1)).to(attention_mask.device)
-            attention_mask: torch.Tensor = torch.cat([ecg_mask, attention_mask], dim=1)  # (batch, seq_length + 1)
+            ecg_mask = torch.ones((batch_size, 1), device=attention_mask.device, dtype=attention_mask.dtype)
+            attention_mask = torch.cat([ecg_mask, attention_mask], dim=1)  # (batch, seq_length + 1)
+        else:
+            attention_mask = torch.ones_like(input_ids, device=input_ids.device)
         
+        # Adjust labels if provided
         if labels is not None:
-            # Add -100 as label for the ECG token position (will be ignored in loss calculation)
-            label_ignore: torch.Tensor = torch.full((batch_size, 1), -100, dtype=labels.dtype).to(labels.device)
-            labels: torch.Tensor = torch.cat([label_ignore, labels], dim=1)  # (batch, seq_length + 1)
+            label_ignore = torch.full(
+                (batch_size, 1),
+                -100,
+                dtype=labels.dtype,
+                device=labels.device
+            )
+            labels = torch.cat([label_ignore, labels], dim=1)  # (batch, seq_length + 1)
         
-        # Forward through GPT-2
-        outputs: torch.Tensor = self.gpt2(
-            input_ids=input_ids,
+        # Get input embeddings and replace the first token's embedding with reduced ECG embedding
+        input_embedding = self.gpt2.get_input_embeddings()(input_ids)  # (batch, seq_length + 1, hidden_size)
+        input_embedding[:, 0, :] = reduced  # Replace ECG token embedding
+        
+        # Forward pass through GPT-2
+        outputs = self.gpt2(
+            inputs_embeds=input_embedding,
             attention_mask=attention_mask,
             labels=labels
         )
         return outputs
-    
-    
+
     def generate_report(
         self, 
         ecg_embeddings: torch.Tensor, 
@@ -87,28 +96,34 @@ class GPT2WithEmbedding(nn.Module):
         Generate a clinical report conditioned solely on the ECG embeddings.
         This method uses GPT-2's generate() function with inputs_embeds.
         """
-        # Reduce the ECG embeddings to a vector of GPT-2 hidden size.
-        reduced = self.embedding_reducer(ecg_embeddings)  # (batch, 768)
-        if self.proj:
-            reduced = self.proj(reduced)  # (batch, hidden_size)
+        # Reduce and project ECG embeddings
+        reduced = self.embedding_reducer(ecg_embeddings)  # (batch, embedding_size)
         
-        # Create an initial prefix embedding - here we simply use the reduced vector as the first token embedding.
-        prefix = reduced.unsqueeze(1)  # (batch, 1, hidden_size)
+        # Prepare input_ids with the ECG token
+        batch_size = reduced.size(0)
+        ecg_token = torch.full(
+            (batch_size, 1),
+            self.ecg_token_id,
+            dtype=torch.long,
+            device=reduced.device
+        )  # (batch, 1)
         
-        # Ensure that attention_mask and pad_token_id are provided for reliable generation.
-        # This is done to avoid warnings when calling .generate() function.
-        gen_kwargs = generate_kwargs.copy()
-        if "attention_mask" not in gen_kwargs:
-            # Create an attention mask of ones for the prefix tokens.
-            gen_kwargs["attention_mask"] = prefix.new_ones(prefix.shape[:-1])
-        if "pad_token_id" not in gen_kwargs:
-            # Explicitly set pad_token_id to eos_token_id to avoid warnings.
-            gen_kwargs["pad_token_id"] = self.gpt2.config.eos_token_id
+        # Create attention mask
+        attention_mask = torch.ones((batch_size, 1), device=reduced.device)  # (batch, 1)
         
-        # Now call GPT-2's generate using inputs_embeds instead of input_ids.
+        # Get input embeddings
+        input_embedding = self.gpt2.get_input_embeddings()(ecg_token)  # (batch, 1, hidden_size)
+        input_embedding = reduced.unsqueeze(1)  # Replace with reduced embeddings
+        
+        # Set default generation parameters
+        generate_kwargs = generate_kwargs.copy()
+        generate_kwargs.setdefault("attention_mask", attention_mask)
+        generate_kwargs.setdefault("pad_token_id", self.gpt2.config.eos_token_id)
+        
+        # Generate report using the embedding as the initial input
         generated_ids = self.gpt2.generate(
-            inputs_embeds=prefix,
+            inputs_embeds=input_embedding,
             max_length=max_token_length, 
-            **gen_kwargs
+            **generate_kwargs
         )
-        return generated_ids    
+        return generated_ids
