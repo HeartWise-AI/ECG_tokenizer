@@ -11,7 +11,7 @@ weight_decay: !!float 1e-4
 batch_size: !!int 32
 criterion: !!str "focal_loss"
 base_checkpoint_path: !!str "checkpoints"
-optimizer: !!str "adamw"
+optimizer: !!str "AdamW"
 scheduler_type: !!str "step"
 step_size: !!int 1
 gamma: !!float 0.1
