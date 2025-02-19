@@ -19,11 +19,18 @@ from models.gpt2_with_embeddings import GPT2WithEmbedding
 from utils.metrics.llm_metrics import (
     RougeMetric,
     BleuMetric,
-    MeteorMetric
+    MeteorMetric,
+    update_best_metric,
+    update_worst_metric
 )
 
 from tqdm import tqdm
-from typing import Any, Union
+from collections import defaultdict
+from typing import (
+    Any, 
+    Union, 
+    DefaultDict
+)
 
 @RunnerRegistry.register("LLM_finetuning_runner")
 class LLMFinetuningRunner:
@@ -149,7 +156,21 @@ class LLMFinetuningRunner:
         
         # Iterate over the dataloader
         epoch_metrics: dict[str, float] = {}
-        total_elements: int = 0
+        worst_batch_metrics: DefaultDict[
+            str, 
+            Union[
+                list[str], 
+                list[float]
+            ]
+        ] = defaultdict(list)
+        best_batch_metrics: DefaultDict[
+            str, 
+            Union[
+                list[str], 
+                list[float]
+                ]
+            ] = defaultdict(list)
+        k_llm_metrics: int = 1
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
@@ -177,14 +198,32 @@ class LLMFinetuningRunner:
                         BleuMetric, 
                         MeteorMetric
                     ] = MetricRegistry.get(metric)
-                    metrics.update(
-                        registered_metrics.compute_score(
-                            outputs['generated_ids'], 
-                            labels, 
-                            dataloader.dataset.tokenizer
-                        )
+                    LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
+                        outputs['generated_ids'], 
+                        labels, 
+                        dataloader.dataset.tokenizer
                     )
                     
+                    for metric_name in LLM_metrics:
+                        if metric_name != 'predictions' and metric_name != 'references':
+                            # Update the best metric
+                            update_best_metric(
+                                metric_name=metric_name,
+                                llm_metrics=LLM_metrics,
+                                best_metrics=best_batch_metrics,
+                                K=k_llm_metrics
+                            )
+                            
+                            # Update the worst metric
+                            update_worst_metric(
+                                metric_name=metric_name,
+                                llm_metrics=LLM_metrics,
+                                worst_metrics=worst_batch_metrics,
+                                K=k_llm_metrics
+                            )      
+
+                            # Append the LLM metrics to the metrics dictionary
+                            metrics[metric_name] = LLM_metrics[metric_name]      
             
             # Gather and average loss across all GPUs
             gathered_metrics: dict[str, float] = {}
@@ -221,6 +260,37 @@ class LLMFinetuningRunner:
                 f"{mode}/loss": f'{gathered_metrics[f"{mode}/loss"]:.4f}',
                 f"{mode}/mean_loss": f'{mean_loss:.4f}'
             })
+        
+        # === New Block: Log best and worst metrics as HTML to wandb ===
+        if mode == RunMode.VALIDATE and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            # helper function to create an HTML table given the metrics dictionary
+            def create_html_table(metrics_dict, table_title):
+                html = f"<h3>{table_title}</h3>"
+                html += "<table border='1' cellspacing='0' cellpadding='5'>"
+                html += "<tr><th>Metric</th><th>Score</th><th>Prediction(s)</th><th>Reference(s)</th></tr>"
+                for metric, records in metrics_dict.items():
+                    if records:
+                        # pick the first record (since K=1)
+                        record = records[0]
+                        # Assuming record is a dict with keys: 'score', 'predictions', and 'references'
+                        score = record['score']
+                        # if they are lists, join them with a line break
+                        predictions = "<br>".join([f"{i + 1}: {p}" for i, p in enumerate(record['predictions'])])
+                        references = "<br>".join([f"{i + 1}: {r}" for i, r in enumerate(record['references'])])
+                    else:
+                        score, predictions, references = "", "", ""
+                    html += f"<tr><td>{metric}</td><td>{score}</td><td>{predictions}</td><td>{references}</td></tr>"
+                html += "</table>"
+                return html
+
+            import wandb
+            best_html = create_html_table(best_batch_metrics, "Best Metrics")
+            worst_html = create_html_table(worst_batch_metrics, "Worst Metrics")
+            self.wandb_wrapper.log({
+                "val/best_metrics_html": wandb.Html(best_html),
+                "val/worst_metrics_html": wandb.Html(worst_html)
+            })
+        # === End new block ===
                 
         # Normalize the epoch metrics
         for k in epoch_metrics:
