@@ -18,7 +18,8 @@ print_usage() {
     echo ""
     echo "Arguments:"
     echo "  --selected_gpus    Comma-separated list of GPU IDs to use (default: 1,3)"
-    echo "  --sweep_config     Path to the sweep configuration file (default: config/sweep_config.yaml)"
+    echo "  --base_config     Path to the base configuration file (default: config/gpt2/base_config.yaml)"
+    echo "  --sweep_config     Path to the sweep configuration file (default: config/gpt2/sweep_config.yaml)"
     echo "  --count           Number of runs to execute (default: 5)"
     echo "  --help, -h         Display this help message"
     exit 1
@@ -26,7 +27,8 @@ print_usage() {
 
 # Default values
 SELECTED_GPUS="1,3" # Comma-separated list of GPU IDs to use
-SWEEP_CONFIG_PATH="config/sweep_config_3.yaml"
+BASE_CONFIG_PATH="config/gpt2/base_config.yaml"
+SWEEP_CONFIG_PATH="config/gpt2/sweep_config.yaml"
 COUNT="5" # Number of runs to execute
 
 # Parse command line arguments
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --selected_gpus)
             SELECTED_GPUS="$2"
+            shift 2
+            ;;
+        --base_config)
+            BASE_CONFIG_PATH="$2"
             shift 2
             ;;
         --sweep_config)
@@ -55,7 +61,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check if required arguments are provided
-if [ -z "${SELECTED_GPUS}" ] || [ -z "${SWEEP_CONFIG_PATH}" ]; then
+if [ -z "${SELECTED_GPUS}" ] || [ -z "${SWEEP_CONFIG_PATH}" ] || [ -z "${BASE_CONFIG_PATH}" ]; then
     echo "Error: Missing required arguments"
     print_usage
 fi
@@ -66,6 +72,12 @@ if [ ! -f "${SWEEP_CONFIG_PATH}" ]; then
     exit 1
 fi
 
+# Check if base config exists
+if [ ! -f "${BASE_CONFIG_PATH}" ]; then
+    echo "Error: Base config file not found at ${BASE_CONFIG_PATH}"
+    exit 1
+fi
+
 # Check if yq is installed
 if ! command -v yq &> /dev/null
 then
@@ -73,6 +85,37 @@ then
     echo "Installation instructions: https://github.com/mikefarah/yq/#install"
     exit 1
 fi
+
+# Setup base config
+# Check if run_mode is set to train
+echo -e "${BLUE}Loading base configuration from ${BASE_CONFIG_PATH}...${NC}"
+MODE=$(yq e '.run_mode' "${BASE_CONFIG_PATH}")
+USE_WANDB=$(yq e '.use_wandb' "${BASE_CONFIG_PATH}")
+if [ "${MODE}" != "train" ]; then
+    echo -e "${YELLOW}Warning: Base config must be set to TRAIN mode${NC} (current run_mode: ${MODE})"
+    yq eval -i '.run_mode = "train"' "${BASE_CONFIG_PATH}"
+    MODE=$(yq e '.run_mode' "${BASE_CONFIG_PATH}")
+    if [ "${MODE}" != "train" ]; then
+        echo -e "${RED}Error: Failed to set run_mode to train${NC}"
+        exit 1
+    else
+        echo -e "${GREEN}Successfully set run_mode to train${NC}"
+    fi
+fi
+
+# Check if use_wandb is set to true
+if [ "${USE_WANDB}" != "true" ]; then
+    echo -e "${YELLOW}Warning: Base config must be set to use W&B${NC} (current use_wandb: ${USE_WANDB})"
+    yq eval -i '.use_wandb = true' "${BASE_CONFIG_PATH}"
+    USE_WANDB=$(yq e '.use_wandb' "${BASE_CONFIG_PATH}")
+    if [ "${USE_WANDB}" != "true" ]; then
+        echo -e "${RED}Error: Failed to set use_wandb to true${NC}"
+        exit 1
+    else
+        echo -e "${GREEN}Successfully set use_wandb to true${NC}"
+    fi
+fi
+
 
 # Backup the original sweep config
 cp "${SWEEP_CONFIG_PATH}" "${SWEEP_CONFIG_PATH}.bak"
