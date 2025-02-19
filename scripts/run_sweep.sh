@@ -134,6 +134,15 @@ else
     exit 1
 fi
 
+# Update the sweep config to use the base_config path given via script args.
+echo -e "${BLUE}Updating base_config path in ${SWEEP_CONFIG_PATH}...${NC}"
+if sed -i '/--base_config/{n;s|.*|  - "'"$BASE_CONFIG_PATH"'"|;}' "${SWEEP_CONFIG_PATH}"; then
+    echo -e "${GREEN}Updated base_config path to $BASE_CONFIG_PATH in ${SWEEP_CONFIG_PATH}${NC}"
+else
+    echo -e "${RED}Failed to update base_config path in ${SWEEP_CONFIG_PATH}${NC}"
+    exit 1
+fi
+
 # Extract configuration fields using yq
 mapfile -t COMMANDS < <(yq e '.command[]' "${SWEEP_CONFIG_PATH}")
 NAME=$(yq e '.parameters.name.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
