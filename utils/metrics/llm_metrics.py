@@ -199,3 +199,27 @@ def update_worst_metric(
     
     worst_list.sort(key=lambda x: x["score"])
     
+def update_random_batch_metric(
+    metric_name: str,
+    llm_metrics: dict[str, Union[float, list[str]]],
+    random_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
+    k: int = 5
+) -> None:
+    """
+    Update the random batch metric.
+    """
+    score: float = llm_metrics[metric_name]
+    predictions: list[str] = llm_metrics["predictions"]
+    references: list[str] = llm_metrics["references"]
+    
+    entry: dict[str, Union[float, list[str]]] = {
+        "score": score, 
+        "predictions": predictions, 
+        "references": references
+    }
+    
+    # Get or create the list for the metric
+    random_list: list[dict[str, Union[float, list[str]]]] = random_metrics.setdefault(metric_name, [])
+    
+    if len(random_list) < k:
+        random_list.append(entry)

@@ -21,9 +21,11 @@ from utils.metrics.llm_metrics import (
     BleuMetric,
     MeteorMetric,
     update_best_metric,
-    update_worst_metric
+    update_worst_metric,
+    update_random_batch_metric
 )
 
+import random
 from tqdm import tqdm
 from collections import defaultdict
 from typing import (
@@ -31,6 +33,7 @@ from typing import (
     Union, 
     DefaultDict
 )
+
 
 @RunnerRegistry.register("LLM_finetuning_runner")
 class LLMFinetuningRunner:
@@ -156,21 +159,10 @@ class LLMFinetuningRunner:
         
         # Iterate over the dataloader
         epoch_metrics: dict[str, float] = {}
-        worst_batch_metrics: DefaultDict[
-            str, 
-            Union[
-                list[str], 
-                list[float]
-            ]
-        ] = defaultdict(list)
-        best_batch_metrics: DefaultDict[
-            str, 
-            Union[
-                list[str], 
-                list[float]
-                ]
-            ] = defaultdict(list)
-        k_llm_metrics: int = 1
+        
+        if mode == RunMode.VALIDATE:
+            worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
+        
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
@@ -192,38 +184,20 @@ class LLMFinetuningRunner:
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
-                for metric in self.config.metrics:
-                    registered_metrics: Union[
-                        RougeMetric, 
-                        BleuMetric, 
-                        MeteorMetric
-                    ] = MetricRegistry.get(metric)
-                    LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
-                        outputs['generated_ids'], 
-                        labels, 
-                        dataloader.dataset.tokenizer
+                # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
+                metrics.update(
+                    # TODO: best_batch_metrics, worst_batch_metrics and random_batch_metrics are computed on the reference device
+                    # TODO: we need to gather them across all GPUs
+                    self._compute_metrics( # this function returns mean metrics for the current batch
+                        outputs,
+                        labels,
+                        dataloader,
+                        best_batch_metrics, # parsed and updated by reference object - not returned
+                        worst_batch_metrics, # parsed and updated by reference object - not returned
+                        random_batch_metrics, # parsed and updated by reference object - not returned
+                        random_batch=random_batch_idx == batch_idx
                     )
-                    
-                    for metric_name in LLM_metrics:
-                        if metric_name != 'predictions' and metric_name != 'references':
-                            # Update the best metric
-                            update_best_metric(
-                                metric_name=metric_name,
-                                llm_metrics=LLM_metrics,
-                                best_metrics=best_batch_metrics,
-                                K=k_llm_metrics
-                            )
-                            
-                            # Update the worst metric
-                            update_worst_metric(
-                                metric_name=metric_name,
-                                llm_metrics=LLM_metrics,
-                                worst_metrics=worst_batch_metrics,
-                                K=k_llm_metrics
-                            )      
-
-                            # Append the LLM metrics to the metrics dictionary
-                            metrics[metric_name] = LLM_metrics[metric_name]      
+                )                  
             
             # Gather and average loss across all GPUs
             gathered_metrics: dict[str, float] = {}
@@ -286,9 +260,11 @@ class LLMFinetuningRunner:
             import wandb
             best_html = create_html_table(best_batch_metrics, "Best Metrics")
             worst_html = create_html_table(worst_batch_metrics, "Worst Metrics")
+            random_html = create_html_table(random_batch_metrics, "Random Metrics")
             self.wandb_wrapper.log({
                 "val/best_metrics_html": wandb.Html(best_html),
-                "val/worst_metrics_html": wandb.Html(worst_html)
+                "val/worst_metrics_html": wandb.Html(worst_html),
+                "val/random_metrics_html": wandb.Html(random_html)
             })
         # === End new block ===
                 
@@ -457,3 +433,72 @@ class LLMFinetuningRunner:
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,
             })
+
+    def _compute_metrics(
+        self,
+        outputs: dict[str, torch.Tensor],
+        labels: torch.Tensor,
+        dataloader: DataLoader,
+        best_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
+        worst_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
+        random_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
+        random_batch: bool = False,
+    ) -> dict[str, float]:
+        """Compute metrics for validation and update best/worst batch metrics."""
+        computed_metrics: dict[str, float] = {}
+        for metric in self.config.metrics:
+            registered_metrics: Union[
+                RougeMetric, 
+                BleuMetric, 
+                MeteorMetric
+            ] = MetricRegistry.get(metric)
+            LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
+                outputs['generated_ids'],
+                labels,
+                dataloader.dataset.tokenizer
+            )
+            for metric_name, metric_value in LLM_metrics.items():
+                if metric_name not in ('predictions', 'references'):
+                    # Update the best metric
+                    update_best_metric(
+                        metric_name=metric_name,
+                        llm_metrics=LLM_metrics,
+                        best_metrics=best_batch_metrics,
+                        K=1  # TODO: k > 1 implemented but haven't been tested
+                    )
+                    # Update the worst metric
+                    update_worst_metric(
+                        metric_name=metric_name,
+                        llm_metrics=LLM_metrics,
+                        worst_metrics=worst_batch_metrics,
+                        K=1  # TODO: k > 1 implemented but haven't been tested with k > 1
+                    )
+                    
+                    if random_batch:
+                        # Update the random batch metric
+                        update_random_batch_metric(
+                            metric_name=metric_name,
+                            llm_metrics=LLM_metrics,
+                            random_metrics=random_batch_metrics,
+                            k=1  # TODO: k > 1 implemented but haven't been tested with k > 1
+                        )
+                    
+                    computed_metrics[metric_name] = metric_value
+        return computed_metrics
+    
+    def _init_validation_metrics(
+            self,
+            dataloader: DataLoader
+        ) -> tuple[
+            DefaultDict[str, Union[list[str], list[float]]],
+            DefaultDict[str, Union[list[str], list[float]]],
+            DefaultDict[str, Union[list[str], list[float]]],
+            int
+        ]:
+            # Initialize dictionaries for best, worst, and random batch metrics.
+            worst_batch_metrics = defaultdict(list)
+            best_batch_metrics = defaultdict(list)
+            random_batch_metrics = defaultdict(list)
+            # Select a random batch index
+            random_batch_idx = random.randint(0, len(dataloader) - 1)
+            return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx    
