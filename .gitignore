@@ -1,2 +1,9 @@
 wandb/
 __pycache__/
+.vscode/
+.DS_Store
+.venv/
+*.txt
+*.log
+checkpoints/
+*.out
