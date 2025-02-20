@@ -367,22 +367,26 @@ class LLMFinetuningRunner:
         
         predicted_reports: list[str] = []
         reference_reports: list[str] = []
+        waveform_names: list[str] = []
         tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer
         for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader)):
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
             labels: torch.Tensor = batch['input_ids'].to(self.config.device)
+            batch_waveform_names: list[str] = batch['waveform_name']
             generated_ids: torch.Tensor = self._inference_step(
                 embeddings=embeddings,
             )
                         
-            for gen, lab in zip(generated_ids, labels):
+            for gen, lab, filename in zip(generated_ids, labels, batch_waveform_names):
                 # Decode both predictions and references as strings.
                 decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
                 decoded_reference  = tokenizer.decode(lab.tolist(), skip_special_tokens=True)
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
+                waveform_names.append(filename)
                 
         df = pd.DataFrame({
+            'waveform_name': waveform_names,
             'predicted_report': predicted_reports,
             'reference_report': reference_reports
         })

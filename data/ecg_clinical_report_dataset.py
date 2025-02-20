@@ -42,8 +42,8 @@ class ECGClinicalReportDataset(Dataset):
             # Get the embedding path
             waveform_path = row['waveform_path']
             waveform_path = waveform_path.split('/')[-1]
-            waveform_path = waveform_path.split('.')[0]
-            embedding_path = self.embeddings_path + waveform_path + '_embedding.npy'
+            waveform_name = waveform_path.split('.')[0]
+            embedding_path = self.embeddings_path + waveform_name + '_embedding.npy'
             
             # Try to load the embedding
             try:
@@ -73,7 +73,8 @@ class ECGClinicalReportDataset(Dataset):
             return {
                 'embedding': embedding,  # (8, 128, 160)
                 'input_ids': input_ids,  # (max_length)
-                'attention_mask': attention_mask  # (max_length)
+                'attention_mask': attention_mask,  # (max_length)
+                'waveform_name': waveform_name
             }
             
         except Exception as e:
