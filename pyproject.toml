@@ -20,3 +20,12 @@ dependencies = [
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
 ]
+
+[tool.setuptools]
+packages = [
+    "data",
+    "models",
+    "config",
+    "runners",
+    "projects"
+]
