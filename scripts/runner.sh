@@ -20,6 +20,8 @@ print_usage() {
 SELECTED_GPUS="0"
 CONFIG_PATH="config/gpt2/base_config.yaml"
 RUN_MODE="train"
+USE_WANDB="false"
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
