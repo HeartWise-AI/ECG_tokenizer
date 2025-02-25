@@ -8,7 +8,6 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
 from typing import Optional
-import argparse
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
