@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
 from typing import Optional
+import argparse
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
@@ -32,12 +33,14 @@ class ECGDataset(Dataset):
         test_size: float = 0.0001, 
         random_state: int = 1234, 
         expected_waveform_length: int = 5000, 
-        num_leads: int = 12
+        num_leads: int = 12,
+        dataset: str = None
     ):
         self.transform: callable = transform
         self.split: str = split
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
+        self.dataset: str = dataset
         if parquet_file:
             # Load data from parquet file for the first dataset
             self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
@@ -125,7 +128,10 @@ class ECGDataset(Dataset):
                 return self.__getitem__((idx + 1) % len(self))
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
-            
+
+            if self.dataset == 'mimic':
+                signal[:, [4, 5]] = signal[:, [5, 4]]
+
             return {'signal': np.transpose(signal, (1, 0))}
         except Exception as e:
             print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
