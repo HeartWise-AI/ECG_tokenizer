@@ -8,6 +8,8 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import yaml
 from typing import Optional
+from utils.enums import DatasetType
+from utils.constants import lead_to_idx
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
@@ -33,13 +35,13 @@ class ECGDataset(Dataset):
         random_state: int = 1234, 
         expected_waveform_length: int = 5000, 
         num_leads: int = 12,
-        dataset: str = None
+        dataset_type: DatasetType = DatasetType.NONE
     ):
         self.transform: callable = transform
         self.split: str = split
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
-        self.dataset: str = dataset
+        self.dataset_type: DatasetType = dataset_type
         if parquet_file:
             # Load data from parquet file for the first dataset
             self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
@@ -116,7 +118,7 @@ class ECGDataset(Dataset):
             if unnormalized_signal.shape[1] != self.num_leads:
                 return self.__getitem__((idx + 1) % len(self))
             
-            epsilon: float = 1e-8
+            epsilon: float = 1e-8 
             signal_min: float = unnormalized_signal.min()
             signal_max: float = unnormalized_signal.max()
             signal_range: float = signal_max - signal_min
@@ -128,8 +130,10 @@ class ECGDataset(Dataset):
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
 
-            if self.dataset == 'mimic':
-                signal[:, [4, 5]] = signal[:, [5, 4]]
+            if self.dataset_type == DatasetType.MIMIC:
+                aVL_idx = lead_to_idx['aVL']
+                aVF_idx = lead_to_idx['aVF']
+                signal[:, [aVL_idx, aVF_idx]] = signal[:, [aVF_idx, aVL_idx]]
 
             return {'signal': np.transpose(signal, (1, 0))}
         except Exception as e:
