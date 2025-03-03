@@ -153,6 +153,13 @@ def train(
             current_mean_cmt = epoch_cmt_loss / (batch_idx + 1)
             current_mean_active = epoch_active_codes / (batch_idx + 1)
 
+            wandb.log({
+            "batch_idx": batch_idx + 1,
+            "current_mean_rec": current_mean_rec,
+            "current_mean_cmt": current_mean_cmt,
+            "current_mean_active": current_mean_active
+            })
+
             progress_bar.set_postfix({
                 "rec_loss": f"{rec_loss.item():.4f}",
                 "mean_rec": f"{current_mean_rec:.4f}",
@@ -205,7 +212,7 @@ def main():
 
     wandb.init(
         project="ECG_tokenizer", 
-        entity="jacques-delfrate", 
+        entity="rohanbanerjee", 
         name=config["experiment_name"], 
         config=config
     )
