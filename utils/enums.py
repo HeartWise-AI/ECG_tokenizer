@@ -8,3 +8,12 @@ class RunMode(str, Enum):
     
     def __str__(self):
         return self.value
+
+class DatasetType(str, Enum):
+    """Enum for different dataset types."""
+    MHI = "mhi"
+    MIMIC = "mimic"
+    NONE = "none"
+
+    def __str__(self):
+        return self.value

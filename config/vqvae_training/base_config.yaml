@@ -7,7 +7,7 @@ learning_rate: !!float 3e-4
 train_iterations: !!int 20000
 seed: !!int 1234
 num_workers: !!int 4
-experiment_name: !!str "experiment_deeper_1024_rvq_QINCo_debug"
+experiment_name: !!str "QINCo_1024_mimic_mhi_code15"
 num_epochs: !!int 2
 
 # VQVAE parameters
