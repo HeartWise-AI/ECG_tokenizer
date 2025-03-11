@@ -13,7 +13,12 @@ import argparse
 import wandb
 
 from data.dataset import ECGDatasetEmbeddings
-from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
+from models.models import (
+    VQVAE, 
+    SimpleVQAutoEncoder, 
+    ResVQAutoEncoder, 
+    CodebookClassifier
+)
 import os
 from tqdm.auto import trange
 import wandb
@@ -68,24 +73,23 @@ def main():
     with open(args.base_config, 'r') as file:
         config = yaml.safe_load(file)
 
-
-    dataset_mimic_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
-        parquet_file=config["train_parquet_MIMIC_file"],
+    dataset_mimic_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["test_parquet_MIMIC_file"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
-    print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
-    dataset_mhi_train: ECGDatasetEmbeddings = EECGDatasetEmbeddings(
-        parquet_file=config["train_parquet_MHI_file"],
+    print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
+    dataset_mhi_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["test_parquet_MHI_file"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
-    print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
+    print(f"len(dataset_mhi_test): {len(dataset_mhi_test)}")
 
     combined_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
         [
-            dataset_mimic_train, 
-            dataset_mimic_test
+            dataset_mimic_test, 
+            dataset_mhi_test
         ]
     )
 
@@ -97,11 +101,12 @@ def main():
     )
 
     embedding_dir = config["embedding_dir"]
-    model = ResVQAutoEncoder(
-        timesteps=dataset_mimic_train.waveform_length,
+    model: ResVQAutoEncoder = ResVQAutoEncoder(
+        timesteps=config["waveform_length"],
         codebook_size=config["num_codes"],
         implicit_neural_codebook=True
     ).to(device)
+
     model = nn.DataParallel(model)
 
     checkpoint = torch.load(config["model_path"], weights_only=True, map_location=device)
