@@ -429,11 +429,6 @@ class ECGDatasetEmbeddings(Dataset):
             self.data_frame: pd.DataFrame = pd.read_csv(csv_file)
             self.data_frame: pd.DataFrame = self._random_split(test_size, random_state)
 
-        unnormalized_signal: np.ndarray
-        unnormalized_signal, _ = self.get_signal(1)
-        self.waveform_length: int = unnormalized_signal.shape[0]
-        self.leads: int = unnormalized_signal.shape[1]
-
     def _random_split(
         self, 
         test_size: float, 
@@ -458,18 +453,11 @@ class ECGDatasetEmbeddings(Dataset):
     def __len__(self) -> int:
         return len(self.data_frame)
 
-    def get_signal(
+    def load_signal(
         self, 
-        idx: int
-    ) -> tuple[np.ndarray, str]:
-        if 'npy_path' in self.data_frame.columns:
-            npy_path: str = os.path.join(self.root_dir, self.data_frame.iloc[idx]['npy_path'])
-            unnormalized_signal: np.ndarray = np.load(npy_path)
-            return unnormalized_signal, npy_path
-        elif 'waveform_path' in self.data_frame.columns:
-            waveform_path = self.data_frame.iloc[idx]['waveform_path']
-            unnormalized_signal = np.load(waveform_path)
-            return unnormalized_signal, waveform_path
+        waveform_path: str
+    ) -> np.ndarray:
+        return np.load(waveform_path)
 
     def __getitem__(
         self, 
@@ -479,9 +467,8 @@ class ECGDatasetEmbeddings(Dataset):
             idx = idx.tolist()
         
         try:
-            signal_info: tuple[np.ndarray, str] = self.get_signal(idx)
-            unnormalized_signal: np.ndarray = signal_info[0]
-            waveform_path: str = signal_info[1]
+            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data_frame.iloc[idx]['waveform_path'])
+            waveform_path: str = self.data_frame.iloc[idx]['waveform_path']
 
              # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
             if len(unnormalized_signal.shape) == 3:
@@ -521,7 +508,7 @@ class ECGDatasetEmbeddings(Dataset):
                 return self.__getitem__((idx + 1) % len(self))
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
-            sample = {'signal': np.transpose(signal, (1, 0)), 'waveform_path': waveform_path}
+            sample = {'signal': signal, 'waveform_path': waveform_path}
             return sample
         except Exception as e:
             print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
