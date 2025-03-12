@@ -33,10 +33,10 @@ Passes signal through the trained VQVAE model and saves the embeddings i.e. the 
 Author: Rohan Banerjee
 """
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def get_embeddings(model, data_loader, device, save_dir):
+def get_embeddings(model, data_loader, device, save_dir, dataset_name):
     os.makedirs(save_dir, exist_ok=True)
     for batch in tqdm(data_loader):
         signals = batch['signal'].float().to(device)
@@ -60,7 +60,7 @@ def get_embeddings(model, data_loader, device, save_dir):
             
             original_filename = os.path.basename(waveform_path[idx])
             filename_without_ext = os.path.splitext(original_filename)[0]
-            save_path = os.path.join(save_dir, f"{filename_without_ext}_embedding.npy")
+            save_path = os.path.join(save_dir, dataset_name, f"{filename_without_ext}_embedding.npy")
             np.save(save_path, embedding_np)
         
     return
@@ -72,6 +72,36 @@ def main():
     args: argparse.Namespace = parser.parse_args()
     with open(args.base_config, 'r') as file:
         config = yaml.safe_load(file)
+
+    dataset_mimic_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["train_parquet_MIMIC_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
+
+    dataset_mhi_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["train_parquet_MHI_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
+
+    dataset_code_15_train: ECGDataset = ECGDataset(
+        parquet_file=config["code_15_dataset_path"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_code_15_train): {len(dataset_code_15_train)}")
+
+    combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+        [
+            dataset_mimic_train, 
+            dataset_mhi_train,
+            dataset_code_15_train
+        ]
+    )
+
 
     dataset_mimic_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
         parquet_file=config["test_parquet_MIMIC_file"],
@@ -86,17 +116,24 @@ def main():
     )
     print(f"len(dataset_mhi_test): {len(dataset_mhi_test)}")
 
-    combined_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+    combined_test_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
         [
             dataset_mimic_test, 
             dataset_mhi_test
         ]
     )
 
-    data_loader: DataLoader = DataLoader(
-        combined_dataset, 
+    data_train_loader: DataLoader = DataLoader(
+        combined_train_dataset, 
         batch_size=config["batch_size"], 
         shuffle=True, 
+        num_workers=16
+    )
+
+    data_test_loader: DataLoader = DataLoader(
+        combined_test_dataset, 
+        batch_size=config["batch_size"], 
+        shuffle=False, 
         num_workers=16
     )
 
@@ -127,7 +164,8 @@ def main():
 
     model.eval()
 
-    get_embeddings(model, data_loader, device, save_dir=embedding_dir)
+    get_embeddings(model, data_loader, device, save_dir=embedding_dir, dataset_name="train")
+    get_embeddings(model, data_test_loader, device, save_dir=embedding_dir, dataset_name="test")
 
 if __name__ == '__main__':
     main()
