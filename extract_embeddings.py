@@ -13,7 +13,12 @@ import argparse
 import wandb
 
 from data.dataset import ECGDatasetEmbeddings
-from models.vqvae import VQVAE, SimpleVQAutoEncoder, ResVQAutoEncoder, CodebookClassifier
+from models.models import (
+    VQVAE, 
+    SimpleVQAutoEncoder, 
+    ResVQAutoEncoder, 
+    CodebookClassifier
+)
 import os
 from tqdm.auto import trange
 import wandb
@@ -28,8 +33,12 @@ Passes signal through the trained VQVAE model and saves the embeddings i.e. the 
 Author: Rohan Banerjee
 """
 
-def get_embeddings(model, data_loader, device, save_dir):
-    os.makedirs(save_dir, exist_ok=True)
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def get_embeddings(model, data_loader, device, save_dir, dataset_name):
+    dataset_dir = os.path.join(save_dir, dataset_name)
+    os.makedirs(dataset_dir, exist_ok=True)
     for batch in tqdm(data_loader):
         signals = batch['signal'].float().to(device)
         waveform_path = batch['waveform_path']
@@ -52,36 +61,93 @@ def get_embeddings(model, data_loader, device, save_dir):
             
             original_filename = os.path.basename(waveform_path[idx])
             filename_without_ext = os.path.splitext(original_filename)[0]
-            save_path = os.path.join(save_dir, f"{filename_without_ext}_embedding.npy")
+            save_path = os.path.join(save_dir, dataset_name, f"{filename_without_ext}_embedding.npy")
             np.save(save_path, embedding_np)
         
     return
 
 
 def main():
-
-    with open('config.yaml', 'r') as file:
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(description='Extract embeddings')
+    parser.add_argument('--base_config', type=str, help='Path to base_config file', required=True)
+    args: argparse.Namespace = parser.parse_args()
+    with open(args.base_config, 'r') as file:
         config = yaml.safe_load(file)
 
-    csv_file = config["dataset"]["csv_file"]
-    dataset_mimic_train = ECGDatasetEmbeddings(csv_file=csv_file, split='train')
-    dataset_mimic_test = ECGDatasetEmbeddings(csv_file=csv_file, split='test')
+    dataset_mimic_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["train_parquet_MIMIC_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
 
-    combined_dataset = torch.utils.data.ConcatDataset([dataset_mimic_train, dataset_mimic_test])
-    data_loader = DataLoader(combined_dataset, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=16)
+    dataset_mhi_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["train_parquet_MHI_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dataset_code_15_train: ECGDataset = ECGDataset(
+        parquet_file=config["code_15_dataset_path"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_code_15_train): {len(dataset_code_15_train)}")
 
-    num_codes = config["training"]["num_codes"]
-    embedding_dir = config["evaluation"]["embedding_dir"]
-    model = ResVQAutoEncoder(
-        timesteps=dataset_mimic_train.waveform_length,
-        codebook_size=num_codes,
+    combined_train_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+        [
+            dataset_mimic_train, 
+            dataset_mhi_train,
+            dataset_code_15_train
+        ]
+    )
+
+
+    dataset_mimic_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["test_parquet_MIMIC_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
+    dataset_mhi_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
+        parquet_file=config["test_parquet_MHI_file"],
+        expected_waveform_length=config["waveform_length"],
+        num_leads=config["num_leads"]
+    )
+    print(f"len(dataset_mhi_test): {len(dataset_mhi_test)}")
+
+    combined_test_dataset: torch.utils.data.ConcatDataset = torch.utils.data.ConcatDataset(
+        [
+            dataset_mimic_test, 
+            dataset_mhi_test
+        ]
+    )
+
+    data_train_loader: DataLoader = DataLoader(
+        combined_train_dataset, 
+        batch_size=config["batch_size"], 
+        shuffle=True, 
+        num_workers=16
+    )
+
+    data_test_loader: DataLoader = DataLoader(
+        combined_test_dataset, 
+        batch_size=config["batch_size"], 
+        shuffle=False, 
+        num_workers=16
+    )
+
+    embedding_dir = config["embedding_dir"]
+    model: ResVQAutoEncoder = ResVQAutoEncoder(
+        timesteps=config["waveform_length"],
+        codebook_size=config["num_codes"],
         implicit_neural_codebook=True
     ).to(device)
+
     model = nn.DataParallel(model)
 
-    checkpoint = torch.load(config["evaluation"]["model_path"], weights_only=True, map_location=device)
+    checkpoint = torch.load(config["model_path"], weights_only=True, map_location=device)
     state_dict = checkpoint['model_state_dict']
     model_state_dict = model.module.state_dict()
     new_state_dict = {}
@@ -99,7 +165,8 @@ def main():
 
     model.eval()
 
-    get_embeddings(model, data_loader, device, save_dir=embedding_dir)
+    get_embeddings(model, data_loader, device, save_dir=embedding_dir, dataset_name="train")
+    get_embeddings(model, data_test_loader, device, save_dir=embedding_dir, dataset_name="test")
 
 if __name__ == '__main__':
     main()
