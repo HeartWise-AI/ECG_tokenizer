@@ -37,7 +37,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def get_embeddings(model, data_loader, device, save_dir, dataset_name):
-    os.makedirs(save_dir, exist_ok=True)
+    dataset_dir = os.path.join(save_dir, dataset_name)
+    os.makedirs(dataset_dir, exist_ok=True)
     for batch in tqdm(data_loader):
         signals = batch['signal'].float().to(device)
         waveform_path = batch['waveform_path']
