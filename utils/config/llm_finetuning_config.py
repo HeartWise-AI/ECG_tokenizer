@@ -32,7 +32,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     huggingface_model_name: str
     trainable_model_name: str
     embedding_reducer_name: str
-    embedding_size: int
+    gpt2_embedding_size: int
 
     # Metrics
     metrics: list[str]
@@ -41,6 +41,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     base_checkpoint_path: str
     train_dataset_path: str
     validation_dataset_path: str
-    embeddings_path: str
+    train_embeddings_path: str
+    validation_embeddings_path: str
     output_dir: str
     checkpoint_dir: str

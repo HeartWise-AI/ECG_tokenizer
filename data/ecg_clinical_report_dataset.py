@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pandas as pd
@@ -43,7 +44,7 @@ class ECGClinicalReportDataset(Dataset):
             waveform_path = row['waveform_path']
             waveform_path = waveform_path.split('/')[-1]
             waveform_name = waveform_path.split('.')[0]
-            embedding_path = self.embeddings_path + waveform_name + '_embedding.npy'
+            embedding_path = os.path.join(self.embeddings_path, waveform_name + '_embedding.npy')
             
             # Try to load the embedding
             try:
