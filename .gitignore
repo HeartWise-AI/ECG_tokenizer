@@ -9,3 +9,7 @@ checkpoints/
 *.out
 build/
 *.egg-info/
+parquets/
+*.pt
+*.parquet
+outputs/
