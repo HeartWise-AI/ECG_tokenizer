@@ -121,11 +121,11 @@ class GPT2WithEmbedding(nn.Module):
         generate_kwargs = generate_kwargs.copy()
         generate_kwargs.setdefault("attention_mask", attention_mask)
         generate_kwargs.setdefault("pad_token_id", self.gpt2.config.eos_token_id)
+        generate_kwargs.setdefault("use_cache", True)
         
         # Generate report using the embedding as the initial input
-        generated_ids = self.gpt2.generate(
+        return self.gpt2.generate(
             inputs_embeds=input_embedding,
             max_length=max_token_length, 
             **generate_kwargs
         )
-        return generated_ids
