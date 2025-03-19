@@ -13,7 +13,8 @@ class GPT2WithEmbedding(nn.Module):
     def __init__(
         self, 
         gpt2_model_name: str = 'gpt2', 
-        embedding_size: int = 768, 
+        gpt2_embedding_size: int = 768, 
+        ecg_embedding_size: tuple[int, int, int] = (8, 128, 82),
         reducer_name: str = None,
         reducer_dropout: float = 0.2
     ):
@@ -24,13 +25,14 @@ class GPT2WithEmbedding(nn.Module):
             LinearReducer, 
             SimpleEmbeddingReducer
         ] = ModelRegistry.get(reducer_name)(
-            output_size=embedding_size, 
+            input_shape=ecg_embedding_size,
+            output_size=gpt2_embedding_size, 
             dropout=reducer_dropout
         )
         
         # Check if embedding size matches GPT-2's hidden size.
-        if embedding_size != self.gpt2.config.n_embd:
-            raise ValueError(f"Embedding size {embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
+        if gpt2_embedding_size != self.gpt2.config.n_embd:
+            raise ValueError(f"Embedding size {gpt2_embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
         
         # Optional: Maintain the special token ID (if needed elsewhere).
         # We still resize token embeddings for compatibility during generation.

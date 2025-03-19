@@ -1,5 +1,6 @@
 import os
 import torch
+import numpy as np
 from torch.amp import GradScaler
 from torch.optim import AdamW, RAdam
 from torch.optim.lr_scheduler import LRScheduler
@@ -37,7 +38,7 @@ class LLMFinetuningProject:
         # Get the dataloaders
         training_dataloader = get_distributed_clinical_report_dataloader(
             reports_path=self.config.train_dataset_path,
-            embeddings_path=self.config.embeddings_path,
+            embeddings_path=self.config.train_embeddings_path,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
@@ -50,7 +51,7 @@ class LLMFinetuningProject:
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
             reports_path=self.config.validation_dataset_path,
-            embeddings_path=self.config.embeddings_path,
+            embeddings_path=self.config.validation_embeddings_path,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
@@ -62,9 +63,11 @@ class LLMFinetuningProject:
         )
 
         # Get the model
+        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.train_embeddings_path)
         model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
-            embedding_size=self.config.embedding_size, 
+            gpt2_embedding_size=self.config.gpt2_embedding_size, 
+            ecg_embedding_size=ecg_embedding_size,
             reducer_name=self.config.embedding_reducer_name,
             reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
@@ -168,3 +171,13 @@ class LLMFinetuningProject:
         )
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         return checkpoint
+
+    def _get_embedding_size(self, embeddings_dir: str) -> tuple[int, ...]:
+        for fname in os.listdir(embeddings_dir):
+            full_path = os.path.join(embeddings_dir, fname)
+            try:
+                embedding = np.load(full_path)
+                return embedding.shape
+            except Exception as e:
+                print(f"Warning: could not load {full_path} due to {e}")
+        raise ValueError(f"No valid embedding file found in directory: {embeddings_dir}")
