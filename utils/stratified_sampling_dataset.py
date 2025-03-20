@@ -7,7 +7,7 @@ from constants import ECG_PATTERNS
 if __name__ == "__main__":
     ecg_patterns = list(ECG_PATTERNS.keys())
     
-    df = pd.read_parquet('parquets/mhi/test_trial_v1.1_with_report.parquet')
+    df = pd.read_parquet('/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_val.parquet')
 
     columns_names = ['report', 'waveform_path']
     columns_names.extend(ecg_patterns)
@@ -16,7 +16,7 @@ if __name__ == "__main__":
 
     splitter = DataSplitter(
         df=new_df, 
-        feature_col='report', 
+        feature_col=['report', 'waveform_path'], 
         label_cols=ecg_patterns,
         stratify_method='multilabel'
     )
@@ -35,4 +35,4 @@ if __name__ == "__main__":
     # Save split DataFrames
     # split_data['train_df'].to_parquet("parquets/mhi/test_trial_v1.1_with_report_stratified_train.parquet")
     # split_data['val_df'].to_parquet("parquets/mhi/test_trial_v1.1_with_report_stratified_val.parquet")
-    split_data['test_df'].to_parquet("parquets/mhi/test_trial_v1.1_with_report_subset.parquet")
+    split_data['test_df'].to_parquet("parquets/mimic/mimic_v4_clean_val_subset.parquet")
