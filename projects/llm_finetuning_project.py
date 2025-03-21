@@ -63,6 +63,7 @@ class LLMFinetuningProject:
         )
 
         # Get the model
+        print("Getting embedding size...")
         ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.train_embeddings_path)
         model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
@@ -108,7 +109,7 @@ class LLMFinetuningProject:
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
             reports_path=self.config.validation_dataset_path,
-            embeddings_path=self.config.embeddings_path,
+            embeddings_path=self.config.validation_embeddings_path,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
@@ -120,9 +121,12 @@ class LLMFinetuningProject:
         )        
         
         # Get the model
+        print("Getting embedding size...")
+        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.validation_embeddings_path)
         model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
-            embedding_size=self.config.embedding_size, 
+            gpt2_embedding_size=self.config.gpt2_embedding_size, 
+            ecg_embedding_size=ecg_embedding_size, 
             reducer_name=self.config.embedding_reducer_name
         ).to(self.config.device)
 
