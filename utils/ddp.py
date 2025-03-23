@@ -9,6 +9,7 @@ from torch.distributed import (
     init_process_group, 
     destroy_process_group
 )
+from typing import Any, List
 
 
 class DistributedUtils:
@@ -71,6 +72,23 @@ class DistributedUtils:
         loss_tensor = torch.tensor(loss, device=device)
         dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
         return loss_tensor.mean().item() / dist.get_world_size()
+
+    @staticmethod
+    def all_gather_object(
+        gather_list: List[Any], 
+        obj: Any
+    ):
+        """
+        Gathers arbitrary picklable objects from all processes and stores them in gather_list.
+
+        :param gather_list: Pre-allocated list with length equal to the world size.
+        :param obj: The picklable object to be gathered from each process.
+        """
+        if len(gather_list) > 1:
+            dist.all_gather_object(gather_list, obj)
+        else:
+            # If distributed is not initialized, store the object in the first index.
+            gather_list[0] = obj
     
     @staticmethod
     def get_distributed_dataloader(
