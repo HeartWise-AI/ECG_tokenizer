@@ -146,7 +146,12 @@ class LLMFinetuningRunner:
         step_fn: callable = self._train_step if mode == RunMode.TRAIN else self._val_step
         
         # Create a progress bar for the epoch
-        data_iter: tqdm = tqdm(dataloader, desc=f"{mode} epoch {epoch}/{self.config.num_epochs}", leave=True)
+        data_iter: tqdm = tqdm(
+            dataloader, 
+            desc=f"{mode} epoch {epoch}/{self.config.num_epochs}",
+            leave=True,
+            disable=not self.config.is_ref_device
+        )
         
         # Initialize the total loss
         total_loss: float = 0.0
@@ -369,7 +374,8 @@ class LLMFinetuningRunner:
         reference_reports: list[str] = []
         waveform_names: list[str] = []
         tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer
-        for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader)):
+        
+        for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader), disable=not self.config.is_ref_device):
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
             labels: torch.Tensor = batch['input_ids'].to(self.config.device)
             batch_waveform_names: list[str] = batch['waveform_name']
@@ -385,12 +391,34 @@ class LLMFinetuningRunner:
                 reference_reports.append(decoded_reference)
                 waveform_names.append(filename)
                 
-        df = pd.DataFrame({
-            'waveform_name': waveform_names,
-            'predicted_report': predicted_reports,
-            'reference_report': reference_reports
-        })
-        df.to_csv(os.path.join(self.config.checkpoint_dir.replace('.pt', '_inference.csv')), index=False) 
+        # --- Distributed Gathering using DistributedUtils ---
+        results = {
+            "waveform_names": waveform_names,
+            "predicted_reports": predicted_reports,
+            "reference_reports": reference_reports,
+        }
+        
+        # Get the world size from DistributedUtils (using the config's world size)
+        gathered_results = [None for _ in range(self.config.world_size)]
+        DistributedUtils.all_gather_object(gathered_results, results)
+        
+        # Only the reference device (as determined by self.config.is_ref_device) consolidates and writes the output CSV.
+        if self.config.is_ref_device:
+            combined_waveform_names = []
+            combined_predicted_reports = []
+            combined_reference_reports = []
+            for res in gathered_results:
+                combined_waveform_names.extend(res["waveform_names"])
+                combined_predicted_reports.extend(res["predicted_reports"])
+                combined_reference_reports.extend(res["reference_reports"])
+                    
+            df = pd.DataFrame({
+                'waveform_name': combined_waveform_names,
+                'predicted_report': combined_predicted_reports,
+                'reference_report': combined_reference_reports
+            })
+            csv_path = os.path.join(self.config.checkpoint_dir.replace('.pt', '_inference.csv'))
+            df.to_csv(csv_path, index=False)
 
     def validate(self):
         raise NotImplementedError("Validate not implemented")
