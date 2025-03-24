@@ -23,7 +23,8 @@ def main(config: HeartWiseConfig):
     
     try:
         # Set seed for reproducibility
-        set_seed(config.seed)
+        if hasattr(config, "seed"):
+            set_seed(config.seed)
         
         # Initialize process group with explicit device ID and world size
         DistributedUtils.ddp_setup(
