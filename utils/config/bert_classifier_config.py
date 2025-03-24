@@ -7,7 +7,12 @@ from utils.config.heartwise_config import HeartWiseConfig
 @ConfigRegistry.register("BERT_Report_Classifier")
 class BertReportClassifierConfig(HeartWiseConfig):
     # Inference parameters
-    reference_reports_path: str
+    predictions_reports_path: str
     batch_size: int
     num_workers: int
     run_mode: str
+    # Model parameters
+    huggingface_model_name: str
+    store_model_path: str
+    num_classes: int
+    api_keys_path: str
