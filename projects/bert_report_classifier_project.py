@@ -3,13 +3,15 @@ from transformers import BertTokenizer
 
 from utils.registry import (
     ProjectRegistry, 
-    ModelRegistry
+    ModelRegistry,
+    RunnerRegistry
 )
 from utils.files_handler import load_api_keys
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import BertReportClassifierConfig
 from utils.huggingface_wrapper import HuggingFaceWrapper
 from models.bert_classifier import BertClassifier
+from runners.bert_report_classifier_runner import BertReportClassifierRunner
 from data.bert_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 
@@ -45,6 +47,7 @@ class BertReportClassifierProject:
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
             predicted_reports_path=self.config.predictions_reports_path,
+            tokenizer=tokenizer,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
@@ -54,8 +57,8 @@ class BertReportClassifierProject:
         )
         
         return {
-            "validation_dataloader": validation_dataloader,
-            "tokenizer": tokenizer
+            "val_dataloader": validation_dataloader,
+            "model": model
         }
         
     def run(self):
@@ -68,8 +71,6 @@ class BertReportClassifierProject:
         elif self.config.run_mode == "inference":
             inference_objects: dict[str, Any] = self._setup_inference_objects()
             runner_args.update(inference_objects)
-        
-        print('ready to execute')
-          
-        # runner: BertReportClassifierRunner = RunnerRegistry.get(self.config.runner_name)(**runner_args)
-        # runner.execute(mode=self.config.run_mode)
+                  
+        runner: BertReportClassifierRunner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        runner.execute(mode=self.config.run_mode)
