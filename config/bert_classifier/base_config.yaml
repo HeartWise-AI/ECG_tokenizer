@@ -1,0 +1,11 @@
+# pipeline project
+pipeline_project: !!str "BERT_Report_Classifier"
+# inference parameters
+reference_reports_path: !!str "checkpoints/gpt2/mhi/best_model_inference.csv"
+batch_size: !!int 32
+num_workers: !!int 12
+run_mode: !!str "inference"
+# wandb parameters
+wandb_project: !!str "BERT_Report_Classifier"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool false
