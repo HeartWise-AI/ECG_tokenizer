@@ -31,14 +31,17 @@ class BertClassifier:
     def to(self, device: str):
         self.model.to(device)
 
+    def eval(self):
+        self.model.eval()
+
     def __call__(
         self,  
         input_ids: torch.Tensor, 
         attention_mask: torch.Tensor = None,
         token_type_ids: torch.Tensor = None,
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         return self.model(
-            input_ids=input_ids, 
-            token_type_ids=token_type_ids, 
-            attention_mask=attention_mask
-        )['logits']
+            input_ids=input_ids.squeeze(), # dim. is [batch_size, 1, max_length]
+            token_type_ids=token_type_ids.squeeze(), # dim. is [batch_size, 1, max_length]
+            attention_mask=attention_mask.squeeze() # dim. is [batch_size, 1, max_length]
+        )
