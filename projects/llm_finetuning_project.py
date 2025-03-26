@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from torch.amp import GradScaler
 from torch.optim import AdamW, RAdam
+from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
@@ -32,11 +33,11 @@ class LLMFinetuningProject:
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
 
     def _setup_training_objects(self)->dict[str, Any]:
-        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         tokenizer.pad_token = tokenizer.eos_token
 
         # Get the dataloaders
-        training_dataloader = get_distributed_clinical_report_dataloader(
+        training_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             reports_path=self.config.train_dataset_path,
             embeddings_path=self.config.train_embeddings_path,
             tokenizer=tokenizer,
@@ -49,7 +50,7 @@ class LLMFinetuningProject:
             pin_memory=True
         )
         
-        validation_dataloader = get_distributed_clinical_report_dataloader(
+        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             reports_path=self.config.validation_dataset_path,
             embeddings_path=self.config.validation_embeddings_path,
             tokenizer=tokenizer,
