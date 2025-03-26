@@ -1,7 +1,5 @@
 # ECG_tokenizer
 
-More details coming soon!
-
 ## 🛠️ Environment Setup
 
 ### Prerequisites
@@ -43,3 +41,13 @@ More details coming soon!
    ```bash
    wandb login
    ```
+
+# How to's
+
+# Tokenizer training
+
+# Linear Probing
+
+# GPT2 Finetuning
+
+# Testing with Bert 
