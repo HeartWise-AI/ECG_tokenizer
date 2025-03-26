@@ -39,9 +39,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Data and checkpoint paths
     base_checkpoint_path: str
-    train_dataset_path: str
-    validation_dataset_path: str
-    train_embeddings_path: str
-    validation_embeddings_path: str
+    train_dataset_path: dict[str, str]
+    validation_dataset_path: dict[str, str]
+    train_embeddings_path: dict[str, str]
+    validation_embeddings_path: dict[str, str]
     output_dir: str
     checkpoint_dir: str
