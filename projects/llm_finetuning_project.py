@@ -65,7 +65,8 @@ class LLMFinetuningProject:
 
         # Get the model
         print("Getting embedding size...")
-        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.train_embeddings_path)
+        embedding_dir = next(iter(self.config.validation_embeddings_path.values()))
+        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(embedding_dir)
         model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
             gpt2_embedding_size=self.config.gpt2_embedding_size, 
