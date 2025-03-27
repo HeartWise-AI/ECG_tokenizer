@@ -1,19 +1,19 @@
 command:
   - torchrun
-  - "--nproc_per_node=2"
+  - "--nproc_per_node=3"
   - "--master_port=29500"
   - "scripts/main.py"
   - "--base_config"
   - "config/gpt2/base_config.yaml"
   - ${args}
 
-name: "gpt2_half"
-project: "ECG_tokenizer_LLM_finetuning"
-entity: "jacques-delfrate"
+name: "gpt2_mhi"
+project: "ECG_tokenizer_LLM_finetuning_mhi"
+entity: "mhi_ai"
 
 method: bayes
 metric:
-  name: val/loss
+  name: validate/loss
   goal: minimize
 
 parameters:
@@ -28,7 +28,7 @@ parameters:
     max: 0.5
 
   batch_size:
-    values: [8, 16, 32]
+    values: [8, 16, 32, 64]
 
   optimizer:
     values: ["RAdam", "AdamW"]
@@ -48,13 +48,13 @@ parameters:
     values: [512]
 
   project:
-    values: ["ECG_tokenizer_LLM_finetuning"]
+    values: ["ECG_tokenizer_LLM_finetuning_mhi"]
 
   entity:
-    values: ["jacques-delfrate"]
+    values: ["mhi_ai"]
 
   name:
-    values: ["gpt2_half"]
+    values: ["gpt2_mhi"]
 
 early_terminate:
   type: hyperband
