@@ -108,7 +108,7 @@ class LLMFinetuningProject:
         tokenizer.pad_token = tokenizer.eos_token
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
-            reports_path=self.config.validation_dataset_path,
+            reports_path=self.config.inference_dataset_path,
             embeddings_path=self.config.validation_embeddings_path,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,

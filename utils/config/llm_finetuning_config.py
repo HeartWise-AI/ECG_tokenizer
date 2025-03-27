@@ -45,3 +45,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
     validation_embeddings_path: str
     output_dir: str
     checkpoint_dir: str
+    
+    # Inference parameters
+    inference_dataset_path: str
