@@ -64,7 +64,7 @@ bash scripts/run_sweep.sh --base_config config/gpt2/base_config.yaml --sweep_con
 #### Generate Inference Results
 Multi-GPU Inference - no results logged on wandb (see scripts/runner.sh)
 ```base
-source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/bert_classifier/base_config.yaml --selected_gpus 0,1,2,3
+source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/gpt2/base_config.yaml --selected_gpus 0,1,2,3
 ```
 
 ### LLMs evaluation with Bert
