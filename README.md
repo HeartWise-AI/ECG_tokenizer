@@ -60,4 +60,8 @@ bash scripts/runner.sh --base_config config/gpt2/base_config.yaml --selected_gpu
 bash scripts/run_sweep.sh --base_config config/gpt2/base_config.yaml --sweep_config config/clip/sweep_config.yaml --selected_gpus 0,1 --count 5
 ```
 
-### Testing with Bert 
+### Inference with Bert 
+
+```base
+# Inference on Multi-GPU without logging results to wandb
+source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/bert_classifier/base_config.yaml --selected_gpus 0,1,2,3
