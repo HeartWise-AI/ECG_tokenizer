@@ -417,6 +417,7 @@ class LLMFinetuningRunner:
                 'predicted_report': combined_predicted_reports,
                 'reference_report': combined_reference_reports
             })
+            os.makedirs(self.config.output_dir, exist_ok=True)
             csv_path = os.path.join(self.config.output_dir, 'inference.csv')
             df.to_csv(csv_path, index=False)
 
