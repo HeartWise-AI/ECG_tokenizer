@@ -48,7 +48,9 @@
 
 ### Linear Probing
 
-### GPT2 Finetuning
+### LLM Finetuning
+#### GPT2
+##### Run Training
 ```base
 # Single GPU training without logging results to wandb (see scripts/runner.sh)
 bash scripts/runner.sh --base_config config/gpt2/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode train
@@ -59,9 +61,13 @@ bash scripts/runner.sh --base_config config/gpt2/base_config.yaml --selected_gpu
 # Multi-GPU hyperparameters fine-tuning - RunMode and UseWandb are forced to train and true respectively (see scripts/run_sweep.sh)
 bash scripts/run_sweep.sh --base_config config/gpt2/base_config.yaml --sweep_config config/clip/sweep_config.yaml --selected_gpus 0,1 --count 5
 ```
+#### Generate Inference Results
+Multi-GPU Inference - no results logged on wandb (see scripts/runner.sh)
+```base
+source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/bert_classifier/base_config.yaml --selected_gpus 0,1,2,3
+```
 
-### Inference with Bert 
-
+### LLMs evaluation with Bert
 ```base
 # Inference on Multi-GPU without logging results to wandb
 source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/bert_classifier/base_config.yaml --selected_gpus 0,1,2,3
