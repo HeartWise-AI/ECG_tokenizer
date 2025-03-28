@@ -75,25 +75,40 @@ class VQVAE(nn.Module):
         return x_reconstructed, vq_loss
 
 class SimpleVQAutoEncoder(nn.Module):
-    def __init__(self, timesteps, **vq_kwargs):
-            super().__init__()
-            self.layers = nn.ModuleList(
+    def __init__(
+        self, 
+        timesteps, 
+        **vq_kwargs
+    ):
+        super().__init__()
+        if timesteps == 5000:
+            VQ_input = 160
+            final_padding = 16
+        else:
+            VQ_input = 82
+            final_padding = 18
+        self.layers = nn.ModuleList(
             [
-                    nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=1), 
-                    nn.MaxPool1d(kernel_size=2, stride=2),
-                    nn.GELU(),
-                    nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=1),
-                    VectorQuantize(dim=timesteps // 8,
-                                    decay = 0.8,             # the exponential moving average decay, lower means the dictionary will change faster
-                                    commitment_weight = 0.25,
-                                    **vq_kwargs),
-                    nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
-                    nn.GELU(),
-                    nn.Upsample(scale_factor=2, mode="nearest"),
-                    nn.ConvTranspose1d(32, 12, kernel_size=4, stride=2, padding=1),
-                ]
-            )
-            return
+                nn.Conv1d(12, 32, kernel_size=4, stride=2, padding=16), 
+                nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
+                nn.GELU(),
+                nn.Conv1d(32, 64, kernel_size=4, stride=2, padding=8),
+                nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
+                nn.GELU(),
+                nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2),
+                VectorQuantize(dim=VQ_input,
+                                decay = 0.8,             # the exponential moving average decay, lower means the dictionary will change faster
+                                commitment_weight = 0.25,
+                                **vq_kwargs),
+                nn.ConvTranspose1d(128, 64, kernel_size=4, stride=2, padding=2),
+                nn.GELU(),
+                nn.Upsample(scale_factor=2, mode="nearest"),
+                nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
+                nn.GELU(),
+                nn.Upsample(scale_factor=2, mode="nearest"),
+                nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=final_padding)
+            ]
+        )
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
@@ -103,7 +118,7 @@ class SimpleVQAutoEncoder(nn.Module):
                 x = layer(x)
            
         return x.clamp(-1, 1), indices, commit_loss
-    
+
 class ResVQAutoEncoder(nn.Module):
     def __init__(
         self, 

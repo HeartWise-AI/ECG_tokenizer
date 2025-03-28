@@ -2,7 +2,7 @@ command:
   - python
   - ./linear_probe.py
   - "--base_config"
-  - "config/base_config.yaml"
+  - "config/linear_probe/base_config.yaml"
   - ${args}
 
 method: bayes

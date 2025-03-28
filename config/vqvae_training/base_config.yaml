@@ -1,5 +1,5 @@
 # waveform parameters
-waveform_length: !!int 5000
+waveform_length: !!int 2500
 num_leads: !!int 12
 
 # training parameters
@@ -7,12 +7,12 @@ learning_rate: !!float 3e-4
 train_iterations: !!int 20000
 seed: !!int 1234
 num_workers: !!int 4
-experiment_name: !!str "QINCo_1024_mimic_mhi_code15"
+experiment_name: !!str "QINCo_1024_mimic_mhi_code15_seq_2500"
 num_epochs: !!int 2
 
 # VQVAE parameters
 num_quantizers: !!int 8
-num_codes: !!int 512
+num_codes: !!int 1024
 alpha: !!float 1.0 # used for loss function
 
 # classifier parameters
@@ -37,8 +37,8 @@ test_parquet_MHI_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/spli
 code_15_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/code15/code_15_dataset.parquet"
 
 # evaluation parameters
-model_path: !!str "/volume/ECG_tokenizer/checkpoints/QINCo_512_mimic_mhi_code15/vqvae_iteration_1.pth"
-embedding_dir: !!str "/volume/embeddings/QINCo_512_mimic_mhi_code15/"
+model_path: !!str "/volume/ECG_tokenizer/checkpoints/QINCo_512_mimic_mhi_code15_seq_2500/vqvae_iteration_1.pth"
+embedding_dir: !!str "/volume/embeddings/QINCo_512_mimic_mhi_code15_seq_2500/"
 name: !!str "sweep"
 project: !!str "ECG_tokenizer_linear_probing"
 entity: !!str "mhi_ai"

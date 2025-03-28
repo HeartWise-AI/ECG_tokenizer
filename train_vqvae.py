@@ -27,7 +27,7 @@ Author: Rohan Banerjee
 Relevant issues from lucid-rains repos: #28, #44, #102
 """
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_checkpoint(
@@ -212,7 +212,7 @@ def main():
 
     wandb.init(
         project="ECG_tokenizer", 
-        entity="rohanbanerjee", 
+        entity="mhi_ai", 
         name=config["experiment_name"], 
         config=config
     )
