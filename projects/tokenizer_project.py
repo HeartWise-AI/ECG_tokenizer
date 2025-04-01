@@ -15,6 +15,7 @@ from utils.ddp import DistributedUtils
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import ECGTokenizerTrainingConfig
 from models.tokenizer import ECG_Tokenizer_Wrapper
+from runners.tokenizer_runner import ECGTokenizerRunner
 from data.ecg_dataset import get_distributed_ecg_dataloader
 
 
@@ -107,7 +108,10 @@ class ECGTokenizerTrainingProject:
             "wandb_wrapper": self.wandb_wrapper
         }
         if self.config.run_mode == "train":
-            runner_args.update(self._setup_training_objects())
-            print("Training")
+            training_objects: dict[str, Any] = self._setup_training_objects()
+            runner_args.update(training_objects)
         elif self.config.run_mode == "inference":
             raise NotImplementedError("Inference is not implemented")
+        
+        runner: ECGTokenizerRunner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        runner.execute(mode=self.config.run_mode)
