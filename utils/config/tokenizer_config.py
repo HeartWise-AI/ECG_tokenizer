@@ -24,7 +24,7 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     use_amp: bool
     # VQVAE parameters
     num_quantizers: int
-    num_codes: int
+    codebook_size: int
     # Dataset parameters
     train_dataset_path: str
     validation_dataset_path: str
