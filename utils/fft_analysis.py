@@ -43,43 +43,26 @@ def load_ecg_data_from_parquet(parquet_path, max_samples=20000):
     print(f"Loading data from {parquet_path}")
     df = pd.read_parquet(parquet_path)
 
-    direct_waveform_cols = [col for col in df.columns if col == 'waveform' or col == 'filtered_waveform']
     
-    if direct_waveform_cols:
-        waveform_col = direct_waveform_cols[0]
-        print(f"Using direct waveform column: {waveform_col}")
-        df = df.head(max_samples)
-        
-        waveforms = []
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Processing waveforms"):
-            try:
-                waveform = row[waveform_col]
-                if not isinstance(waveform, np.ndarray):
-                    waveform = np.array(waveform)
-                waveforms.append(waveform)
-            except Exception as e:
-                print(f"Error processing row: {e}")
-                continue
-    else:
-        path_cols = [col for col in df.columns if 'path' in col.lower() or 'file' in col.lower()]
-        
-        if not path_cols:
-            raise ValueError(f"No waveform or path column found in {parquet_path}")
-        
-        path_col = path_cols[0]
-        print(f"Using path column: {path_col}")
-        df = df.head(max_samples)
+    path_cols = [col for col in df.columns if 'path' in col.lower() or 'file' in col.lower()]
+    
+    if not path_cols:
+        raise ValueError(f"No waveform or path column found in {parquet_path}")
+    
+    path_col = path_cols[0]
+    print(f"Using path column: {path_col}")
+    df = df.head(max_samples)
 
-        waveforms = []
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading waveform files"):
-            try:
-                path = row[path_col]
-                waveform = load_waveform_from_path(path)
-                if waveform is not None:
-                    waveforms.append(waveform)
-            except Exception as e:
-                print(f"Error loading file {path}: {e}")
-                continue
+    waveforms = []
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading waveform files"):
+        try:
+            path = row[path_col]
+            waveform = load_waveform_from_path(path)
+            if waveform is not None:
+                waveforms.append(waveform)
+        except Exception as e:
+            print(f"Error loading file {path}: {e}")
+            continue
     
     return np.array(waveforms) if waveforms else np.array([])
 
