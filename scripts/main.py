@@ -14,7 +14,11 @@ from utils.seed import set_seed
 from utils.ddp import DistributedUtils
 from utils.parser import HeartWiseParser
 from utils.registry import ProjectRegistry
-from projects import LLMFinetuningProject
+from projects import (
+    LLMFinetuningProject,
+    BertReportClassifierProject,
+    BertReportClassifierProject
+)
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
@@ -46,7 +50,11 @@ def main(config: HeartWiseConfig):
         )
         
         # Initialize the project
-        project: Union[LLMFinetuningProject] = ProjectRegistry.get(
+        project: Union[
+            LLMFinetuningProject, 
+            BertReportClassifierProject, 
+            BertReportClassifierProject
+        ] = ProjectRegistry.get(
             name=config.pipeline_project # The project to run
         )(
             config=config, # The config object
