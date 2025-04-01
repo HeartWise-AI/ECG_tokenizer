@@ -3,14 +3,40 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 import os
-import h5py
 import glob
+import argparse
 from tqdm import tqdm
+
+"""
+Usage: python fft_analysis.py --config_path /path/to/config.yaml --output_dir /path/to/output
+"""
 
 def load_config(config_path):
     """Load configuration from YAML file."""
     with open(config_path, 'r') as file:
         return yaml.safe_load(file)
+
+def resize_waveforms(waveforms, expected_waveform_length=2500):
+    """
+    Resize waveforms to the expected length by downsampling.
+    Assumes waveforms shape is (n_samples, length, channels) or (length, channels).
+    """
+    
+    if len(waveforms.shape) == 2:  
+        if waveforms.shape[0] <= expected_waveform_length:
+            return waveforms
+        step = waveforms.shape[0] // expected_waveform_length
+        return waveforms[::step, :]
+    
+    resized_waveforms = []
+    for waveform in waveforms:
+        if waveform.shape[0] <= expected_waveform_length:
+            resized_waveforms.append(waveform)
+        else:
+            step = waveform.shape[0] // expected_waveform_length
+            resized_waveforms.append(waveform[::step, :])
+    
+    return np.array(resized_waveforms)
 
 def load_ecg_data_from_parquet(parquet_path, max_samples=20000):
     """Load ECG data from parquet file, limiting to max_samples."""
@@ -73,12 +99,6 @@ def load_waveform_from_path(path):
     
     if ext == '.npy':
         return np.load(path)
-    elif ext == '.h5' or ext == '.hdf5':
-        with h5py.File(path, 'r') as f:
-            for key in f.keys():
-                return np.array(f[key])
-    elif ext == '.csv':
-        return np.loadtxt(path, delimiter=',')
     else:
         print(f"Unsupported file format: {ext}")
         return None
@@ -113,12 +133,25 @@ def plot_mean_spectrum(signals, fs=250, color='blue', label='Mean Spectrum'):
         return None, None
     
     mean_magnitude_spectrum = np.mean(all_magnitude_spectra, axis=0)
-    plt.plot(fft_freq[:len(fft_freq)//2], np.log(mean_magnitude_spectrum[:len(fft_freq)//2] + 1e-10), 
+    plt.plot(fft_freq[:len(fft_freq)//2], np.log(mean_magnitude_spectrum[:len(fft_freq)//2]), 
              color=color, label=label)
     return fft_freq, mean_magnitude_spectrum
 
 def main():
-    config_path = "/volume/ECG_tokenizer/config/vqvae_training/base_config.yaml"
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Analyze ECG data with FFT')
+    parser.add_argument('--config_path', type=str, 
+                        default="/volume/ECG_tokenizer/config/vqvae_training/base_config.yaml",
+                        help='Path to the configuration YAML file')
+    parser.add_argument('--output_dir', type=str, 
+                        default="/volume/ECG_tokenizer/outputs",
+                        help='Directory to save output plots')
+    args = parser.parse_args()
+    
+    # Load configuration from command-line argument
+    config_path = args.config_path
+    output_dir = args.output_dir
+    
     config = load_config(config_path)
     mimic_path = config["train_parquet_MIMIC_file"]
     mhi_path = config["train_parquet_MHI_file"]
@@ -130,6 +163,14 @@ def main():
         print("\n=== Processing MIMIC dataset ===")
         mimic_data = load_ecg_data_from_parquet(mimic_path, max_samples=20000)
         if len(mimic_data) > 0:
+            # Check the shape of MIMIC data and resize if needed
+            signal_shape = mimic_data[0].shape
+            print(f"Original MIMIC sample shape: {signal_shape}")
+            if signal_shape[0] > 2500:  # Assuming first dimension is the length
+                print("Resizing MIMIC waveforms from 5000 to 2500 samples...")
+                mimic_data = resize_waveforms(mimic_data, expected_waveform_length=2500)
+                print(f"After resizing, MIMIC sample shape: {mimic_data[0].shape}")
+            
             plot_mean_spectrum(mimic_data, color='blue', label='MIMIC')
             data_plotted = True
     except Exception as e:
@@ -139,6 +180,7 @@ def main():
         print("\n=== Processing MHI dataset ===")
         mhi_data = load_ecg_data_from_parquet(mhi_path, max_samples=20000)
         if len(mhi_data) > 0:
+            mhi_data = np.array([np.squeeze(signal, axis=2) for signal in mhi_data])
             plot_mean_spectrum(mhi_data, color='red', label='MHI')
             data_plotted = True
     except Exception as e:
@@ -158,10 +200,10 @@ def main():
         plt.ylabel('Log Magnitude')
         plt.grid(True)
         plt.legend()
-        output_dir = "/volume/ECG_tokenizer/outputs"
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(f"{output_dir}/ecg_fft_comparison.png")
-        print(f"\nPlot saved to {output_dir}/ecg_fft_comparison.png")
+        output_file = os.path.join(output_dir, "ecg_fft_comparison.png")
+        plt.savefig(output_file)
+        print(f"\nPlot saved to {output_file}")
     else:
         print("\nNo data was successfully plotted.")
 
