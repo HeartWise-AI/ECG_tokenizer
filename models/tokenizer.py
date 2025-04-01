@@ -38,16 +38,20 @@ class ECG_Tokenizer_Quantizer(nn.Module):
     It takes the features provided by the Encoder and quantizes them,
     returning quantized features along with indices and commitment loss.
     """
-    def __init__(self, **vq_kwargs):
+    def __init__(
+        self, 
+        num_quantizers: int, 
+        codebook_size: int
+    ):
         super(ECG_Tokenizer_Quantizer, self).__init__()
         # Adjust the latent dimension based on input timesteps.
         latent_dim = 82
 
         self.quantizer = ResidualVQ(
             dim=latent_dim,
-            num_quantizers=8,
+            num_quantizers=num_quantizers,
+            codebook_size=codebook_size,
             commitment_weight=0.25,
-            **vq_kwargs
         )
 
     def forward(self, x):
@@ -99,7 +103,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self, 
         encoder_name="ECG_Tokenizer_Conv_Encoder", 
         quantizer_name="ECG_Tokenizer_Quantizer", 
-        decoder_name="ECG_Tokenizer_Conv_Decoder"
+        decoder_name="ECG_Tokenizer_Conv_Decoder",
+        num_quantizers=8,
+        codebook_size=512
     ):
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
@@ -110,7 +116,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
         # Retrieve the components from the registry using the provided names
         self.encoder = ModelRegistry.get(encoder_name)()
-        self.quantizer = ModelRegistry.get(quantizer_name)()
+        self.quantizer = ModelRegistry.get(quantizer_name)(
+            num_quantizers=num_quantizers,
+            codebook_size=codebook_size
+        )
         self.decoder = ModelRegistry.get(decoder_name)()
 
     def forward(self, x):
