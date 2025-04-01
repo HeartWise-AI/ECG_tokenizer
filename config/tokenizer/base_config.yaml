@@ -23,7 +23,7 @@ encoder_name: !!str "ECG_Tokenizer_Conv_Encoder"
 quantizer_name: !!str "ECG_Tokenizer_Quantizer"
 decoder_name: !!str "ECG_Tokenizer_Conv_Decoder"
 num_quantizers: !!int 8
-codebook_size: !!int 1024
+codebook_size: !!int 512
 # Dataset parameters
 train_dataset_path: !!str "parquets/mimic_mhi/mimic_mhi_train.parquet"
 validation_dataset_path: !!str "parquets/mimic/mimic_v4_clean_test.parquet"
