@@ -23,6 +23,9 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     gamma: float
     use_amp: bool
     # VQVAE parameters
+    encoder_name: str
+    quantizer_name: str
+    decoder_name: str
     num_quantizers: int
     codebook_size: int
     # Dataset parameters
