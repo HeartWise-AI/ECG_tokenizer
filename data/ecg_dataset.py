@@ -27,7 +27,7 @@ class ECGDataset(Dataset):
     def __getitem__(self, idx):
         
         try:
-            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data[idx]['waveform_path'])
+            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data.iloc[idx]['waveform_path'])
             
             # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
             if len(unnormalized_signal.shape) == 3:
@@ -52,6 +52,9 @@ class ECGDataset(Dataset):
             signal_min: float = unnormalized_signal.min()
             signal_max: float = unnormalized_signal.max()
             signal_range: float = signal_max - signal_min
+            
+            if signal_range == 0:
+                return self.__getitem__((idx + 1) % len(self))
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
 
