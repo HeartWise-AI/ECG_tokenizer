@@ -121,7 +121,7 @@ class ECGTokenizerRunner:
                 
         data_iter = tqdm(
             dataloader, 
-            desc=f"{mode} epoch {epoch}/{self.config.num_epochs}",
+            desc=f"[GPU {self.config.device}]: {mode} epoch {epoch}/{self.config.num_epochs}",
             leave=True,
             disable=not self.config.is_ref_device
         )
@@ -132,33 +132,27 @@ class ECGTokenizerRunner:
             device_ids=self.config.device
         )
         
-        epoch_metrics: dict[str, float] = {}
+        epoch_losses = {
+            "rec_loss": torch.zeros(1, device=self.config.device),
+            "cmt_loss": torch.zeros(1, device=self.config.device),
+            "active_codes": torch.zeros(1, device=self.config.device)
+        }
         
         for batch_idx, batch in enumerate(data_iter):
             signals: torch.Tensor = batch["signal"].float().to(self.config.device)
             
-            # Run the step function
-            outputs: dict[str, torch.Tensor] = step_fn(
-                signals=signals
-            )
+            outputs: dict[str, torch.Tensor] = step_fn(signals=signals)
             
-            # Accumulate metrics
-            epoch_metrics["rec_loss"] = epoch_metrics.get("rec_loss", 0.0) + outputs["rec_loss"].item()
-            epoch_metrics["cmt_loss"] = epoch_metrics.get("cmt_loss", 0.0) + outputs["cmt_loss"].mean().item()
-            epoch_metrics["active_codes"] = epoch_metrics.get("active_codes", 0.0) + outputs["indices"].unique().numel() / self.config.codebook_size * 100
+            # Accumulate metrics on GPU
+            epoch_losses["rec_loss"] += outputs["rec_loss"]
+            epoch_losses["cmt_loss"] += outputs["cmt_loss"].mean()
+            epoch_losses["active_codes"] += outputs["indices"].unique().numel() / self.config.codebook_size * 100
             
-            # Calculate running means
-            current_mean_rec = epoch_metrics["rec_loss"] / (batch_idx + 1)
-            current_mean_cmt = epoch_metrics["cmt_loss"] / (batch_idx + 1)
-            current_mean_active = epoch_metrics["active_codes"] / (batch_idx + 1)
-            
+            # Update progress bar with current batch metrics
             data_iter.set_postfix({
                 "rec_loss": f"{outputs['rec_loss'].item():.4f}",
-                "mean_rec": f"{current_mean_rec:.4f}",
                 "cmt_loss": f"{outputs['cmt_loss'].mean().item():.4f}",
-                "mean_cmt": f"{current_mean_cmt:.4f}",
-                "active_codes": f"{outputs['indices'].unique().numel() / self.config.codebook_size * 100:.2f}",
-                "mean_active": f"{current_mean_active:.2f}"
+                "active_codes": f"{outputs['indices'].unique().numel() / self.config.codebook_size * 100:.2f}"
             })
             
             # Sync across processes.
@@ -167,12 +161,16 @@ class ECGTokenizerRunner:
                 device_ids=self.config.device
             )
                         
-        # Normalize the epoch metrics
-        for k in epoch_metrics:
-            epoch_metrics[k] /= len(dataloader)
+        # Gather and normalize metrics once at the end of epoch
+        gathered_metrics = {}
+        for k in epoch_losses:
+            gathered_metrics[k] = DistributedUtils.gather_loss(
+                [epoch_losses[k].item()], 
+                self.config.device
+            ) / len(dataloader)
         
         # Return the epoch metrics
-        return epoch_metrics
+        return gathered_metrics
     
     def _train_step(
         self, 
@@ -194,7 +192,7 @@ class ECGTokenizerRunner:
         
         # Unscale gradients and apply gradient clipping
         self.scaler.unscale_(self.optimizer)
-        # torch.nn.utils.clip_grad_norm_(self.ecg_tokenizer.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.ecg_tokenizer.parameters(), max_norm=1.0)
         
         # Sync gradients across processes before optimizer step
         DistributedUtils.sync_process_group(
