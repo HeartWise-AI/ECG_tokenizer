@@ -31,12 +31,16 @@ class ECGTokenizerTrainingProject:
         
     def _setup_training_objects(self)->dict[str, Any]:
         
-        training_dataloader: DataLoader = get_distributed_ecg_dataloader(
+        train_dataloader: DataLoader = get_distributed_ecg_dataloader(
             parquet_file=self.config.train_dataset_path,
             expected_waveform_length=self.config.waveform_length,
             num_leads=self.config.num_leads,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=True,
+            pin_memory=True
         )
         
         validation_dataloader: DataLoader = get_distributed_ecg_dataloader(
@@ -45,6 +49,10 @@ class ECGTokenizerTrainingProject:
             num_leads=self.config.num_leads,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=False,
+            pin_memory=True
         )
         
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
@@ -95,7 +103,7 @@ class ECGTokenizerTrainingProject:
             "scheduler": scheduler,
             "scaler": scaler,
             "ecg_tokenizer": ecg_tokenizer,
-            "training_dataloader": training_dataloader,
+            "train_dataloader": train_dataloader,
             "validation_dataloader": validation_dataloader
         }
     
