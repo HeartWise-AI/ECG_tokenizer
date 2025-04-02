@@ -52,6 +52,7 @@ class ECG_Tokenizer_Quantizer(nn.Module):
             num_quantizers=num_quantizers,
             codebook_size=codebook_size,
             commitment_weight=0.25,
+            implicit_neural_codebook=True
         )
 
     def forward(self, x):
