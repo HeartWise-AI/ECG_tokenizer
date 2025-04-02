@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 
@@ -27,6 +28,9 @@ class ECGDataset(Dataset):
     def __getitem__(self, idx):
         
         try:
+            if not os.path.exists(self.data.iloc[idx]['waveform_path']):
+                return self.__getitem__((idx + 1) % len(self))
+            
             unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data.iloc[idx]['waveform_path'])
             
             # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
