@@ -249,7 +249,7 @@ class ECGTokenizerRunner:
             
             # Get the signal pair and loss
             loss, input_sig, recon_sig = worst_case
-            print(input_sig.shape, recon_sig.shape)
+
             # Convert to numpy and ensure float32, take first signal and first lead
             for lead in range(self.config.num_leads):
                 orig_sig = input_sig[0, lead].float().numpy()
@@ -276,7 +276,7 @@ class ECGTokenizerRunner:
             
             # Get the signal pair and loss
             loss, input_sig, recon_sig = best_case
-            print(input_sig.shape, recon_sig.shape)
+
             # Create figures for best and worst cases
             fig, axs = plt.subplots(self.config.num_leads, 2, figsize=(20, 30))
             
