@@ -245,39 +245,65 @@ class ECGTokenizerRunner:
             best_case = min(best_heap, key=lambda x: x[0])   # Get entry with lowest loss
             
             # Create figures for best and worst cases
-            for case, case_data in [("worst", worst_case), ("best", best_case)]:
-                # Create two subplots side by side
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 5))
+            fig, axs = plt.subplots(self.config.num_leads, 2, figsize=(20, 30))
+            
+            # Get the signal pair and loss
+            loss, input_sig, recon_sig = worst_case
+            print(input_sig.shape, recon_sig.shape)
+            # Convert to numpy and ensure float32, take first signal and first lead
+            for lead in range(self.config.num_leads):
+                orig_sig = input_sig[0, lead].float().numpy()
+                recon_sig_lead = recon_sig[0, lead].float().numpy()
+                axs[lead, 0].plot(orig_sig, 'b-', label='Original', alpha=0.7)
+                axs[lead, 0].set_title(f'Worst Case - Original Signal (Lead {lead})')
+                axs[lead, 0].legend()
+                axs[lead, 0].grid(True)
                 
-                # Get the signal pair and loss
-                loss, input_sig, recon_sig = case_data
-                
-                # Convert to numpy and ensure float32, take first signal and first lead
-                input_sig = input_sig[0, 0].float().numpy()
-                recon_sig = recon_sig[0, 0].float().numpy()
-                
-                # Plot original signal on the left
-                ax1.plot(input_sig, 'b-', label='Original', alpha=0.7)
-                ax1.set_title(f'{case.capitalize()} Case - Original Signal')
-                ax1.legend()
-                ax1.grid(True)
-                
-                # Plot reconstruction on the right
-                ax2.plot(recon_sig, 'r-', label='Reconstruction', alpha=0.7)
-                ax2.set_title(f'{case.capitalize()} Case - Reconstruction (Loss: {loss:.4f})')
-                ax2.legend()
-                ax2.grid(True)
+                axs[lead, 1].plot(recon_sig_lead, 'r-', label='Reconstruction', alpha=0.7)
+                axs[lead, 1].set_title(f'Worst Case - Reconstruction (Lead {lead}, Loss: {loss:.4f})')
+                axs[lead, 1].legend()
+                axs[lead, 1].grid(True)
                 
                 plt.tight_layout()
+            
+            # Log to wandb
+            self.wandb_wrapper.log({
+                f"{mode}/worst_reconstructions": wandb.Image(fig),
+                f"{mode}/worst_loss": loss
+            })
+            
+            plt.close(fig)
+            
+            # Get the signal pair and loss
+            loss, input_sig, recon_sig = best_case
+            print(input_sig.shape, recon_sig.shape)
+            # Create figures for best and worst cases
+            fig, axs = plt.subplots(self.config.num_leads, 2, figsize=(20, 30))
+            
+            # Convert to numpy and ensure float32, take first signal and first lead
+            for lead in range(self.config.num_leads):
+                orig_sig = input_sig[0, lead].float().numpy()
+                recon_sig_lead = recon_sig[0, lead].float().numpy()
+                axs[lead, 0].plot(orig_sig, 'b-', label='Original', alpha=0.7)
+                axs[lead, 0].set_title(f'Best Case - Original Signal (Lead {lead})')
+                axs[lead, 0].legend()
+                axs[lead, 0].grid(True)
                 
-                # Log to wandb
-                self.wandb_wrapper.log({
-                    f"{mode}/{case}_reconstructions": wandb.Image(fig),
-                    f"{mode}/{case}_loss": loss
-                })
+                axs[lead, 1].plot(recon_sig_lead, 'r-', label='Reconstruction', alpha=0.7)
+                axs[lead, 1].set_title(f'Best Case - Reconstruction (Lead {lead}, Loss: {loss:.4f})')
+                axs[lead, 1].legend()
+                axs[lead, 1].grid(True)
                 
-                plt.close(fig)
-                
+                plt.tight_layout()
+            
+            # Log to wandb
+            self.wandb_wrapper.log({
+                f"{mode}/best_reconstructions": wandb.Image(fig),
+                f"{mode}/best_loss": loss
+            })
+            
+            plt.close(fig)
+            
         # Return the epoch metrics
         return gathered_metrics
     
