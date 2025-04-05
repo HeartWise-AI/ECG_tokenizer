@@ -36,3 +36,5 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     # Waveform parameters
     waveform_length: int
     num_leads: int
+    normalize_waveforms: bool
+    lead_stats: dict[str, dict[str, float]]
