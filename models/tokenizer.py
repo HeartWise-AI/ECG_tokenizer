@@ -85,7 +85,7 @@ class ECG_Tokenizer_Conv_Decoder(nn.Module):
     def forward(self, x):
         for layer in self.decoder_layers:
             x = layer(x)
-        return x.clamp(-1, 1)
+        return x   
 
 @ModelRegistry.register("ECG_Tokenizer_Training")
 class ECG_Tokenizer_Wrapper(nn.Module):

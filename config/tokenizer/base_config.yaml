@@ -2,12 +2,12 @@
 pipeline_project: !!str "ECG_Tokenizer_Training"
 output_dir: !!str "checkpoints"
 run_mode: !!str "train"
-num_epochs: !!int 1
+num_epochs: !!int 50
 seed: !!int 42
 # wandb parameters
 wandb_project: !!str "ECG_Tokenizer_Training"
-wandb_entity: !!str "jacques-delfrate"
-use_wandb: !!bool false
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool true
 # training parameters
 lr: !!float 3e-4
 scheduler_name: !!str "step"
@@ -25,10 +25,48 @@ decoder_name: !!str "ECG_Tokenizer_Conv_Decoder"
 num_quantizers: !!int 8
 codebook_size: !!int 512
 # Dataset parameters
-train_dataset_path: !!str "parquets/mimic_mhi/mimic_mhi_train.parquet"
-validation_dataset_path: !!str "parquets/mimic/mimic_v4_clean_test.parquet"
+train_dataset_path: !!str "parquets/mhi/train_trial_v1.1_with_report_path_exists.parquet"
+validation_dataset_path: !!str "parquets/mhi/test_trial_v1.1_with_report_subset.parquet"
 num_workers: !!int 12
 batch_size: !!int 32
 # waveform parameters
 waveform_length: !!int 2500
 num_leads: !!int 12
+normalize_waveforms: !!bool true
+lead_stats:
+  I:
+    mean: !!float -0.982577
+    std: !!float 33.551235
+  II:
+    mean: !!float -0.683182
+    std: !!float 35.616466
+  III:
+    mean: !!float 0.299394
+    std: !!float 40.365378
+  aVR:
+    mean: !!float 0.832880
+    std: !!float 28.102812
+  aVL:
+    mean: !!float -0.640986
+    std: !!float 32.563651
+  aVF:
+    mean: !!float -0.191894
+    std: !!float 34.169092
+  V1:
+    mean: !!float -1.351383
+    std: !!float 54.328896
+  V2:
+    mean: !!float -1.366718
+    std: !!float 72.522918
+  V3:
+    mean: !!float -1.325758
+    std: !!float 66.522440
+  V4:
+    mean: !!float -1.091183
+    std: !!float 61.623552
+  V5:
+    mean: !!float -0.937534
+    std: !!float 57.341500
+  V6:
+    mean: !!float -0.882349
+    std: !!float 52.247728
