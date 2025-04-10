@@ -27,6 +27,8 @@ jobs:
         
     - name: Test with pytest
       run: |
+        . .venv/bin/activate
+        pip install pytest pytest-cov
         pytest tests/ -sv --cov
         
     - name: Upload coverage reports to Codecov
