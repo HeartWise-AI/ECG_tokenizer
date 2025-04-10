@@ -43,7 +43,8 @@ def load_api_keys(path: str) -> dict[str, str]:
     except FileNotFoundError:
         raise FileNotFoundError(f"The API keys file at {path} does not exist.")
     except json.JSONDecodeError:
-        raise json.JSONDecodeError(f"The API keys file at {path} is not a valid JSON file.")
+        # Simply re-raise the exception without trying to create a new one
+        raise
     return keys
 
 def save_to_csv(
