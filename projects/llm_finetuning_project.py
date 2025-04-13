@@ -15,6 +15,10 @@ from utils.registry import (
 from utils.ddp import DistributedUtils
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
+from utils.files_handler import (
+    generate_output_dir_name, 
+    backup_config
+)
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from runners.llm_finetuning_runner import LLMFinetuningRunner
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
@@ -72,7 +76,7 @@ class LLMFinetuningProject:
             reducer_name=self.config.embedding_reducer_name,
             reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
-
+        print(f"Embedding size: {ecg_embedding_size}")
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
@@ -147,7 +151,26 @@ class LLMFinetuningProject:
             "val_dataloader": validation_dataloader
         }
     
+    def _setup_project(self):
+        # Generate the output directory name
+        self.config.output_dir = generate_output_dir_name(
+            config=self.config, 
+            run_id=self.wandb_wrapper.get_run_id() if self.wandb_wrapper.is_initialized() else None
+        )
+        
+        # Create the output directory
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        
+        # Backup the configuration file
+        backup_config(
+            config=self.config,
+            output_dir=self.config.output_dir
+        )
+    
     def run(self):
+        if self.config.is_ref_device:
+            self._setup_project()        
+        
         runner_args = {
             "config": self.config,
             "wandb_wrapper": self.wandb_wrapper

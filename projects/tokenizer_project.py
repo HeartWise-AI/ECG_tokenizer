@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import torch
@@ -11,9 +12,14 @@ from utils.registry import (
     ModelRegistry,
     RunnerRegistry
 )
+from utils.enums import RunMode
 from utils.ddp import DistributedUtils
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import ECGTokenizerTrainingConfig
+from utils.files_handler import (
+    generate_output_dir_name, 
+    backup_config
+)
 from models.tokenizer import ECG_Tokenizer_Wrapper
 from runners.tokenizer_runner import ECGTokenizerRunner
 from data.ecg_dataset import get_distributed_ecg_dataloader
@@ -30,7 +36,7 @@ class ECGTokenizerTrainingProject:
         self.wandb_wrapper = wandb_wrapper
         
     def _setup_training_objects(self)->dict[str, Any]:
-        
+                
         train_dataloader: DataLoader = get_distributed_ecg_dataloader(
             parquet_file=self.config.train_dataset_path,
             expected_waveform_length=self.config.waveform_length,
@@ -114,15 +120,34 @@ class ECGTokenizerTrainingProject:
     def _setup_inference_objects(self)->dict[str, Any]:
         raise NotImplementedError("Subclasses must implement this method")
     
-    def run(self):
+    def _setup_project(self):
+        # Generate the output directory name
+        self.config.output_dir = generate_output_dir_name(
+            config=self.config, 
+            run_id=self.config.run_id if self.wandb_wrapper.is_initialized() else None
+        )
+        
+        # Create the output directory
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        
+        # Backup the configuration file
+        backup_config(
+            config=self.config,
+            output_dir=self.config.output_dir
+        )
+        
+    def run(self):    
+        if self.config.is_ref_device:
+            self._setup_project()    
+        
         runner_args = {
             "config": self.config,
             "wandb_wrapper": self.wandb_wrapper
         }
-        if self.config.run_mode == "train":
+        if self.config.run_mode == RunMode.TRAIN:
             training_objects: dict[str, Any] = self._setup_training_objects()
             runner_args.update(training_objects)
-        elif self.config.run_mode == "inference":
+        elif self.config.run_mode == RunMode.INFERENCE:
             raise NotImplementedError("Inference is not implemented")
         
         runner: ECGTokenizerRunner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)

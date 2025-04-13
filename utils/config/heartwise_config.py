@@ -15,7 +15,10 @@ class HeartWiseConfig:
     wandb_project: str
     wandb_entity: str
     use_wandb: bool
-    
+                
+    # Base config path
+    base_config_path: str
+                
     @classmethod
     def update_config_with_args(cls, base_config: 'HeartWiseConfig', args: Any) -> 'HeartWiseConfig':  
         """Update a HeartWiseConfig instance with command line arguments."""
@@ -37,11 +40,15 @@ class HeartWiseConfig:
             raise ValueError("pipeline_project is not set in the yaml file")
             
         registered_config = ConfigRegistry.get(pipeline_project)
-
+        
         data_parameters: Dict[str, Any] = {}
         for key, value in yaml_config.items():
             if key in registered_config.__dataclass_fields__:
                 data_parameters[key] = value
+        
+        # Set the base_config_path
+        data_parameters['base_config_path'] = yaml_path
+        
         return registered_config(**data_parameters)    
 
     @classmethod
@@ -50,7 +57,7 @@ class HeartWiseConfig:
         config.device = int(os.environ["LOCAL_RANK"])
         config.world_size = int(os.environ["WORLD_SIZE"])
         config.is_ref_device = (int(os.environ["LOCAL_RANK"]) == 0)
-
+        
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for wandb."""
         return asdict(self) 
