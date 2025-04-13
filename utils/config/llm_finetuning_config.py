@@ -24,6 +24,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     gamma: float
     run_mode: str
     reducer_dropout: float
+    num_warmup_percent: float
+    num_hard_restarts_cycles: float
+    warm_restart_tmult: int
     
     # Tokenizer parameters
     tokenizer_name: str

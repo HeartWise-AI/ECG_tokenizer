@@ -12,7 +12,7 @@ def get_scheduler(
     optimizer: torch.optim.Optimizer, 
     num_epochs: int,
     train_dataloader: torch.utils.data.DataLoader,
-    factor: float = 0.3,
+    gamma: float = 0.3,
     step_size: int = 15,
     gradient_accumulation_steps: int = 1,
     num_warmup_percent: float = 0.1,
@@ -30,7 +30,7 @@ def get_scheduler(
         optimizer (torch.optim.Optimizer): Optimizer to attach the scheduler to.
         num_epochs (int): Number of training epochs.
         train_dataloader (torch.utils.data.DataLoader): Training data loader.
-        factor (float, optional): Factor by which to reduce LR for StepLR. Defaults to 0.3.
+        gamma (float, optional): Factor by which to reduce LR for StepLR. Defaults to 0.3.
         step_size (int, optional): Number of epochs between LR reductions for StepLR. Defaults to 15.
         gradient_accumulation_steps (int, optional): Number of gradient accumulation steps. Defaults to 1.
         num_warmup_percent (float, optional): Percentage of total steps for warmup. Defaults to 0.1.
@@ -56,7 +56,7 @@ def get_scheduler(
         return torch.optim.lr_scheduler.StepLR(
             optimizer, 
             step_size=step_size, 
-            gamma=factor
+            gamma=gamma
         )
 
     elif scheduler_name == 'cosine_warm_restart':
