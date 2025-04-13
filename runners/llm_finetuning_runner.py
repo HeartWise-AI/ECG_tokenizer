@@ -15,7 +15,7 @@ from utils.registry import (
 )
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from utils.schedulers import scheduler_is_per_iteration
 from utils.metrics.llm_metrics import (
     RougeMetric,
     BleuMetric,
@@ -24,6 +24,7 @@ from utils.metrics.llm_metrics import (
     update_worst_metric,
     update_random_batch_metric
 )
+from models.gpt2_with_embeddings import GPT2WithEmbedding
 
 import random
 from tqdm import tqdm
@@ -56,6 +57,7 @@ class LLMFinetuningRunner:
         self.scheduler: LRScheduler = scheduler
         self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
+        self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
     
     def execute(
         self, 
@@ -89,6 +91,10 @@ class LLMFinetuningRunner:
                 self.wandb_wrapper.log(
                     epoch_metrics
                 )
+            
+            # Step the scheduler if it should be updated per-epoch
+            if self.scheduler and (not self.scheduler_per_iteration):
+                self.scheduler.step()
             
             # Sync the process group
             DistributedUtils.sync_process_group(
@@ -314,6 +320,10 @@ class LLMFinetuningRunner:
         
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        
+        # Step the scheduler if it should be updated per-iteration
+        if self.scheduler and self.scheduler_per_iteration:
+            self.scheduler.step()
         
         return {
             "loss": loss
