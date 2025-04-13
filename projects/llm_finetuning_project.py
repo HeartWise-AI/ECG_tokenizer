@@ -76,7 +76,20 @@ class LLMFinetuningProject:
             reducer_name=self.config.embedding_reducer_name,
             reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
-        print(f"Embedding size: {ecg_embedding_size}")
+
+        param_groups = [
+            {
+                "params": model.gpt2.parameters(),
+                "lr": self.config.llm_lr,
+                "weight_decay": self.config.llm_weight_decay
+            },
+            {
+                "params": model.embedding_reducer.parameters(),
+                "lr": self.config.embedding_reducer_lr,
+                "weight_decay": self.config.embedding_reducer_weight_decay
+            }
+        ]
+        
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
@@ -85,9 +98,9 @@ class LLMFinetuningProject:
 
         # Get the optimizer
         if self.config.optimizer == "AdamW":
-            optimizer: AdamW = torch.optim.AdamW(model.parameters(), lr=self.config.lr)
+            optimizer: AdamW = torch.optim.AdamW(param_groups)
         elif self.config.optimizer == "RAdam":
-            optimizer: RAdam = torch.optim.RAdam(model.parameters(), lr=self.config.lr)
+            optimizer: RAdam = torch.optim.RAdam(param_groups)
 
         # Get the scheduler
         if self.config.scheduler_type == "step":

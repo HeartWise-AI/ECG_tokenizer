@@ -9,10 +9,12 @@ from utils.config.heartwise_config import HeartWiseConfig
 class LLMFinetuningConfig(HeartWiseConfig):   
     # Training hyperparameters
     seed: int
-    lr: float
+    llm_lr: float
+    embedding_reducer_lr: float
     num_workers: int
     batch_size: int
-    weight_decay: float
+    llm_weight_decay: float
+    embedding_reducer_weight_decay: float
     num_epochs: int
     criterion: str
     optimizer: str

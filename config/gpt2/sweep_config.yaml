@@ -1,6 +1,6 @@
 command:
   - torchrun
-  - "--nproc_per_node=3"
+  - "--nproc_per_node=4"
   - "--master_port=29500"
   - "scripts/main.py"
   - "--base_config"
@@ -8,7 +8,7 @@ command:
   - ${args}
 
 name: "gpt2_mhi"
-project: "ECG_tokenizer_LLM_finetuning_mhi"
+project: "ECG_tokenizer_LLM_finetuning_MHI"
 entity: "mhi_ai"
 
 method: bayes
@@ -17,7 +17,12 @@ metric:
   goal: minimize
 
 parameters:
-  lr:
+  llm_lr:
+    distribution: log_uniform_values
+    min: 5e-5
+    max: 1e-3
+
+  embedding_reducer_lr:
     distribution: log_uniform_values
     min: 5e-5
     max: 1e-3
@@ -25,7 +30,7 @@ parameters:
   reducer_dropout:
     distribution: uniform
     min: 0.0
-    max: 0.5
+    max: 0.7
 
   batch_size:
     values: [8, 16, 32, 64]
@@ -39,6 +44,12 @@ parameters:
   step_size:
     values: [1, 5, 10, 15, 20]
 
+  llm_weight_decay:
+    values: [0.0, 0.001, 0.01, 0.1]
+
+  embedding_reducer_weight_decay:
+    values: [0.0, 0.001, 0.01, 0.1]
+
   gamma:
     distribution: uniform
     min: 0.1
@@ -48,7 +59,7 @@ parameters:
     values: [512]
 
   project:
-    values: ["ECG_tokenizer_LLM_finetuning_mhi"]
+    values: ["ECG_tokenizer_LLM_finetuning_MHI"]
 
   entity:
     values: ["mhi_ai"]
