@@ -1,6 +1,6 @@
 import os
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 from dataclasses import dataclass, asdict
 
 from utils.files_handler import load_yaml
@@ -42,9 +42,15 @@ class HeartWiseConfig:
         registered_config = ConfigRegistry.get(pipeline_project)
         
         data_parameters: Dict[str, Any] = {}
+        undefined_parameters: List[str] = []
         for key, value in yaml_config.items():
             if key in registered_config.__dataclass_fields__:
                 data_parameters[key] = value
+            else:
+                undefined_parameters.append(key)
+        
+        if len(undefined_parameters) > 0:
+            raise ValueError(f"{undefined_parameters} were defined in the {yaml_path} file but not in the registered config {registered_config.__name__}")
         
         # Set the base_config_path
         data_parameters['base_config_path'] = yaml_path
