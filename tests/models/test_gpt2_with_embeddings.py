@@ -13,6 +13,7 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         # Mock the GPT2 model and embedding reducer
         self.mock_gpt2_instance = MagicMock()
         self.mock_gpt2_instance.config.n_embd = 768
+        self.mock_gpt2_instance.config.eos_token_id = 50256
         self.mock_gpt2_instance.get_input_embeddings().weight.size = lambda: torch.Size([50257, 768])
         mock_gpt2.from_pretrained.return_value = self.mock_gpt2_instance
         
