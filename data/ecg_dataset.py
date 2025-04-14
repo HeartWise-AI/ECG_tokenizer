@@ -81,12 +81,16 @@ class ECGDataset(Dataset):
                 else:
                     signal = unnormalized_signal
             except Exception as e:
-                raise print(f"Error normalizing signal: {e}")
+                print(f"Error normalizing signal: {e}")
+                raise Exception(f"Error normalizing signal: {e}")
 
-            return {'signal': np.transpose(signal, (1, 0))}
+            return {
+                'signal': np.transpose(signal, (1, 0)), 
+                'waveform_path': self.data.iloc[idx]['waveform_path']
+            }
         
         except Exception as e:
-            print(f"Error processing index {self.data[idx]['waveform_path']}: {str(e)}")
+            print(f"Error processing index {self.data.iloc[idx]['waveform_path']}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
 
 
