@@ -40,6 +40,11 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.step_size = 10
         mock_config.gamma = 0.1
         mock_config.num_epochs = 100
+        mock_config.llm_lr = 0.0001
+        mock_config.llm_weight_decay = 0.01
+        mock_config.embedding_reducer_lr = 0.0001
+        mock_config.embedding_reducer_weight_decay = 0.01
+        
         mock_wandb_wrapper = MagicMock()
         
         # Mock return values
