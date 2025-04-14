@@ -81,12 +81,14 @@ class LLMFinetuningProject:
             {
                 "params": model.gpt2.parameters(),
                 "lr": self.config.llm_lr,
-                "weight_decay": self.config.llm_weight_decay
+                "weight_decay": self.config.llm_weight_decay,
+                "name": "llm"
             },
             {
                 "params": model.embedding_reducer.parameters(),
                 "lr": self.config.embedding_reducer_lr,
-                "weight_decay": self.config.embedding_reducer_weight_decay
+                "weight_decay": self.config.embedding_reducer_weight_decay,
+                "name": "embedding_reducer"
             }
         ]
         
