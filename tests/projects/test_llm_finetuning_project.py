@@ -22,7 +22,6 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config = MagicMock(spec=LLMFinetuningConfig)
         mock_config.optimizer = "AdamW"
         mock_config.scheduler_type = "step"
-        # Add missing attributes
         mock_config.train_dataset_path = "/path/to/train"
         mock_config.train_embeddings_path = "/path/to/train_embeddings"
         mock_config.validation_dataset_path = "/path/to/validation"
@@ -41,7 +40,6 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.step_size = 10
         mock_config.gamma = 0.1
         mock_config.num_epochs = 100
-        
         mock_wandb_wrapper = MagicMock()
         
         # Mock return values
@@ -125,21 +123,24 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.run_mode = "train"
         # Add missing attribute
         mock_config.runner_name = "LLM_Training_Runner"
+        mock_config.is_ref_device = True
         mock_wandb_wrapper = MagicMock()
-        
+    
         # Create a mock runner
         mock_runner = MagicMock()
         mock_runner_registry.get.return_value.return_value = mock_runner
-        
+    
         # Create partial mock of the project class to avoid actually setting up training objects
-        with patch.object(LLMFinetuningProject, '_setup_training_objects') as mock_setup:
+        with patch.object(LLMFinetuningProject, '_setup_training_objects') as mock_setup, \
+             patch('projects.llm_finetuning_project.backup_config'), \
+             patch('projects.llm_finetuning_project.generate_output_dir_name', return_value="mock_output_dir"):
             mock_setup.return_value = {
                 "train_dataloader": MagicMock(),
                 "val_dataloader": MagicMock(),
                 "optimizer": MagicMock(),
                 "scheduler": MagicMock(),
                 "scaler": MagicMock(),
-                "model": MagicMock(),
+                "model": MagicMock()
             }
             
             # Create the project and call run
