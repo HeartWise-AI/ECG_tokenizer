@@ -25,7 +25,8 @@ class TestHeartWiseConfig:
             pipeline_project="test_project",
             wandb_project="test_wandb",
             wandb_entity="test_entity",
-            use_wandb=True
+            use_wandb=True,
+            base_config_path="config/gpt2/base_config.yaml"
         )
         config_dict = config.to_dict()
         
@@ -34,7 +35,7 @@ class TestHeartWiseConfig:
         assert config_dict["wandb_project"] == "test_wandb"
         assert config_dict["wandb_entity"] == "test_entity"
         assert config_dict["use_wandb"] is True
-
+        assert config_dict["base_config_path"] == "config/gpt2/base_config.yaml"
     @patch.dict(os.environ, {"LOCAL_RANK": "1", "WORLD_SIZE": "4"})
     def test_set_gpu_info_in_place(self):
         """Test that set_gpu_info_in_place correctly sets GPU info from environment variables"""
@@ -42,7 +43,8 @@ class TestHeartWiseConfig:
             pipeline_project="test_project",
             wandb_project="test_wandb",
             wandb_entity="test_entity",
-            use_wandb=True
+            use_wandb=True,
+            base_config_path="config/gpt2/base_config.yaml"
         )
         
         HeartWiseConfig.set_gpu_info_in_place(config)
@@ -85,7 +87,8 @@ class TestHeartWiseConfig:
             "waveform_length": 5000,
             "num_leads": 12,
             "normalize_waveforms": True,
-            "lead_stats": {"lead_I": {"mean": 0.0, "std": 1.0}}
+            "lead_stats": {"lead_I": {"mean": 0.0, "std": 1.0}},
+            "base_config_path": "config/gpt2/base_config.yaml"
         }
         mock_load_yaml.return_value = mock_config
         
@@ -151,7 +154,8 @@ class TestHeartWiseConfig:
             waveform_length=5000,
             num_leads=12,
             normalize_waveforms=True,
-            lead_stats={"lead_I": {"mean": 0.0, "std": 1.0}}
+            lead_stats={"lead_I": {"mean": 0.0, "std": 1.0}},
+            base_config_path="config/gpt2/base_config.yaml"
         )
         
         updated_config = HeartWiseConfig.update_config_with_args(base_config, args)
@@ -201,7 +205,8 @@ class TestECGTokenizerTrainingConfig:
             waveform_length=5000,
             num_leads=12,
             normalize_waveforms=True,
-            lead_stats={"lead_I": {"mean": 0.0, "std": 1.0}}
+            lead_stats={"lead_I": {"mean": 0.0, "std": 1.0}},
+            base_config_path="config/gpt2/base_config.yaml"
         )
         
         assert config.pipeline_project == "ECG_Tokenizer_Training"

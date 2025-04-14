@@ -2,7 +2,6 @@ import os
 import torch
 import numpy as np
 from torch.amp import GradScaler
-from torch.optim import AdamW, RAdam
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
@@ -15,6 +14,7 @@ from utils.registry import (
 from utils.ddp import DistributedUtils
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
+from utils.schedulers import get_scheduler
 from utils.files_handler import (
     generate_output_dir_name, 
     backup_config
@@ -76,7 +76,22 @@ class LLMFinetuningProject:
             reducer_name=self.config.embedding_reducer_name,
             reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
-        print(f"Embedding size: {ecg_embedding_size}")
+
+        param_groups = [
+            {
+                "params": model.gpt2.parameters(),
+                "lr": self.config.llm_lr,
+                "weight_decay": self.config.llm_weight_decay,
+                "name": "llm"
+            },
+            {
+                "params": model.embedding_reducer.parameters(),
+                "lr": self.config.embedding_reducer_lr,
+                "weight_decay": self.config.embedding_reducer_weight_decay,
+                "name": "embedding_reducer"
+            }
+        ]
+        
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
@@ -84,16 +99,22 @@ class LLMFinetuningProject:
         )
 
         # Get the optimizer
-        if self.config.optimizer == "AdamW":
-            optimizer: AdamW = torch.optim.AdamW(model.parameters(), lr=self.config.lr)
-        elif self.config.optimizer == "RAdam":
-            optimizer: RAdam = torch.optim.RAdam(model.parameters(), lr=self.config.lr)
+        optimizer_class: torch.optim.Optimizer = getattr(torch.optim, self.config.optimizer)
+        optimizer: torch.optim.Optimizer = optimizer_class(param_groups)
 
         # Get the scheduler
-        if self.config.scheduler_type == "step":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=self.config.step_size, gamma=self.config.gamma)
-        elif self.config.scheduler_type == "cosine":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.config.num_epochs)
+        scheduler: LRScheduler = get_scheduler(
+            scheduler_name=self.config.scheduler_type,
+            optimizer=optimizer,
+            num_epochs=self.config.num_epochs,
+            train_dataloader=training_dataloader,
+            gamma=self.config.gamma if hasattr(self.config, 'gamma') else None,
+            step_size=self.config.step_size if hasattr(self.config, 'step_size') else None,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps if hasattr(self.config, 'gradient_accumulation_steps') else 1,
+            num_warmup_percent=self.config.num_warmup_percent if hasattr(self.config, 'num_warmup_percent') else None,
+            num_hard_restarts_cycles=self.config.num_hard_restarts_cycles if hasattr(self.config, 'num_hard_restarts_cycles') else None,
+            warm_restart_tmult=self.config.warm_restart_tmult if hasattr(self.config, 'warm_restart_tmult') else None,
+        )
 
         # Get the scaler
         scaler: GradScaler = torch.amp.GradScaler()

@@ -84,14 +84,23 @@ class TestECGTokenizerTrainingProject(unittest.TestCase):
         mock_config.run_mode = "train"
         # Add missing attribute
         mock_config.pipeline_project = "ECG_Tokenizer"
+        mock_config.is_ref_device = True
+        mock_config.run_id = "test_run_123"
+        mock_config.base_checkpoint_path = "path/to/base_checkpoint"
+        mock_config.wandb_project = "test_project"
+        
+        # Mock wandb wrapper
         mock_wandb_wrapper = MagicMock()
+        mock_wandb_wrapper.is_initialized.return_value = True
         
         # Create a mock runner that will be returned
         mock_runner = MagicMock()
         mock_runner_registry.get.return_value.return_value = mock_runner
         
         # Create partial mock of the project class to avoid actually setting up training objects
-        with patch.object(ECGTokenizerTrainingProject, '_setup_training_objects') as mock_setup:
+        with patch.object(ECGTokenizerTrainingProject, '_setup_training_objects') as mock_setup, \
+             patch('projects.tokenizer_project.backup_config'), \
+             patch('projects.tokenizer_project.generate_output_dir_name', return_value="mock_output_dir"):
             mock_setup.return_value = {
                 "optimizer": MagicMock(),
                 "scheduler": MagicMock(),

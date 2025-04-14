@@ -1,15 +1,17 @@
 import os
 import json
-import yaml
 import pytest
 from unittest.mock import patch, mock_open
 import tempfile
+import unittest
+from unittest.mock import MagicMock
 
 from utils.files_handler import (
     load_yaml,
     load_api_keys,
     save_to_csv,
-    save_json
+    save_json,
+    generate_output_dir_name
 )
 
 
@@ -138,4 +140,56 @@ class TestSaveToCsv:
             
             # Check that the model names are present
             assert "model1" in content
-            assert "model2" in content 
+            assert "model2" in content
+
+
+class TestFilesHandler(unittest.TestCase):
+    
+    @patch('time.strftime')
+    def test_generate_output_dir_name_with_run_id(self, mock_strftime):
+        # Set up mock time
+        mock_time = "20230101-120000"
+        mock_strftime.return_value = mock_time
+        
+        # Create a mock config object
+        mock_config = MagicMock()
+        mock_config.base_checkpoint_path = "/path/to/checkpoints"
+        mock_config.pipeline_project = "ECG_tokenizer_project"
+        mock_config.wandb_project = "test_project"
+        
+        # Test with a run_id
+        run_id = "test_run_123"
+        expected_dir = os.path.join(
+            "/path/to/checkpoints",
+            "ECG_tokenizer_project",
+            "test_project",
+            f"{run_id}_{mock_time}"
+        )
+        
+        result = generate_output_dir_name(mock_config, run_id)
+        self.assertEqual(result, expected_dir)
+        mock_strftime.assert_called_once_with("%Y%m%d-%H%M%S")
+    
+    @patch('time.strftime')
+    def test_generate_output_dir_name_without_run_id(self, mock_strftime):
+        # Set up mock time
+        mock_time = "20230101-120000"
+        mock_strftime.return_value = mock_time
+        
+        # Create a mock config object
+        mock_config = MagicMock()
+        mock_config.base_checkpoint_path = "/path/to/checkpoints"
+        mock_config.pipeline_project = "ECG_tokenizer_project"
+        mock_config.wandb_project = "test_project"
+        
+        # Test without a run_id
+        expected_dir = os.path.join(
+            "/path/to/checkpoints",
+            "ECG_tokenizer_project",
+            "test_project",
+            f"{mock_time}_no_wandb"
+        )
+        
+        result = generate_output_dir_name(mock_config)
+        self.assertEqual(result, expected_dir)
+        mock_strftime.assert_called_once_with("%Y%m%d-%H%M%S") 
