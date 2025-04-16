@@ -20,6 +20,16 @@ class ECGDataset(Dataset):
         self.normalize_waveforms = normalize_waveforms
         self.lead_stats = lead_stats
         
+        if self.normalize_waveforms and self.lead_stats is None:
+            raise ValueError("lead_stats must be provided if normalize_waveforms is True") 
+        
+        if self.normalize_waveforms and self.lead_stats is not None:
+            print(f"Normalizing waveforms with lead statistics: {self.lead_stats}")
+        elif not self.normalize_waveforms and self.lead_stats is not None:
+            print(f"Not normalizing waveforms")
+        else:
+            print(f"Not normalizing waveforms")
+            
     def __len__(self):
         return len(self.data)
         
