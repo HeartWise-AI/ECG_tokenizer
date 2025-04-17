@@ -6,12 +6,13 @@ import argparse
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.preprocessing.analysis_pipeline import AnalysisPipeline
+from utils.constants import lead_to_idx
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Preprocess ECG data from parquet files.')
     parser.add_argument('--config', type=str, default="/volume/ECG_tokenizer/config/vqvae_training/base_config.yaml",
                         help='Path to the configuration file')
-    parser.add_argument('--output', type=str, default="/volume/ECG_tokenizer/output_new",
+    parser.add_argument('--output', type=str, default="/volume/ECG_tokenizer/output",
                         help='Base output folder path for both processed data and parquet files')
     parser.add_argument('--dataset', type=str, default=None,
                         help='Process a specific dataset (e.g., MIMIC, MHI)')
@@ -58,6 +59,14 @@ def find_dataset_files(config, dataset_name=None, file_type=None):
     
     return dataset_files
 
+def swap_leads(signal, lead1, lead2):
+    """Swap two leads in the ECG signal array."""
+    lead1_idx = lead_to_idx[lead1]
+    lead2_idx = lead_to_idx[lead2]
+    signal_copy = signal.copy()
+    signal_copy[:, [lead1_idx, lead2_idx]] = signal_copy[:, [lead2_idx, lead1_idx]]
+    return signal_copy
+
 def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_workers, file_type=None):
     dataset_output_folder = os.path.join(output_folder, dataset_name)
     
@@ -78,14 +87,26 @@ def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_work
     else:
         print(f"Processing all {len(df)} rows")
     
+    # Check if it's a MIMIC dataset to enable lead swapping
+    needs_lead_swap = dataset_name.upper() == 'MIMIC'
+    if needs_lead_swap:
+        print("MIMIC dataset detected - aVL and aVF leads will be swapped during processing")
+    
     processed_df = AnalysisPipeline.save_and_preprocess_data(
         df=df,
         output_folder=dataset_output_folder, 
         preprocessing_folder=preprocessing_subfolder,
-        preprocessing_n_workers=n_workers
+        preprocessing_n_workers=n_workers,
+        swap_leads_fn=swap_leads if needs_lead_swap else None,
+        swap_lead1='aVL',
+        swap_lead2='aVF'
     )
 
-    output_parquet_path = os.path.join(dataset_output_folder, f"{dataset_name}_{file_type}_cleaned.parquet")
+    output_filename = f"{dataset_name}_cleaned.parquet"
+    if file_type:
+        output_filename = f"{dataset_name}_{file_type}_cleaned.parquet"
+    output_parquet_path = os.path.join(dataset_output_folder, output_filename)
+    
     processed_df.to_parquet(output_parquet_path, index=False)
     print(f"Processed data saved to {output_parquet_path}")
     return processed_df
