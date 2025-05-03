@@ -2,6 +2,7 @@ import os
 import wandb
 import heapq
 import torch
+import numpy as np
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
@@ -11,12 +12,13 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
+from utils.enums import RunMode
 from utils.ddp import DistributedUtils
 from utils.registry import RunnerRegistry
-from utils.enums import RunMode
-from utils.config import ECGTokenizerTrainingConfig
 from utils.wandb_wrapper import WandbWrapper
-from models.tokenizer import ECG_Tokenizer_Wrapper
+from utils.config import ECGTokenizerTrainingConfig
+from utils.schedulers import scheduler_is_per_iteration
+from models.tokenizer import ECG_Tokenizer_Wrapper, ResidualVQ
 
 @RunnerRegistry.register("ECG_Tokenizer_Training")
 class ECGTokenizerRunner:
@@ -24,12 +26,13 @@ class ECGTokenizerRunner:
         self, 
         ecg_tokenizer: ECG_Tokenizer_Wrapper, 
         config: ECGTokenizerTrainingConfig, 
-        train_dataloader: DataLoader, 
-        validation_dataloader: DataLoader, 
-        wandb_wrapper: WandbWrapper | None = None,
-        optimizer: optim.Optimizer | None = None,
-        scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
+        scheduler: LRScheduler | None = None,
+        optimizer: optim.Optimizer | None = None,
+        wandb_wrapper: WandbWrapper | None = None,
+        train_dataloader: DataLoader | None = None, 
+        validation_dataloader: DataLoader | None = None,
+        embedding_extraction_dataloader: DataLoader | None = None,
     ):
         """
         Initialize the TokenizerRunner.
@@ -48,7 +51,8 @@ class ECGTokenizerRunner:
         self.optimizer: optim.Optimizer | None = optimizer
         self.scheduler: LRScheduler | None = scheduler
         self.scaler: GradScaler | None = scaler
-
+        self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
+        
     def execute(self, mode: RunMode):
         """
         Execute the pipeline in the desired mode.
@@ -64,6 +68,8 @@ class ECGTokenizerRunner:
             self.inference()
         elif mode == RunMode.VALIDATE:
             self.validate()
+        elif mode == RunMode.EXTRACT_EMBEDDINGS:
+            self.extract_embeddings()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -91,6 +97,10 @@ class ECGTokenizerRunner:
                 self.wandb_wrapper.log(
                     epoch_metrics
                 )
+            
+            # Step the scheduler if it should be updated per-epoch
+            if self.scheduler and (not self.scheduler_per_iteration):
+                self.scheduler.step()
             
             # Sync the process group
             DistributedUtils.sync_process_group(
@@ -327,7 +337,7 @@ class ECGTokenizerRunner:
         
         # Unscale gradients and apply gradient clipping
         self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.ecg_tokenizer.parameters(), max_norm=1.0)
+        # torch.nn.utils.clip_grad_norm_(self.ecg_tokenizer.parameters(), max_norm=1.0)
         
         # Sync gradients across processes before optimizer step
         DistributedUtils.sync_process_group(
@@ -338,12 +348,26 @@ class ECGTokenizerRunner:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
+        # Get learning rate metrics
+        lr_metrics = {}
+        for pg in self.optimizer.param_groups:
+            if "name" in pg:
+                lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+            else:
+                # Fallback for any unnamed groups
+                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+            
+        # Step the scheduler if it should be updated per-iteration
+        if self.scheduler and self.scheduler_per_iteration:
+            self.scheduler.step()            
+                
         return {
             "rec_loss": rec_loss,
             "cmt_loss": cmt_loss.mean(),
             "combined_loss": combined_loss,
             "indices": indices,
-            "reconstruction": out  # Add the reconstruction to the outputs
+            "reconstruction": out,
+            **lr_metrics
         }
 
     @torch.no_grad()
@@ -360,13 +384,55 @@ class ECGTokenizerRunner:
             rec_loss: torch.Tensor = (out - signals).abs().mean()
             combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
 
+        
+        # Get learning rate metrics
+        lr_metrics = {}
+        for pg in self.optimizer.param_groups:
+            if "name" in pg:
+                lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+            else:
+                # Fallback for any unnamed groups
+                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+
         return {
             "rec_loss": rec_loss,
             "cmt_loss": cmt_loss.mean(),
             "combined_loss": combined_loss,
             "indices": indices,
-            "reconstruction": out  # Add the reconstruction to the outputs
+            "reconstruction": out,
+            **lr_metrics
         }
+
+    def extract_embeddings(self):
+        """
+        Extract embeddings from the model.
+        """
+        save_dir: str = os.path.join(self.config.output_dir, "embeddings")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        for batch in tqdm(self.embedding_extraction_dataloader):
+            signals = batch['signal'].float().to(self.config.device)
+            waveform_path = batch['waveform_path']
+            residual_vq_layer = None
+    
+            with torch.no_grad():
+                out, indices, cmt_loss = self.ecg_tokenizer(signals)
+                for i, layer in enumerate(self.ecg_tokenizer.module.layers):
+                    if isinstance(layer, ResidualVQ):
+                        residual_vq_layer = layer
+                        break
+
+            batch_embeddings = residual_vq_layer.get_codes_from_indices(indices)
+            
+            for idx in range(len(waveform_path)):
+                single_embedding = batch_embeddings[:, idx:idx+1, :, :]
+                single_embedding = single_embedding.squeeze(1)
+                embedding_np = single_embedding.detach().cpu().numpy()
+                
+                original_filename = os.path.basename(waveform_path[idx])
+                filename_without_ext = os.path.splitext(original_filename)[0]
+                save_path = os.path.join(save_dir, f"{filename_without_ext}_embedding.npy")
+                np.save(save_path, embedding_np)
 
     def inference(self):
         """
@@ -418,6 +484,15 @@ class ECGTokenizerRunner:
                 print(f"Deleted old checkpoint: {prev_checkpoint_path}")
         
         if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+            # Get current learning rates
+            lr_metrics = {}
+            for pg in self.optimizer.param_groups:
+                if "name" in pg:
+                    lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+                else:
+                    # Fallback for any unnamed groups
+                    lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
+            
             self.wandb_wrapper.log({
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,

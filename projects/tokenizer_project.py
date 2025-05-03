@@ -2,7 +2,6 @@ import os
 from typing import Any
 
 import torch
-from torch.optim import AdamW, RAdam
 from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LRScheduler
@@ -14,6 +13,7 @@ from utils.registry import (
 )
 from utils.enums import RunMode
 from utils.ddp import DistributedUtils
+from utils.schedulers import get_scheduler
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import ECGTokenizerTrainingConfig
 from utils.files_handler import (
@@ -78,33 +78,33 @@ class ECGTokenizerTrainingProject:
             device_ids=[self.config.device]
         )
         
+        param_groups = [
+            {
+                "params": ecg_tokenizer.module.parameters(),
+                "lr": self.config.lr,
+                "weight_decay": self.config.weight_decay,
+                "name": "ecg_tokenizer"
+            }
+        ]
+        
         # Get the optimizer
-        if self.config.optimizer == "AdamW":
-            optimizer: AdamW = torch.optim.AdamW(
-                ecg_tokenizer.parameters(), 
-                lr=self.config.lr,
-                weight_decay=self.config.weight_decay
-            )
-        elif self.config.optimizer == "RAdam":
-            optimizer: RAdam = torch.optim.RAdam(
-                ecg_tokenizer.parameters(), 
-                lr=self.config.lr,
-                weight_decay=self.config.weight_decay
-            )
-        
+        optimizer_class: torch.optim.Optimizer = getattr(torch.optim, self.config.optimizer)
+        optimizer: torch.optim.Optimizer = optimizer_class(param_groups)
+
         # Get the scheduler
-        if self.config.scheduler_name == "step":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer=optimizer, 
-                step_size=self.config.step_size, 
-                gamma=self.config.gamma
-            )
-        elif self.config.scheduler_name == "cosine":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer=optimizer, 
-                T_max=self.config.num_epochs
-            )
-        
+        scheduler: LRScheduler = get_scheduler(
+            scheduler_name=self.config.scheduler_type,
+            optimizer=optimizer,
+            num_epochs=self.config.num_epochs,
+            train_dataloader=train_dataloader,
+            gamma=self.config.gamma if hasattr(self.config, 'gamma') else None,
+            step_size=self.config.step_size if hasattr(self.config, 'step_size') else None,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps if hasattr(self.config, 'gradient_accumulation_steps') else 1,
+            num_warmup_percent=self.config.num_warmup_percent if hasattr(self.config, 'num_warmup_percent') else None,
+            num_hard_restarts_cycles=self.config.num_hard_restarts_cycles if hasattr(self.config, 'num_hard_restarts_cycles') else None,
+            warm_restart_tmult=self.config.warm_restart_tmult if hasattr(self.config, 'warm_restart_tmult') else None
+        )
+                
         # Get the scaler
         scaler: GradScaler = torch.amp.GradScaler()
         
@@ -120,12 +120,33 @@ class ECGTokenizerTrainingProject:
     def _setup_inference_objects(self)->dict[str, Any]:
         raise NotImplementedError("Subclasses must implement this method")
     
+    def _setup_extraction_objects(self)->dict[str, Any]:
+        embedding_extraction_dataloader: DataLoader = get_distributed_ecg_dataloader(
+            parquet_file=self.config.embedding_extraction_dataset_path,
+            expected_waveform_length=self.config.waveform_length,
+            num_leads=self.config.num_leads,
+            normalize_waveforms=self.config.normalize_waveforms,
+            lead_stats=self.config.lead_stats,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=False,
+            pin_memory=True
+        )
+        
+        return {
+            "embedding_extraction_dataloader": embedding_extraction_dataloader
+        }
+    
     def _setup_project(self):
         # Generate the output directory name
         self.config.output_dir = generate_output_dir_name(
             config=self.config, 
-            run_id=self.config.run_id if self.wandb_wrapper.is_initialized() else None
+            run_id=self.wandb_wrapper.get_run_id() if self.wandb_wrapper.is_initialized() else None
         )
+        
+        print(f"Output directory updated to: {self.config.output_dir}")
         
         # Create the output directory
         os.makedirs(self.config.output_dir, exist_ok=True)
@@ -135,7 +156,7 @@ class ECGTokenizerTrainingProject:
             config=self.config,
             output_dir=self.config.output_dir
         )
-        
+                
     def run(self):    
         if self.config.is_ref_device:
             self._setup_project()    
@@ -145,8 +166,11 @@ class ECGTokenizerTrainingProject:
             "wandb_wrapper": self.wandb_wrapper
         }
         if self.config.run_mode == RunMode.TRAIN:
-            training_objects: dict[str, Any] = self._setup_training_objects()
-            runner_args.update(training_objects)
+            runner_args.update(self._setup_training_objects())
+            
+        elif self.config.run_mode == RunMode.EXTRACT_EMBEDDINGS:
+            runner_args.update(self._setup_extraction_objects())
+        
         elif self.config.run_mode == RunMode.INFERENCE:
             raise NotImplementedError("Inference is not implemented")
         
