@@ -19,6 +19,7 @@ from utils.files_handler import (
     generate_output_dir_name, 
     backup_config
 )
+from projects.base_project import BaseProject
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from runners.llm_finetuning_runner import LLMFinetuningRunner
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
@@ -26,14 +27,13 @@ from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dat
 from typing import Any
 
 @ProjectRegistry.register("ECG_tokenizer_LLM_finetuning")
-class LLMFinetuningProject:
+class LLMFinetuningProject(BaseProject):
     def __init__(
         self,
         config: LLMFinetuningConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config: LLMFinetuningConfig = config
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
+        super().__init__(config, wandb_wrapper)
 
     def _setup_training_objects(self)->dict[str, Any]:
         tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
@@ -171,41 +171,6 @@ class LLMFinetuningProject:
             "model": model,
             "val_dataloader": validation_dataloader
         }
-    
-    def _setup_project(self):
-        # Generate the output directory name
-        self.config.output_dir = generate_output_dir_name(
-            config=self.config, 
-            run_id=self.wandb_wrapper.get_run_id() if self.wandb_wrapper.is_initialized() else None
-        )
-        
-        # Create the output directory
-        os.makedirs(self.config.output_dir, exist_ok=True)
-        
-        # Backup the configuration file
-        backup_config(
-            config=self.config,
-            output_dir=self.config.output_dir
-        )
-    
-    def run(self):
-        if self.config.is_ref_device:
-            self._setup_project()        
-        
-        runner_args = {
-            "config": self.config,
-            "wandb_wrapper": self.wandb_wrapper
-        }
-        if self.config.run_mode == "train":
-            training_objects: dict[str, Any] = self._setup_training_objects()
-            runner_args.update(training_objects)
-        elif self.config.run_mode == "inference":
-            inference_objects: dict[str, Any] = self._setup_inference_objects()
-            runner_args.update(inference_objects)
-
-        runner: LLMFinetuningRunner = RunnerRegistry.get(self.config.runner_name)(**runner_args)
-        runner.execute(mode=self.config.run_mode)
-        
         
     def _load_checkpoint(
         self, 

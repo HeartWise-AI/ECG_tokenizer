@@ -20,20 +20,23 @@ from utils.files_handler import (
     generate_output_dir_name, 
     backup_config
 )
+from projects.base_project import BaseProject
 from models.tokenizer import ECG_Tokenizer_Wrapper
 from runners.tokenizer_runner import ECGTokenizerRunner
 from data.ecg_dataset import get_distributed_ecg_dataloader
 
 
 @ProjectRegistry.register("ECG_Tokenizer_Training")
-class ECGTokenizerTrainingProject:
+class ECGTokenizerTrainingProject(BaseProject):
     def __init__(
         self, 
         config: ECGTokenizerTrainingConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config = config
-        self.wandb_wrapper = wandb_wrapper
+        super().__init__(config, wandb_wrapper)
+        
+    def _setup_inference_objects(self)->dict[str, Any]:
+        raise NotImplementedError("Inference is not implemented for ECG Tokenizer project")
         
     def _setup_training_objects(self)->dict[str, Any]:
                 
@@ -93,7 +96,7 @@ class ECGTokenizerTrainingProject:
 
         # Get the scheduler
         scheduler: LRScheduler = get_scheduler(
-            scheduler_name=self.config.scheduler_type,
+            scheduler_name=self.config.scheduler_name,
             optimizer=optimizer,
             num_epochs=self.config.num_epochs,
             train_dataloader=train_dataloader,
@@ -116,10 +119,7 @@ class ECGTokenizerTrainingProject:
             "train_dataloader": train_dataloader,
             "validation_dataloader": validation_dataloader
         }
-    
-    def _setup_inference_objects(self)->dict[str, Any]:
-        raise NotImplementedError("Subclasses must implement this method")
-    
+        
     def _setup_extraction_objects(self)->dict[str, Any]:
         embedding_extraction_dataloader: DataLoader = get_distributed_ecg_dataloader(
             parquet_file=self.config.embedding_extraction_dataset_path,
@@ -138,41 +138,3 @@ class ECGTokenizerTrainingProject:
         return {
             "embedding_extraction_dataloader": embedding_extraction_dataloader
         }
-    
-    def _setup_project(self):
-        # Generate the output directory name
-        self.config.output_dir = generate_output_dir_name(
-            config=self.config, 
-            run_id=self.wandb_wrapper.get_run_id() if self.wandb_wrapper.is_initialized() else None
-        )
-        
-        print(f"Output directory updated to: {self.config.output_dir}")
-        
-        # Create the output directory
-        os.makedirs(self.config.output_dir, exist_ok=True)
-        
-        # Backup the configuration file
-        backup_config(
-            config=self.config,
-            output_dir=self.config.output_dir
-        )
-                
-    def run(self):    
-        if self.config.is_ref_device:
-            self._setup_project()    
-        
-        runner_args = {
-            "config": self.config,
-            "wandb_wrapper": self.wandb_wrapper
-        }
-        if self.config.run_mode == RunMode.TRAIN:
-            runner_args.update(self._setup_training_objects())
-            
-        elif self.config.run_mode == RunMode.EXTRACT_EMBEDDINGS:
-            runner_args.update(self._setup_extraction_objects())
-        
-        elif self.config.run_mode == RunMode.INFERENCE:
-            raise NotImplementedError("Inference is not implemented")
-        
-        runner: ECGTokenizerRunner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
-        runner.execute(mode=self.config.run_mode)
