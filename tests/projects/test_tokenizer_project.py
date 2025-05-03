@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from projects.tokenizer_project import ECGTokenizerTrainingProject
 from utils.config import ECGTokenizerTrainingConfig
+from utils.enums import RunMode
 
 class TestECGTokenizerTrainingProject(unittest.TestCase):
     @patch('projects.tokenizer_project.get_distributed_ecg_dataloader')
@@ -77,30 +78,33 @@ class TestECGTokenizerTrainingProject(unittest.TestCase):
         self.assertIn("train_dataloader", training_objects)
         self.assertIn("validation_dataloader", training_objects)
     
-    @patch('projects.tokenizer_project.RunnerRegistry')
-    def test_run_method(self, mock_runner_registry):
+    @patch('projects.base_project.RunnerRegistry')
+    @patch('projects.base_project.backup_config')
+    @patch('projects.base_project.generate_output_dir_name', return_value="mock_output_dir")
+    def test_run_method(self, mock_generate_output, mock_backup_config, mock_runner_registry):
         # Mock the config and wandb_wrapper
         mock_config = MagicMock(spec=ECGTokenizerTrainingConfig)
-        mock_config.run_mode = "train"
+        mock_config.run_mode = RunMode.TRAIN
         # Add missing attribute
-        mock_config.pipeline_project = "ECG_Tokenizer"
+        mock_config.pipeline_project = "ECG_Tokenizer_Training"
         mock_config.is_ref_device = True
         mock_config.run_id = "test_run_123"
         mock_config.base_checkpoint_path = "path/to/base_checkpoint"
         mock_config.wandb_project = "test_project"
+        mock_config.base_config_path = "path/to/base_config.yaml"
+        mock_config.output_dir = "mock_output_dir"  # This will be set by _setup_project
         
         # Mock wandb wrapper
         mock_wandb_wrapper = MagicMock()
         mock_wandb_wrapper.is_initialized.return_value = True
+        mock_wandb_wrapper.get_run_id.return_value = "mock_run_id"
         
         # Create a mock runner that will be returned
         mock_runner = MagicMock()
         mock_runner_registry.get.return_value.return_value = mock_runner
         
         # Create partial mock of the project class to avoid actually setting up training objects
-        with patch.object(ECGTokenizerTrainingProject, '_setup_training_objects') as mock_setup, \
-             patch('projects.tokenizer_project.backup_config'), \
-             patch('projects.tokenizer_project.generate_output_dir_name', return_value="mock_output_dir"):
+        with patch.object(ECGTokenizerTrainingProject, '_setup_training_objects') as mock_setup:
             mock_setup.return_value = {
                 "optimizer": MagicMock(),
                 "scheduler": MagicMock(),
@@ -114,8 +118,8 @@ class TestECGTokenizerTrainingProject(unittest.TestCase):
             project = ECGTokenizerTrainingProject(mock_config, mock_wandb_wrapper)
             project.run()
             
-            # Verify the runner was executed
-            mock_runner.execute.assert_called_once_with(mode="train")
+            # Verify the runner was executed with the correct mode
+            mock_runner.execute.assert_called_once_with(mode=RunMode.TRAIN)
     
     def test_setup_inference_objects_not_implemented(self):
         # Mock the config and wandb_wrapper

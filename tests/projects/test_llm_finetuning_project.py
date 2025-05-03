@@ -121,24 +121,71 @@ class TestLLMFinetuningProject(unittest.TestCase):
         # Verify result
         self.assertEqual(result, (512, 768))
     
+    @patch('projects.llm_finetuning_project.GPT2Tokenizer')
+    @patch('projects.llm_finetuning_project.get_distributed_clinical_report_dataloader')
+    @patch('projects.llm_finetuning_project.ModelRegistry')
+    @patch('projects.llm_finetuning_project.DistributedUtils')
+    @patch('projects.llm_finetuning_project.torch.load')
+    @patch('projects.llm_finetuning_project.os.path.exists')
+    def test_setup_inference_objects(self, mock_exists, mock_torch_load, mock_distributed_utils, 
+                                    mock_model_registry, mock_dataloader, mock_tokenizer):
+        # Mock the config and wandb_wrapper
+        mock_config = MagicMock(spec=LLMFinetuningConfig)
+        mock_config.inference_dataset_path = "/path/to/inference"
+        mock_config.validation_embeddings_path = "/path/to/validation_embeddings"
+        mock_config.max_token_length = 512
+        mock_config.batch_size = 32
+        mock_config.num_workers = 4
+        mock_config.world_size = 1
+        mock_config.device = 0
+        mock_config.trainable_model_name = "GPT2_with_embeddings"
+        mock_config.huggingface_model_name = "gpt2"
+        mock_config.gpt2_embedding_size = 768
+        mock_config.embedding_reducer_name = "mlp_reducer"
+        mock_config.checkpoint_dir = "/path/to/checkpoint.pt"
+        
+        mock_wandb_wrapper = MagicMock()
+        
+        # Mock return values
+        mock_tokenizer.from_pretrained.return_value = MagicMock()
+        mock_dataloader.return_value = MagicMock()
+        mock_model_registry.get.return_value.return_value = MagicMock()
+        mock_distributed_utils.DDP.return_value = MagicMock()
+        mock_exists.return_value = True
+        mock_checkpoint = {"model_state_dict": MagicMock()}
+        mock_torch_load.return_value = mock_checkpoint
+        
+        # Patch _get_embedding_size to return a dummy value
+        with patch.object(LLMFinetuningProject, '_get_embedding_size') as mock_get_embedding_size:
+            mock_get_embedding_size.return_value = (768,)
+            
+            # Create the project and call _setup_inference_objects
+            project = LLMFinetuningProject(mock_config, mock_wandb_wrapper)
+            inference_objects = project._setup_inference_objects()
+            
+            # Verify expected objects are returned
+            self.assertIn("model", inference_objects)
+            self.assertIn("val_dataloader", inference_objects)
+    
     @patch('projects.llm_finetuning_project.RunnerRegistry')
-    def test_run_method_train(self, mock_runner_registry):
+    @patch('projects.base_project.BaseProject.run')
+    def test_run_method_train(self, mock_base_run, mock_runner_registry):
         # Mock the config and wandb_wrapper
         mock_config = MagicMock(spec=LLMFinetuningConfig)
         mock_config.run_mode = "train"
-        # Add missing attribute
         mock_config.runner_name = "LLM_Training_Runner"
         mock_config.is_ref_device = True
         mock_wandb_wrapper = MagicMock()
-    
+
         # Create a mock runner
         mock_runner = MagicMock()
         mock_runner_registry.get.return_value.return_value = mock_runner
-    
-        # Create partial mock of the project class to avoid actually setting up training objects
-        with patch.object(LLMFinetuningProject, '_setup_training_objects') as mock_setup, \
-             patch('projects.llm_finetuning_project.backup_config'), \
-             patch('projects.llm_finetuning_project.generate_output_dir_name', return_value="mock_output_dir"):
+
+        # Create the project
+        project = LLMFinetuningProject(mock_config, mock_wandb_wrapper)
+        
+        # Mock the _setup_training_objects method to avoid actual setup
+        with patch.object(LLMFinetuningProject, '_setup_training_objects') as mock_setup:
             mock_setup.return_value = {
                 "train_dataloader": MagicMock(),
                 "val_dataloader": MagicMock(),
@@ -148,12 +195,41 @@ class TestLLMFinetuningProject(unittest.TestCase):
                 "model": MagicMock()
             }
             
-            # Create the project and call run
-            project = LLMFinetuningProject(mock_config, mock_wandb_wrapper)
+            # Call run method
             project.run()
             
-            # Verify the runner was executed
-            mock_runner.execute.assert_called_once_with(mode="train")
+            # Verify the base run method was called exactly once
+            mock_base_run.assert_called_once()
+            
+    @patch('projects.llm_finetuning_project.RunnerRegistry')
+    @patch('projects.base_project.BaseProject.run')
+    def test_run_method_inference(self, mock_base_run, mock_runner_registry):
+        # Mock the config and wandb_wrapper
+        mock_config = MagicMock(spec=LLMFinetuningConfig)
+        mock_config.run_mode = "inference"
+        mock_config.runner_name = "LLM_Inference_Runner"
+        mock_config.is_ref_device = True
+        mock_wandb_wrapper = MagicMock()
+
+        # Create a mock runner
+        mock_runner = MagicMock()
+        mock_runner_registry.get.return_value.return_value = mock_runner
+
+        # Create the project
+        project = LLMFinetuningProject(mock_config, mock_wandb_wrapper)
+        
+        # Mock the _setup_inference_objects method to avoid actual setup
+        with patch.object(LLMFinetuningProject, '_setup_inference_objects') as mock_setup:
+            mock_setup.return_value = {
+                "val_dataloader": MagicMock(),
+                "model": MagicMock()
+            }
+            
+            # Call run method
+            project.run()
+            
+            # Verify the base run method was called exactly once
+            mock_base_run.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main() 
