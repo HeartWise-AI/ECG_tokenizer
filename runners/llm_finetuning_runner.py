@@ -339,11 +339,7 @@ class LLMFinetuningRunner:
         
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        
-        # Step the scheduler if it should be updated per-iteration
-        if self.scheduler and self.scheduler_per_iteration:
-            self.scheduler.step()
-        
+                
         # Get learning rate metrics
         lr_metrics = {}
         for pg in self.optimizer.param_groups:
@@ -352,6 +348,10 @@ class LLMFinetuningRunner:
             else:
                 # Fallback for any unnamed groups
                 lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+        
+        # Step the scheduler if it should be updated per-iteration
+        if self.scheduler and self.scheduler_per_iteration:
+            self.scheduler.step()
         
         return {
             "loss": loss,
