@@ -2,6 +2,8 @@ import os
 import csv
 import json
 import yaml
+import shutil
+
 from typing import Dict, Any
 
 
@@ -36,11 +38,10 @@ def backup_config(
     output_dir: str
 ) -> None:
     """
-    Backup the configuration file to the output directory.
+    Backup the configuration file to the output directory by copying the original config file.
     """
-    config_path = os.path.join(output_dir, "config.yaml")
-    with open(config_path, "w") as f:
-        yaml.dump(config, f)
+    config_path: str = os.path.join(output_dir, "config.yaml")
+    shutil.copyfile(config.base_config_path, config_path)
 
 def load_api_keys(path: str) -> dict[str, str]:
     """
