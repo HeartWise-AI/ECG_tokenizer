@@ -130,11 +130,6 @@ class ECGDataset(Dataset):
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
 
-            if self.dataset_type == DatasetType.MIMIC:
-                aVL_idx = lead_to_idx['aVL']
-                aVF_idx = lead_to_idx['aVF']
-                signal[:, [aVL_idx, aVF_idx]] = signal[:, [aVF_idx, aVL_idx]]
-
             return {'signal': np.transpose(signal, (1, 0))}
         except Exception as e:
             print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
