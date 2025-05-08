@@ -27,7 +27,7 @@ Author: Rohan Banerjee
 Relevant issues from lucid-rains repos: #28, #44, #102
 """
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_checkpoint(
@@ -120,7 +120,7 @@ def train(
     optimizer: optim.Optimizer,
     num_codes: int,
     checkpoint_dir: str,
-    num_epochs: int = 10,
+    num_epochs: int = 4,
     alpha: float = 1.0,
     start_epoch: int = 0
 ) -> None:
@@ -212,19 +212,19 @@ def main():
 
     wandb.init(
         project="ECG_tokenizer", 
-        entity="rohanbanerjee", 
+        entity=config["entity"], 
         name=config["experiment_name"], 
         config=config
     )
 
     dataset_mimic_train: ECGDataset = ECGDataset(
-        parquet_file=config["train_parquet_MIMIC_file"],
+        parquet_file=config["train_parquet_MIMIC_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
     print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
     dataset_mhi_train: ECGDataset = ECGDataset(
-        parquet_file=config["train_parquet_MHI_file"],
+        parquet_file=config["train_parquet_MHI_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
@@ -253,13 +253,13 @@ def main():
     )
 
     dataset_mimic_test: ECGDataset = ECGDataset(
-        parquet_file=config["test_parquet_MIMIC_file"],
+        parquet_file=config["test_parquet_MIMIC_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
     print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
     dataset_mhi_test: ECGDataset = ECGDataset(
-        parquet_file=config["test_parquet_MHI_file"],
+        parquet_file=config["test_parquet_MHI_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
@@ -286,12 +286,12 @@ def main():
     model: ResVQAutoEncoder = ResVQAutoEncoder(
         timesteps=config["waveform_length"],
         codebook_size=config["num_codes"],
-        implicit_neural_codebook=True
+        implicit_neural_codebook=TrueN
     ).to(device)
 
     if torch.cuda.device_count() > 1:
-        print(f"Using GPUs 2 and 3")
-        os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+        print(f"Using GPUs 0, 1, 2 and 3")
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
         model = nn.DataParallel(model)
 
     lr: float = float(config["learning_rate"])
