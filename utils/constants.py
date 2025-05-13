@@ -525,3 +525,5 @@ BERT_THRESHOLDS = {
         "threshold": 0.27
     }
 }
+
+PTBXL_POWER_RATIO = 3.003154
