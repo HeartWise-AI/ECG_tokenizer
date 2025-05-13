@@ -290,7 +290,7 @@ def main():
     ).to(device)
 
     if torch.cuda.device_count() > 1:
-        print(f"Using GPUs 0, 1 and 2")
+        print("Using GPUs 0, 1 and 2")
         os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
         model = nn.DataParallel(model)
 
