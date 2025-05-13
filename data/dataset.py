@@ -10,6 +10,7 @@ import yaml
 from typing import Optional
 from utils.enums import DatasetType
 from utils.constants import lead_to_idx
+import warnings
 """
 Dataset classed to load the MHI or MIMIC-IV data (signals and labels)
 Args:
@@ -130,10 +131,10 @@ class ECGDataset(Dataset):
             
             signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
 
-            if self.dataset_type == DatasetType.MIMIC:
-                aVL_idx = lead_to_idx['aVL']
-                aVF_idx = lead_to_idx['aVF']
-                signal[:, [aVL_idx, aVF_idx]] = signal[:, [aVF_idx, aVL_idx]]
+            # if self.dataset_type == DatasetType.MIMIC:
+            #     aVL_idx = lead_to_idx['aVL']
+            #     aVF_idx = lead_to_idx['aVF']
+            #     signal[:, [aVL_idx, aVF_idx]] = signal[:, [aVF_idx, aVL_idx]]
 
             return {'signal': np.transpose(signal, (1, 0))}
         except Exception as e:
@@ -265,6 +266,8 @@ class ECGDatasetClassifier(Dataset):
 
         if parquet_file:
             self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
+            # normalize column names: replace non‑breaking spaces with normal spaces
+            self.data_frame.columns = self.data_frame.columns.str.replace('\xa0', ' ', regex=False).str.strip()
             self.train_df: pd.DataFrame
             self.val_df: pd.DataFrame
             self.test_df: pd.DataFrame
@@ -516,8 +519,8 @@ class ECGDatasetEmbeddings(Dataset):
                 print(f"Skipping {self.data_frame.iloc[idx]['waveform_path']}: signal has no variation (min={signal_min}, max={signal_max})")
                 return self.__getitem__((idx + 1) % len(self))
             
-            signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
-            sample = {'signal': signal, 'waveform_path': waveform_path}
+            # signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
+            sample = {'signal': unnormalized_signal, 'waveform_path': waveform_path}
             return sample
         except Exception as e:
             print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
@@ -531,8 +534,8 @@ class ECGDatasetLinearProbe(Dataset):
         embedding_folder: Optional[str] = None, 
         transform: Optional[callable] = None, 
         split: Optional[str] = 'train', 
-        val_size: Optional[float] = 0.01, 
-        test_size: Optional[float] = 0.01, 
+        val_size: Optional[float] = 0.1, 
+        test_size: Optional[float] = 0.1, 
         random_state: Optional[int] = 1234
     ):
         self.transform: Optional[callable] = transform
@@ -541,10 +544,23 @@ class ECGDatasetLinearProbe(Dataset):
 
         if parquet_file:
             self.data_frame: pd.DataFrame = pd.read_parquet(parquet_file)
+            # normalize column names: replace non‑breaking spaces with normal spaces
+            self.data_frame.columns = self.data_frame.columns.str.replace('\xa0', ' ', regex=False).str.strip()
 
             embedding_files: set[str] = set(f.replace('_embedding.npy', '') for f in os.listdir(self.embedding_folder) if f.endswith('_embedding.npy'))
-            self.data_frame: pd.DataFrame = self.data_frame[self.data_frame['npy_path'].apply(lambda x: os.path.splitext(os.path.basename(x))[0] in embedding_files)]
-
+            # fail if no embeddings on disk
+            if not embedding_files:
+                raise ValueError(f"No embedding files found in '{self.embedding_folder}'. "
+                                 "Ensure you have files ending with '_embedding.npy'.")
+            # keep only rows that have a corresponding embedding
+            # self.data_frame = self.data_frame[
+            #     self.data_frame['npy_path']
+            #         .apply(lambda x: os.path.splitext(os.path.basename(x))[0] in embedding_files)
+            # ]
+            # # fail if parquet has no rows matching those embeddings
+            # if self.data_frame.empty:
+            #     raise ValueError(f"No rows in parquet match embeddings in '{self.embedding_folder}'. "
+            #                      "Check your 'npy_path' values and embedding folder.")
             self.train_df, self.val_df, self.test_df = self._stratified_split(val_size, test_size, random_state)
             if self.split == 'train':
                 self.data_frame = self.train_df
@@ -560,9 +576,10 @@ class ECGDatasetLinearProbe(Dataset):
         random_state: int
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
-        Stratified train-validation-test split based on the label distribution.
+        Stratified train-val-test, but fallback to random splits if stratification fails.
         """
-        labels: np.ndarray = self.data_frame[[
+        # collect multilabel matrix
+        labels = self.data_frame[[ 
             'Sinusal', 'Regular', 'Monomorph', 
                 'QS complex in V1-V2-V3', 'R complex in V5-V6', 
                 'T wave inversion (inferior - II, III, aVF)', 
@@ -592,15 +609,31 @@ class ECGDatasetLinearProbe(Dataset):
                 'Ventricular Rhythm', 'no_qrs'
         ]].values
 
-        stratifier: MultilabelStratifiedShuffleSplit = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
-        train_idx, test_idx = next(stratifier.split(self.data_frame, labels))
-
-        train_val_df = self.data_frame.iloc[train_idx].reset_index(drop=True)
-        test_df = self.data_frame.iloc[test_idx].reset_index(drop=True)
-        stratifier = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
-        train_idx, val_idx = next(stratifier.split(train_val_df, labels[train_idx]))
-        train_df = train_val_df.iloc[train_idx].reset_index(drop=True)
-        val_df = train_val_df.iloc[val_idx].reset_index(drop=True)
+        try:
+            # first split out test
+            strat = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+            train_val_idx, test_idx = next(strat.split(self.data_frame, labels))
+            train_val_df = self.data_frame.iloc[train_val_idx].reset_index(drop=True)
+            test_df      = self.data_frame.iloc[test_idx].reset_index(drop=True)
+            # then split val from train_val
+            strat = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
+            train_idx, val_idx = next(strat.split(train_val_df, labels[train_val_idx]))
+            train_df = train_val_df.iloc[train_idx].reset_index(drop=True)
+            val_df   = train_val_df.iloc[val_idx].reset_index(drop=True)
+        except ValueError as e:
+            warnings.warn(f"Stratified split failed ({e}), falling back to random split.")
+            # random test split
+            train_val_df, test_df = train_test_split(
+                self.data_frame, test_size=test_size, random_state=random_state
+            )
+            # random val split
+            train_df, val_df = train_test_split(
+                train_val_df, test_size=val_size, random_state=random_state
+            )
+            # reset indices
+            train_df = train_df.reset_index(drop=True)
+            val_df   = val_df.reset_index(drop=True)
+            test_df  = test_df.reset_index(drop=True)
 
         return train_df, val_df, test_df
 
@@ -610,13 +643,14 @@ class ECGDatasetLinearProbe(Dataset):
     def get_embedding_and_labels(
         self, 
         idx: int
-    ) -> tuple[np.ndarray, torch.Tensor, list[str]]:
+    ) -> tuple[np.ndarray, torch.Tensor, list[str]] | tuple[None, None, None]:
         label_row: pd.Series = self.data_frame.iloc[idx]
         base_id: str = os.path.splitext(os.path.basename(label_row['npy_path']))[0]
         embedding_path: str = os.path.join(self.embedding_folder, f"{base_id}_embedding.npy")
 
         if not os.path.exists(embedding_path):
-            raise FileNotFoundError(f"Embedding file not found: {embedding_path}")  
+            warnings.warn(f"Embedding file not found: {embedding_path}, skipping sample.")
+            return None, None, None
 
         embedding: np.ndarray = np.load(embedding_path)
         # Extract label values using the desired class columns
@@ -660,13 +694,33 @@ class ECGDatasetLinearProbe(Dataset):
     ) -> dict:
         if torch.is_tensor(idx):
             idx = idx.tolist()
-
-        embedding, labels_values, labels = self.get_embedding_and_labels(idx)
-        embedding: torch.Tensor = torch.tensor(embedding, dtype=torch.float32)
-
-        sample: dict = {'embedding': embedding, 'labels_values': labels_values, 'labels': labels}
-
-        if self.transform:
-            sample['embedding'] = self.transform(sample['embedding'])
-
-        return sample
+        
+        # Try each index in the dataset until we find a valid embedding or exhaust all options
+        original_idx = idx
+        tried_indices = set()
+        
+        while len(tried_indices) < len(self):
+            if idx in tried_indices:
+                idx = (idx + 1) % len(self)
+                continue
+                
+            tried_indices.add(idx)
+            embedding, labels_values, labels = self.get_embedding_and_labels(idx)
+            
+            if embedding is not None:
+                embedding: torch.Tensor = torch.tensor(embedding, dtype=torch.float32)
+                sample: dict = {'embedding': embedding, 'labels_values': labels_values, 'labels': labels}
+                
+                if self.transform:
+                    sample['embedding'] = self.transform(sample['embedding'])
+                
+                return sample
+            
+            idx = (idx + 1) % len(self)
+        
+        # If we've tried all indices and found no valid embeddings
+        raise RuntimeError(
+            f"No valid embedding files found in '{self.embedding_folder}'. "
+            f"Attempted {len(tried_indices)} different indices starting from {original_idx}. "
+            "Please check that the embedding folder contains valid files matching your dataset."
+        )

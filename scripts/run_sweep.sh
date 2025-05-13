@@ -149,6 +149,17 @@ NAME=$(yq e '.parameters.name.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
 PROJECT=$(yq e '.parameters.project.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
 ENTITY=$(yq e '.parameters.entity.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
 
+# Fallback to top‑level metadata if parameters.* extraction yields empty
+if [ -z "${NAME}" ]; then
+  NAME=$(yq e '.name' "${SWEEP_CONFIG_PATH}" | tr -d '"')
+fi
+if [ -z "${PROJECT}" ]; then
+  PROJECT=$(yq e '.project' "${SWEEP_CONFIG_PATH}" | tr -d '"')
+fi
+if [ -z "${ENTITY}" ]; then
+  ENTITY=$(yq e '.entity' "${SWEEP_CONFIG_PATH}" | tr -d '"')
+fi
+
 # Validate extracted values
 if [ -z "${NAME}" ] || [ -z "${PROJECT}" ] || [ -z "${ENTITY}" ]; then
     echo -e "${RED}Error: Failed to extract required values from sweep config${NC}"

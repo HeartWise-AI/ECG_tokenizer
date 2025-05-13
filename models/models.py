@@ -147,7 +147,7 @@ class ResVQAutoEncoder(nn.Module):
             else:
                 x = layer(x)
            
-        return x.clamp(-1, 1), indices, commit_loss
+        return x, indices, commit_loss
     
 class CodebookClassifier(nn.Module):
     def __init__(self, num_classes, num_quantizers, prev_embedding_dim, embedding_dim, num_layers=5, hidden_dim=4096):

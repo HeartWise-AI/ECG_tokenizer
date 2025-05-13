@@ -33,7 +33,7 @@ Passes signal through the trained VQVAE model and saves the embeddings i.e. the 
 Author: Rohan Banerjee
 """
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def get_embeddings(model, data_loader, device, save_dir, dataset_name):
@@ -75,20 +75,20 @@ def main():
         config = yaml.safe_load(file)
 
     dataset_mimic_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
-        parquet_file=config["train_parquet_MIMIC_file"],
+        parquet_file=config["train_parquet_MIMIC_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
     print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
 
     dataset_mhi_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
-        parquet_file=config["train_parquet_MHI_file"],
+        parquet_file=config["train_parquet_MHI_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
     print(f"len(dataset_mhi_train): {len(dataset_mhi_train)}")
 
-    dataset_code_15_train: ECGDataset = ECGDataset(
+    dataset_code_15_train: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
         parquet_file=config["code_15_dataset_path"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
@@ -105,13 +105,13 @@ def main():
 
 
     dataset_mimic_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
-        parquet_file=config["test_parquet_MIMIC_file"],
+        parquet_file=config["test_parquet_MIMIC_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
     print(f"len(dataset_mimic_test): {len(dataset_mimic_test)}")
     dataset_mhi_test: ECGDatasetEmbeddings = ECGDatasetEmbeddings(
-        parquet_file=config["test_parquet_MHI_file"],
+        parquet_file=config["test_parquet_MHI_file_processed"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
@@ -165,7 +165,7 @@ def main():
 
     model.eval()
 
-    get_embeddings(model, data_loader, device, save_dir=embedding_dir, dataset_name="train")
+    get_embeddings(model, data_train_loader, device, save_dir=embedding_dir, dataset_name="train")
     get_embeddings(model, data_test_loader, device, save_dir=embedding_dir, dataset_name="test")
 
 if __name__ == '__main__':
