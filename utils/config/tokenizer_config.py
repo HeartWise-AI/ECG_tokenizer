@@ -33,6 +33,13 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     num_quantizers: int
     codebook_size: int
     
+    # Decoder mode
+    decoder_mode: str
+    
+    # Classification parameters
+    num_classes: int
+    criterion: str
+    
     # Dataset parameters
     train_dataset_path: str
     validation_dataset_path: str
@@ -40,7 +47,7 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     batch_size: int
     
     # Waveform parameters
-    waveform_length: int
     num_leads: int
+    waveform_length: int
     normalize_waveforms: bool
     lead_stats: dict[str, dict[str, float]]
