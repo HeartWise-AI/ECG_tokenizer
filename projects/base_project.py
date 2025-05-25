@@ -1,7 +1,7 @@
 import os
 import torch
 
-from typing import Any
+from typing import Any, Union
 from abc import ABC, abstractmethod
 
 from utils.enums import RunMode
@@ -9,6 +9,9 @@ from utils.registry import RunnerRegistry
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 from utils.files_handler import generate_output_dir_name, backup_config
+from runners.tokenizer_runner import ECGTokenizerRunner
+from runners.llm_finetuning_runner import LLMFinetuningRunner
+from runners.bert_report_classifier_runner import BertReportClassifierRunner
 
 class BaseProject(ABC):
     def __init__(
@@ -20,15 +23,15 @@ class BaseProject(ABC):
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
         
     @abstractmethod
-    def run(self):
-        pass
-    
-    @abstractmethod
     def _setup_inference_objects(self)->dict[str, Any]:
         pass
     
     @abstractmethod
     def _setup_training_objects(self)->dict[str, Any]:
+        pass
+    
+    @abstractmethod
+    def _setup_extraction_objects(self)->dict[str, Any]:
         pass
     
     def _setup_project(self):
@@ -55,7 +58,7 @@ class BaseProject(ABC):
             raise ValueError(f"Checkpoint file does not exist: {checkpoint_path}")
         
         print(
-            f"[BaseProject] Loading checkpoint: {checkpoint_path}"
+            f"[{self.__class__.__name__}] Loading checkpoint: {checkpoint_path}"
         )
         
         return torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -75,7 +78,11 @@ class BaseProject(ABC):
             runner_args.update(self._setup_extraction_objects())
         
         elif self.config.run_mode == RunMode.INFERENCE:
-            raise NotImplementedError("Inference is not implemented")
+            runner_args.update(self._setup_inference_objects())
         
-        runner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        runner: Union[
+            ECGTokenizerRunner, 
+            LLMFinetuningRunner,
+            BertReportClassifierRunner
+        ] = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
         runner.execute(mode=self.config.run_mode)    
