@@ -17,7 +17,7 @@ from utils.registry import ProjectRegistry
 from projects import (
     LLMFinetuningProject,
     BertReportClassifierProject,
-    BertReportClassifierProject
+    ECGTokenizerTrainingProject
 )
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
@@ -52,8 +52,8 @@ def main(config: HeartWiseConfig):
         # Initialize the project
         project: Union[
             LLMFinetuningProject, 
-            BertReportClassifierProject, 
-            BertReportClassifierProject
+            BertReportClassifierProject,
+            ECGTokenizerTrainingProject
         ] = ProjectRegistry.get(
             name=config.pipeline_project # The project to run
         )(

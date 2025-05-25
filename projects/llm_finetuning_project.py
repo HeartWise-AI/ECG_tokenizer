@@ -8,20 +8,14 @@ from transformers import GPT2Tokenizer
 
 from utils.registry import (
     ModelRegistry,
-    RunnerRegistry,
     ProjectRegistry 
 )
 from utils.ddp import DistributedUtils
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import get_scheduler
-from utils.files_handler import (
-    generate_output_dir_name, 
-    backup_config
-)
 from projects.base_project import BaseProject
 from models.gpt2_with_embeddings import GPT2WithEmbedding
-from runners.llm_finetuning_runner import LLMFinetuningRunner
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 from typing import Any
@@ -34,6 +28,9 @@ class LLMFinetuningProject(BaseProject):
         wandb_wrapper: WandbWrapper
     ):
         super().__init__(config, wandb_wrapper)
+
+    def run(self):
+        super().run()
 
     def _setup_training_objects(self)->dict[str, Any]:
         tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
@@ -172,19 +169,6 @@ class LLMFinetuningProject(BaseProject):
             "val_dataloader": validation_dataloader
         }
         
-    def _load_checkpoint(
-        self, 
-        checkpoint_path: str
-    )->dict[str, Any]:
-        if not os.path.exists(checkpoint_path):
-            raise ValueError(f"Checkpoint file does not exist: {checkpoint_path}")
-        
-        print(
-            f"[LLMFinetuningProject] Loading checkpoint: {checkpoint_path}"
-        )
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        return checkpoint
-
     def _get_embedding_size(self, embeddings_dir: str) -> tuple[int, ...]:
         for fname in os.listdir(embeddings_dir):
             full_path = os.path.join(embeddings_dir, fname)
