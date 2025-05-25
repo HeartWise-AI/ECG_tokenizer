@@ -24,6 +24,7 @@ from utils.metrics.llm_metrics import (
     update_worst_metric,
     update_random_batch_metric
 )
+from runners.base_runner import BaseRunner
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 
 import random
@@ -37,7 +38,7 @@ from typing import (
 
 
 @RunnerRegistry.register("LLM_finetuning_runner")
-class LLMFinetuningRunner:
+class LLMFinetuningRunner(BaseRunner):
     def __init__(
         self, 
         model: GPT2WithEmbedding,
@@ -63,14 +64,7 @@ class LLMFinetuningRunner:
         self, 
         mode: RunMode
     ):
-        if mode == RunMode.TRAIN:
-            self.train()
-        elif mode == RunMode.INFERENCE:
-            self.inference()
-        elif mode == RunMode.VALIDATE:
-            self.validate()
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
+        super().execute(mode)
         
     def train(self):
         best_val_loss: float = float('inf')

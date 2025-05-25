@@ -42,24 +42,75 @@ class TestECGDataset:
         """Test dataset initialization."""
         mock_read_parquet.return_value = mock_parquet_data
         
+        lead_stats = {
+            "I": {
+                "mean": -0.982577,
+                "std": 33.551235
+            },
+            "II": {
+                "mean": -0.683182,
+                "std": 35.616466
+            },
+            "III": {
+                "mean": 0.299394,
+                "std": 40.365378
+            },
+            "aVR": {
+                "mean": 0.832880,
+                "std": 28.102812
+            },
+            "aVL": {
+                "mean": -0.640986,
+                "std": 32.563651
+            },
+            "aVF": {
+                "mean": -0.191894,
+                "std": 34.169092
+            },
+            "V1": {
+                "mean": -1.351383,
+                "std": 54.328896
+            },
+            "V2": {
+                "mean": -1.366718,
+                "std": 72.522918
+            },
+            "V3": {
+                "mean": -1.325758,
+                "std": 66.522440
+            },
+            "V4": {
+                "mean": -1.091183,
+                "std": 61.623552
+            },
+            "V5": {
+                "mean": -0.937534,
+                "std": 57.341500
+            },
+            "V6": {
+                "mean": -0.882349,
+                "std": 52.247728
+            }
+        }
+        
         dataset = ECGDataset(
             parquet_file="dummy.parquet",
             expected_waveform_length=2500,
             num_leads=12,
             normalize_waveforms=True,
-            lead_stats=None
+            lead_stats=lead_stats
         )
         
         mock_read_parquet.assert_called_once_with("dummy.parquet")
         assert dataset.expected_waveform_length == 2500
         assert dataset.num_leads == 12
         assert dataset.normalize_waveforms is True
-        assert dataset.lead_stats is None
+        assert dataset.lead_stats == lead_stats
         
     def test_len(self, mock_parquet_data):
         """Test the __len__ method."""
         with patch('pandas.read_parquet', return_value=mock_parquet_data):
-            dataset = ECGDataset(parquet_file="dummy.parquet")
+            dataset = ECGDataset(parquet_file="dummy.parquet", normalize_waveforms=False)
             assert len(dataset) == 3
             
     @patch('os.path.exists')
@@ -141,7 +192,8 @@ class TestECGDataset:
             dataset = ECGDataset(
                 parquet_file="dummy.parquet",
                 expected_waveform_length=2500,  # Expect 2500, but first signal is 1000
-                num_leads=12
+                num_leads=12,
+                normalize_waveforms=False
             )
             
             # The first signal has wrong shape, so it should skip to the second item

@@ -16,11 +16,12 @@ from utils.config.bert_classifier_config import BertReportClassifierConfig
 from utils.metrics.ecg_metrics import compute_metrics
 from utils.constants import ECG_PATTERNS, BERT_THRESHOLDS
 
+from runners.base_runner import BaseRunner
 from models.bert_classifier import BertClassifier
 
 
 @RunnerRegistry.register("BERT_Report_Classifier")
-class BertReportClassifierRunner:
+class BertReportClassifierRunner(BaseRunner):
     def __init__(
         self, 
         model: BertClassifier, 
@@ -37,14 +38,7 @@ class BertReportClassifierRunner:
         self, 
         mode: RunMode
     ):
-        if mode == RunMode.TRAIN:
-            self.train()
-        elif mode == RunMode.INFERENCE:
-            self.inference()
-        elif mode == RunMode.VALIDATE:
-            self.validate()
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
+        super().execute(mode)
         
     def train(self):
         raise NotImplementedError("train not implemented")

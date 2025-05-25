@@ -174,29 +174,29 @@ def compute_metrics(
             macro_f1_scores.append(col_f1)
             
         # Compute macro metrics
-        cat_macro_auc: float = np.mean(cat_auc_scores)
-        cat_macro_auprc: float = np.mean(cat_auprc_scores)
-        cat_macro_f1: float = np.mean(macro_f1_scores)
+        cat_macro_auc: float = float(np.mean(cat_auc_scores))
+        cat_macro_auprc: float = float(np.mean(cat_auprc_scores))
+        cat_macro_f1: float = float(np.mean(macro_f1_scores))
                     
         # Compute micro metrics
         ravel_categories_gt: np.ndarray = category_gt.values.ravel()
         ravel_categories_pred: np.ndarray = category_pred.values.ravel()
-        micro_auc: float = roc_auc_score(
+        micro_auc: float = float(roc_auc_score(
             ravel_categories_gt, 
             ravel_categories_pred, 
             average='micro'
-        )
-        micro_auprc: float = average_precision_score(
+        ))
+        micro_auprc: float = float(average_precision_score(
             ravel_categories_gt, 
             ravel_categories_pred, 
             average='micro'
-        )
-        best_micro_threshold: float = compute_best_threshold(ravel_categories_gt, ravel_categories_pred)
-        cat_micro_f1: float = f1_score(ravel_categories_gt, ravel_categories_pred >= best_micro_threshold, average='micro')                    
+        ))
+        best_micro_threshold: float = float(compute_best_threshold(ravel_categories_gt, ravel_categories_pred))
+        cat_micro_f1: float = float(f1_score(ravel_categories_gt, ravel_categories_pred >= best_micro_threshold, average='micro'))                    
         
         # Compute Category Prevalence
-        cat_prevalence_gt: float = ravel_categories_gt.sum() / len(ravel_categories_gt) * 100
-        cat_prevalence_micro: float = (ravel_categories_pred >= best_micro_threshold).sum() / len(ravel_categories_pred) * 100
+        cat_prevalence_gt: float = float(ravel_categories_gt.sum() / len(ravel_categories_gt) * 100)
+        cat_prevalence_micro: float = float((ravel_categories_pred >= best_micro_threshold).sum() / len(ravel_categories_pred) * 100)
                         
         # Store Category Metrics
         metrics[category] = {
