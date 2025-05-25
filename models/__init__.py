@@ -7,8 +7,8 @@ from models.simple_embedding_reducer import SimpleEmbeddingReducer
 from models.tokenizer import (
     ECG_Tokenizer_Wrapper,
     ECG_CodebookClassifier,
-    ECG_Tokenizer_Conv_Encoder,
-    ECG_Tokenizer_Conv_Decoder,
+    Conv_Encoder,
+    Conv_Decoder,
     ECG_Tokenizer_Quantizer
 )
 
@@ -21,7 +21,7 @@ __all__ = [
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
     "ECG_CodebookClassifier",
-    "ECG_Tokenizer_Conv_Encoder",
-    "ECG_Tokenizer_Conv_Decoder",
+    "Conv_Encoder",
+    "Conv_Decoder",
     "ECG_Tokenizer_Quantizer"
 ]

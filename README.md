@@ -45,8 +45,28 @@
 ## 💻 How to's
 
 ### Tokenizer training
+```base
+# Single GPU training without logging results to wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/tokenizer/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode train
+
+# Multi-GPU training with results logging on wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/tokenizer/base_config.yaml --selected_gpus 0,1 --use_wandb true --run_mode train
+
+# Multi-GPU hyperparameters fine-tuning - RunMode and UseWandb are forced to train and true respectively (see scripts/run_sweep.sh)
+bash scripts/run_sweep.sh --base_config config/tokenizer/base_config.yaml --sweep_config config/tokenizer/sweep_config.yaml --selected_gpus 0,1 --count 5
+```
 
 ### Linear Probing
+```base
+# Single GPU training without logging results to wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode train
+
+# Multi-GPU training with results logging on wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/linear_probing/base_config.yaml --selected_gpus 0,1 --use_wandb true --run_mode train
+
+# Multi-GPU hyperparameters fine-tuning - RunMode and UseWandb are forced to train and true respectively (see scripts/run_sweep.sh)
+bash scripts/run_sweep.sh --base_config config/linear_probing/base_config.yaml --sweep_config config/linear_probing/sweep_config.yaml --selected_gpus 0,1 --count 5
+```
 
 ### LLM Finetuning
 #### GPT2

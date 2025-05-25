@@ -15,7 +15,7 @@ from utils.registry import (
 )
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from utils.schedulers import scheduler_is_per_iteration
 from utils.metrics.llm_metrics import (
     RougeMetric,
     BleuMetric,
@@ -24,6 +24,8 @@ from utils.metrics.llm_metrics import (
     update_worst_metric,
     update_random_batch_metric
 )
+from runners.base_runner import BaseRunner
+from models.gpt2_with_embeddings import GPT2WithEmbedding
 
 import random
 from tqdm import tqdm
@@ -36,7 +38,7 @@ from typing import (
 
 
 @RunnerRegistry.register("LLM_finetuning_runner")
-class LLMFinetuningRunner:
+class LLMFinetuningRunner(BaseRunner):
     def __init__(
         self, 
         model: GPT2WithEmbedding,
@@ -56,19 +58,13 @@ class LLMFinetuningRunner:
         self.scheduler: LRScheduler = scheduler
         self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
+        self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
     
     def execute(
         self, 
         mode: RunMode
     ):
-        if mode == RunMode.TRAIN:
-            self.train()
-        elif mode == RunMode.INFERENCE:
-            self.inference()
-        elif mode == RunMode.VALIDATE:
-            self.validate()
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
+        super().execute(mode)
         
     def train(self):
         best_val_loss: float = float('inf')
@@ -89,6 +85,10 @@ class LLMFinetuningRunner:
                 self.wandb_wrapper.log(
                     epoch_metrics
                 )
+            
+            # Step the scheduler if it should be updated per-epoch
+            if self.scheduler and (not self.scheduler_per_iteration):
+                self.scheduler.step()
             
             # Sync the process group
             DistributedUtils.sync_process_group(
@@ -120,8 +120,15 @@ class LLMFinetuningRunner:
             
             # Sync after validation epoch, before next epoch            
             if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+                # Add learning rate metrics from training epoch metrics
+                lr_metrics = {}
+                for key, value in epoch_metrics.items():
+                    if "lr_" in key:
+                        lr_metrics[key] = value
+                
                 self.wandb_wrapper.log({
                     **epoch_metrics,
+                    **lr_metrics,
                     f"{RunMode.VALIDATE}/best_loss": best_val_loss
                 })
                 
@@ -187,6 +194,11 @@ class LLMFinetuningRunner:
             metrics: dict[str, float] = {}
             metrics['loss'] = outputs['loss'].item()
             
+            # Extract learning rate metrics
+            for key, value in outputs.items():
+                if key.startswith('lr_'):
+                    metrics[key] = value
+            
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
@@ -223,10 +235,17 @@ class LLMFinetuningRunner:
             # Log the loss to wandb
             if mode == RunMode.TRAIN:
                 if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                    self.wandb_wrapper.log({
+                    log_dict = {
                         f"{mode}/loss": gathered_metrics[f'{mode}/loss'],  # Log the gathered loss for current batch
                         f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
-                    })
+                    }
+                    
+                    # Add learning rate metrics to log_dict
+                    for key, value in gathered_metrics.items():
+                        if f"{mode}/lr_" in key:
+                            log_dict[key] = value
+                            
+                    self.wandb_wrapper.log(log_dict)
             
             # Sync after logging
             DistributedUtils.sync_process_group(
@@ -314,9 +333,23 @@ class LLMFinetuningRunner:
         
         self.scaler.step(self.optimizer)
         self.scaler.update()
+                
+        # Get learning rate metrics
+        lr_metrics = {}
+        for pg in self.optimizer.param_groups:
+            if "name" in pg:
+                lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+            else:
+                # Fallback for any unnamed groups
+                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+        
+        # Step the scheduler if it should be updated per-iteration
+        if self.scheduler and self.scheduler_per_iteration:
+            self.scheduler.step()
         
         return {
-            "loss": loss
+            "loss": loss,
+            **lr_metrics
         }
 
     def _val_step(
@@ -345,9 +378,19 @@ class LLMFinetuningRunner:
                     max_token_length=self.config.max_token_length
                 )
 
+            # Get learning rate metrics
+            lr_metrics = {}
+            for pg in self.optimizer.param_groups:
+                if "name" in pg:
+                    lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+                else:
+                    # Fallback for any unnamed groups
+                    lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+
             return {
                 "loss": outputs.loss,
-                "generated_ids": generated_ids
+                "generated_ids": generated_ids,
+                **lr_metrics
             }
 
     def _inference_step(
@@ -462,9 +505,19 @@ class LLMFinetuningRunner:
             torch.save(checkpoint, best_model_path)
             
         if self.wandb_wrapper.is_initialized():
+            # Get current learning rates
+            lr_metrics = {}
+            for pg in self.optimizer.param_groups:
+                if "name" in pg:
+                    lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+                else:
+                    # Fallback for any unnamed groups
+                    lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
+                
             self.wandb_wrapper.log({
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,
+                **lr_metrics
             })
 
     def _compute_metrics(

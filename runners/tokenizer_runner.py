@@ -2,6 +2,9 @@ import os
 import wandb
 import heapq
 import torch
+import numpy as np
+import pandas as pd
+import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
@@ -13,10 +16,14 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from utils.ddp import DistributedUtils
 from utils.registry import RunnerRegistry
-from utils.enums import RunMode
-from utils.config import ECGTokenizerTrainingConfig
+from utils.enums import RunMode, DecoderMode
 from utils.wandb_wrapper import WandbWrapper
-from models.tokenizer import ECG_Tokenizer_Wrapper
+from utils.config import ECGTokenizerTrainingConfig
+from utils.metrics.ecg_metrics import compute_metrics
+from utils.schedulers import scheduler_is_per_iteration
+from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
+from models.tokenizer import ECG_Tokenizer_Wrapper, ResidualVQ
+
 
 @RunnerRegistry.register("ECG_Tokenizer_Training")
 class ECGTokenizerRunner:
@@ -24,12 +31,13 @@ class ECGTokenizerRunner:
         self, 
         ecg_tokenizer: ECG_Tokenizer_Wrapper, 
         config: ECGTokenizerTrainingConfig, 
-        train_dataloader: DataLoader, 
-        validation_dataloader: DataLoader, 
-        wandb_wrapper: WandbWrapper | None = None,
-        optimizer: optim.Optimizer | None = None,
-        scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
+        scheduler: LRScheduler | None = None,
+        optimizer: optim.Optimizer | None = None,
+        wandb_wrapper: WandbWrapper | None = None,
+        train_dataloader: DataLoader | None = None, 
+        validation_dataloader: DataLoader | None = None,
+        embedding_extraction_dataloader: DataLoader | None = None,
     ):
         """
         Initialize the TokenizerRunner.
@@ -48,7 +56,11 @@ class ECGTokenizerRunner:
         self.optimizer: optim.Optimizer | None = optimizer
         self.scheduler: LRScheduler | None = scheduler
         self.scaler: GradScaler | None = scaler
-
+        self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
+        self.criterion: nn.Module = nn.BCEWithLogitsLoss()
+        self.decoder_mode: DecoderMode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
+        self.embedding_extraction_dataloader: DataLoader | None = embedding_extraction_dataloader
+        
     def execute(self, mode: RunMode):
         """
         Execute the pipeline in the desired mode.
@@ -64,6 +76,8 @@ class ECGTokenizerRunner:
             self.inference()
         elif mode == RunMode.VALIDATE:
             self.validate()
+        elif mode == RunMode.EXTRACT_EMBEDDINGS:
+            self.extract_embeddings()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -92,6 +106,10 @@ class ECGTokenizerRunner:
                     epoch_metrics
                 )
             
+            # Step the scheduler if it should be updated per-epoch
+            if self.scheduler and (not self.scheduler_per_iteration):
+                self.scheduler.step()
+            
             # Sync the process group
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
@@ -111,8 +129,9 @@ class ECGTokenizerRunner:
             
             # Update best metric and save the tokenizer checkpoint if improved.
             if self.config.is_ref_device:
-                if epoch_metrics[f"{RunMode.VALIDATE}/rec_loss"] < best_rec_loss:
-                    best_rec_loss = epoch_metrics[f"{RunMode.VALIDATE}/rec_loss"]
+                loss_key: str = f"{RunMode.VALIDATE}/cls_loss" if self.decoder_mode == DecoderMode.CLASSIFICATION else f"{RunMode.VALIDATE}/rec_loss"
+                if epoch_metrics[loss_key] < best_rec_loss:
+                    best_rec_loss = epoch_metrics[loss_key]
                     self._save_model(
                         epoch=epoch,
                         loss=best_rec_loss,
@@ -125,7 +144,7 @@ class ECGTokenizerRunner:
                 # Save regular tokenizer checkpoint for the current epoch.
                 self._save_model(
                     epoch=epoch,
-                    loss=epoch_metrics[f"{RunMode.VALIDATE}/rec_loss"],
+                    loss=epoch_metrics[loss_key],
                     checkpoint_path=os.path.join(
                         self.config.output_dir, 
                         f'checkpoint_epoch_{epoch}.pt'
@@ -175,12 +194,23 @@ class ECGTokenizerRunner:
             device_ids=self.config.device
         )
         
-        epoch_losses = {
-            "rec_loss": torch.zeros(1, device=self.config.device),
-            "cmt_loss": torch.zeros(1, device=self.config.device),
-            "active_codes": torch.zeros(1, device=self.config.device),
-            "combined_loss": torch.zeros(1, device=self.config.device)
-        }
+        # Determine if we're in classification mode using DecoderMode enum       
+        if self.decoder_mode == DecoderMode.CLASSIFICATION:
+            epoch_losses = {
+                "cls_loss": torch.zeros(1, device=self.config.device),
+                "cmt_loss": torch.zeros(1, device=self.config.device),
+                "active_codes": torch.zeros(1, device=self.config.device),
+                "combined_loss": torch.zeros(1, device=self.config.device)
+            }
+            all_predictions = []
+            all_labels = []
+        else:
+            epoch_losses = {
+                "rec_loss": torch.zeros(1, device=self.config.device),
+                "cmt_loss": torch.zeros(1, device=self.config.device),
+                "active_codes": torch.zeros(1, device=self.config.device),
+                "combined_loss": torch.zeros(1, device=self.config.device)
+            }
         
         k_batches: int = 1
         max_signals_plot: int = 1
@@ -189,40 +219,67 @@ class ECGTokenizerRunner:
         # For best indices (min heap - keeping lowest losses)
         best_heap: list[tuple[float, torch.Tensor, torch.Tensor]] = []   # Will store (loss, input_signal, reconstructed_signal) tuples
 
+        lr_metrics: dict[str, float] = {}
+
         for batch_idx, batch in enumerate(data_iter, 1):
             signals: torch.Tensor = batch["signal"].float().to(self.config.device)
-            outputs: dict[str, torch.Tensor] = step_fn(signals=signals)
-            
-            # Store a copy of the signals to avoid reference issues
-            rec_loss = outputs["rec_loss"].item()
-            input_signal = signals.detach().cpu()
-            reconstructed_signal = outputs["reconstruction"].detach().cpu()
-            
-            ## For worst losses (keep k highest losses)
-            if len(worst_heap) < k_batches:
-                heapq.heappush(worst_heap, (rec_loss, input_signal, reconstructed_signal))
-            elif rec_loss > worst_heap[0][0]:  # If current loss is worse than smallest in heap
-                heapq.heapreplace(worst_heap, (rec_loss, input_signal, reconstructed_signal))
-                
-            # For best losses (keep k lowest losses)
-            if len(best_heap) < k_batches:
-                heapq.heappush(best_heap, (rec_loss, input_signal, reconstructed_signal))
-            elif rec_loss < best_heap[0][0]:  # If current loss is better than largest in heap
-                heapq.heapreplace(best_heap, (rec_loss, input_signal, reconstructed_signal))
+            labels: torch.Tensor = batch["labels"].float().to(self.config.device) if "labels" in batch else None
+            outputs: dict[str, torch.Tensor] = step_fn(signals=signals, labels=labels)
 
-            # Accumulate metrics on GPU
-            epoch_losses["rec_loss"] += outputs["rec_loss"]
-            epoch_losses["cmt_loss"] += outputs["cmt_loss"].mean()
-            epoch_losses["active_codes"] += outputs["indices"].unique().numel() / self.config.codebook_size * 100
-            epoch_losses["combined_loss"] += outputs["combined_loss"]
+            for key, value in outputs.items():
+                if key.startswith("lr_"):
+                    lr_metrics[key] = lr_metrics.get(key, 0) + value
             
-            # Update progress bar with current mean metrics
-            data_iter.set_postfix({
-                "mean_rec_loss": f"{(epoch_losses['rec_loss'] / batch_idx).item():.4f}",
-                "mean_cmt_loss": f"{(epoch_losses['cmt_loss'] / batch_idx).item():.4f}",
-                "mean_active_codes": f"{(epoch_losses['active_codes'] / batch_idx).item():.2f}%",
-                "mean_combined_loss": f"{(epoch_losses['combined_loss'] / batch_idx).item():.4f}"
-            })
+            if self.decoder_mode == DecoderMode.CLASSIFICATION:
+                # Classification mode
+                epoch_losses["cls_loss"] += outputs["cls_loss"].item()
+                epoch_losses["cmt_loss"] += outputs["cmt_loss"].item()
+                epoch_losses["active_codes"] += outputs["indices"].unique().numel() / self.config.codebook_size * 100
+                epoch_losses["combined_loss"] += outputs["combined_loss"].item()
+
+                # Collect predictions and labels for metrics calculation
+                all_predictions.append(outputs["predictions"].detach().cpu())
+                all_labels.append(labels.detach().cpu())
+                
+                # Update progress bar with current mean metrics
+                data_iter.set_postfix({
+                    "mean_cls_loss": f"{(epoch_losses['cls_loss'] / batch_idx).item():.4f}",
+                    "mean_cmt_loss": f"{(epoch_losses['cmt_loss'] / batch_idx).item():.4f}",
+                    "mean_active_codes": f"{(epoch_losses['active_codes'] / batch_idx).item():.2f}%",
+                    "mean_combined_loss": f"{(epoch_losses['combined_loss'] / batch_idx).item():.4f}"
+                })
+            else:
+                # Reconstruction mode
+                # Store a copy of the signals to avoid reference issues
+                rec_loss = outputs["rec_loss"].item()
+                input_signal = signals.detach().cpu()
+                reconstructed_signal = outputs["reconstruction"].detach().cpu()
+                
+                ## For worst losses (keep k highest losses)
+                if len(worst_heap) < k_batches:
+                    heapq.heappush(worst_heap, (rec_loss, input_signal, reconstructed_signal))
+                elif rec_loss > worst_heap[0][0]:  # If current loss is worse than smallest in heap
+                    heapq.heapreplace(worst_heap, (rec_loss, input_signal, reconstructed_signal))
+                    
+                # For best losses (keep k lowest losses)
+                if len(best_heap) < k_batches:
+                    heapq.heappush(best_heap, (rec_loss, input_signal, reconstructed_signal))
+                elif rec_loss < best_heap[0][0]:  # If current loss is better than largest in heap
+                    heapq.heapreplace(best_heap, (rec_loss, input_signal, reconstructed_signal))
+    
+                # Accumulate metrics on GPU
+                epoch_losses["rec_loss"] += outputs["rec_loss"]
+                epoch_losses["cmt_loss"] += outputs["cmt_loss"]
+                epoch_losses["active_codes"] += outputs["indices"].unique().numel() / self.config.codebook_size * 100
+                epoch_losses["combined_loss"] += outputs["combined_loss"]
+                
+                # Update progress bar with current mean metrics
+                data_iter.set_postfix({
+                    "mean_rec_loss": f"{(epoch_losses['rec_loss'] / batch_idx).item():.4f}",
+                    "mean_cmt_loss": f"{(epoch_losses['cmt_loss'] / batch_idx).item():.4f}",
+                    "mean_active_codes": f"{(epoch_losses['active_codes'] / batch_idx).item():.2f}%",
+                    "mean_combined_loss": f"{(epoch_losses['combined_loss'] / batch_idx).item():.4f}"
+                })
             
             # Sync across processes.
             DistributedUtils.sync_process_group(
@@ -232,14 +289,46 @@ class ECGTokenizerRunner:
 
         # Gather and normalize metrics once at the end of epoch
         gathered_metrics = {}
-        for k in epoch_losses:
+        for k, v in epoch_losses.items():
+            # Normalize the accumulated losses
             gathered_metrics[f"{mode}/{k}"] = DistributedUtils.gather_loss(
-                [epoch_losses[k].item()], 
+                [v.item()], 
                 self.config.device
             ) / len(dataloader)
         
+        # Add averaged learning rate metrics to gathered_metrics gathered across GPUs
+        for key, value in lr_metrics.items():
+            gathered_metrics[key] = DistributedUtils.gather_loss(
+                [value], 
+                self.config.device
+            ) / len(dataloader)
+        
+        # For classification mode, calculate additional metrics
+        if self.decoder_mode == DecoderMode.CLASSIFICATION and all_predictions and all_labels:
+            all_preds = torch.cat(all_predictions, dim=0)
+            all_lbls = torch.cat(all_labels, dim=0)
+            
+            # Convert tensors to numpy arrays and then to pandas DataFrames
+            pred_df = pd.DataFrame(
+                all_preds.float().cpu().numpy(),
+                columns=ECG_PATTERNS
+            )
+            labels_df = pd.DataFrame(
+                all_lbls.float().cpu().numpy(),
+                columns=ECG_PATTERNS
+            )
+            
+            # Compute metrics
+            metrics_dict = compute_metrics(labels_df, pred_df)
+            
+            # Add metrics to gathered_metrics
+            for category in ECG_CATEGORIES:
+                for metric_name in metrics_dict[category]:
+                    gathered_metrics[f"{mode}/{category}_{metric_name}"] = metrics_dict[category][metric_name]
+        
         # Plot and log best/worst reconstructions if wandb is initialized and we're on reference device
-        if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+        # and we're in reconstruction mode
+        if self.decoder_mode == DecoderMode.RECONSTRUCTION and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
             # Get the worst and best cases (no need for sorting since we're only using one example)
             worst_case = max(worst_heap, key=lambda x: x[0])  # Get entry with highest loss
             best_case = min(best_heap, key=lambda x: x[0])   # Get entry with lowest loss
@@ -309,8 +398,9 @@ class ECGTokenizerRunner:
     
     def _train_step(
         self, 
-        signals: torch.Tensor
-    ) -> torch.Tensor:
+        signals: torch.Tensor,
+        labels: torch.Tensor = None
+    ) -> dict:
         self.optimizer.zero_grad()
         
         alpha: float = 1.0
@@ -318,55 +408,171 @@ class ECGTokenizerRunner:
             device_type='cuda',
             dtype=torch.bfloat16
         ):
+            # Get the output, indices, and commit loss
             out, indices, cmt_loss = self.ecg_tokenizer(signals)
-            rec_loss: torch.Tensor = (out - signals).abs().mean()
-            combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
+            # Check the mode using DecoderMode enum
+            decoder_mode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
+            decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
             
-        # Backward pass with gradient scaling
-        self.scaler.scale(combined_loss).backward()
-        
-        # Unscale gradients and apply gradient clipping
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.ecg_tokenizer.parameters(), max_norm=1.0)
-        
-        # Sync gradients across processes before optimizer step
-        DistributedUtils.sync_process_group(
-            world_size=self.config.world_size,
-            device_ids=self.config.device
-        )
-        
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-
-        return {
-            "rec_loss": rec_loss,
-            "cmt_loss": cmt_loss.mean(),
-            "combined_loss": combined_loss,
-            "indices": indices,
-            "reconstruction": out  # Add the reconstruction to the outputs
-        }
+            # Get learning rate metrics
+            lr_metrics = {}
+            for pg in self.optimizer.param_groups:
+                if "name" in pg:
+                    lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+                else:
+                    # Fallback for any unnamed groups
+                    lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+            
+            if decoder_mode == DecoderMode.CLASSIFICATION and labels is not None:
+                # Classification mode                
+                cls_loss = self.criterion(out, labels)
+                combined_loss = cls_loss + alpha * cmt_loss.mean()
+                
+                # Apply sigmoid to get probabilities for metrics calculation
+                pred_probs = torch.sigmoid(out)
+                
+                # Backward pass with gradient scaling
+                self.scaler.scale(combined_loss).backward()
+                
+                # Unscale gradients and apply gradient clipping
+                self.scaler.unscale_(self.optimizer)
+                
+                # Sync gradients across processes before optimizer step
+                DistributedUtils.sync_process_group(
+                    world_size=self.config.world_size,
+                    device_ids=self.config.device
+                )
+                
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                                
+                # Step the scheduler if it should be updated per-iteration
+                if self.scheduler and self.scheduler_per_iteration:
+                    self.scheduler.step()
+                    
+                return {
+                    "cls_loss": cls_loss,
+                    "cmt_loss": cmt_loss.mean(),
+                    "combined_loss": combined_loss,
+                    "indices": indices,
+                    "predictions": pred_probs,
+                    **lr_metrics
+                }
+            else:
+                # Reconstruction mode
+                rec_loss: torch.Tensor = (out - signals).abs().mean()
+                combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
+                
+                # Backward pass with gradient scaling
+                self.scaler.scale(combined_loss).backward()
+                
+                # Unscale gradients and apply gradient clipping
+                self.scaler.unscale_(self.optimizer)
+                
+                # Sync gradients across processes before optimizer step
+                DistributedUtils.sync_process_group(
+                    world_size=self.config.world_size,
+                    device_ids=self.config.device
+                )
+                
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                                
+                # Step the scheduler if it should be updated per-iteration
+                if self.scheduler and self.scheduler_per_iteration:
+                    self.scheduler.step()
+                    
+                return {
+                    "rec_loss": rec_loss,
+                    "cmt_loss": cmt_loss.mean(),
+                    "combined_loss": combined_loss,
+                    "indices": indices,
+                    "reconstruction": out,
+                    **lr_metrics
+                }
 
     @torch.no_grad()
     def _val_step(
         self, 
-        signals: torch.Tensor
+        signals: torch.Tensor,
+        labels: torch.Tensor = None
     ) -> torch.Tensor:
         alpha: float = 1.0
+        
+        lr_metrics = {}
+        for pg in self.optimizer.param_groups:
+            if "name" in pg:
+                lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+            else:
+                # Fallback for any unnamed groups
+                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
+        
         with torch.amp.autocast(
             device_type='cuda',
             dtype=torch.bfloat16
         ):
             out, indices, cmt_loss = self.ecg_tokenizer(signals)
-            rec_loss: torch.Tensor = (out - signals).abs().mean()
-            combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
+            
+            # Check the mode using DecoderMode enum
+            decoder_mode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
+            decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)          
+            
+            if decoder_mode == DecoderMode.CLASSIFICATION:
+                # Classification mode
+                cls_loss = self.criterion(out, labels)
+                combined_loss = cls_loss + alpha * cmt_loss.mean()
+                pred_probs = torch.sigmoid(out)
+                return {
+                    "cls_loss": cls_loss,
+                    "cmt_loss": cmt_loss.mean(),
+                    "combined_loss": combined_loss,
+                    "indices": indices,
+                    "predictions": pred_probs,
+                }
+            else:
+                # Reconstruction mode
+                rec_loss: torch.Tensor = (out - signals).abs().mean()
+                combined_loss: torch.Tensor = rec_loss + alpha * cmt_loss.mean()
 
-        return {
-            "rec_loss": rec_loss,
-            "cmt_loss": cmt_loss.mean(),
-            "combined_loss": combined_loss,
-            "indices": indices,
-            "reconstruction": out  # Add the reconstruction to the outputs
-        }
+                return {
+                    "rec_loss": rec_loss,
+                    "cmt_loss": cmt_loss.mean(),
+                    "combined_loss": combined_loss,
+                    "indices": indices,
+                    "reconstruction": out,
+                    **lr_metrics
+                }
+
+    def extract_embeddings(self):
+        """
+        Extract embeddings from the model.
+        """
+        save_dir: str = os.path.join(self.config.output_dir, "embeddings")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        for batch in tqdm(self.embedding_extraction_dataloader):
+            signals = batch['signal'].float().to(self.config.device)
+            waveform_path = batch['waveform_path']
+            residual_vq_layer = None
+    
+            with torch.no_grad():
+                out, indices, cmt_loss = self.ecg_tokenizer(signals)
+                for i, layer in enumerate(self.ecg_tokenizer.module.layers):
+                    if isinstance(layer, ResidualVQ):
+                        residual_vq_layer = layer
+                        break
+
+            batch_embeddings = residual_vq_layer.get_codes_from_indices(indices)
+            
+            for idx in range(len(waveform_path)):
+                single_embedding = batch_embeddings[:, idx:idx+1, :, :]
+                single_embedding = single_embedding.squeeze(1)
+                embedding_np = single_embedding.detach().cpu().numpy()
+                
+                original_filename = os.path.basename(waveform_path[idx])
+                filename_without_ext = os.path.splitext(original_filename)[0]
+                save_path = os.path.join(save_dir, f"{filename_without_ext}_embedding.npy")
+                np.save(save_path, embedding_np)
 
     def inference(self):
         """
@@ -418,7 +624,17 @@ class ECGTokenizerRunner:
                 print(f"Deleted old checkpoint: {prev_checkpoint_path}")
         
         if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+            # Get current learning rates
+            lr_metrics = {}
+            for pg in self.optimizer.param_groups:
+                if "name" in pg:
+                    lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+                else:
+                    # Fallback for any unnamed groups
+                    lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
+            
             self.wandb_wrapper.log({
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,
+                **lr_metrics
             })

@@ -9,10 +9,12 @@ from utils.config.heartwise_config import HeartWiseConfig
 class LLMFinetuningConfig(HeartWiseConfig):   
     # Training hyperparameters
     seed: int
-    lr: float
+    llm_lr: float
+    embedding_reducer_lr: float
     num_workers: int
     batch_size: int
-    weight_decay: float
+    llm_weight_decay: float
+    embedding_reducer_weight_decay: float
     num_epochs: int
     criterion: str
     optimizer: str
@@ -22,6 +24,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     gamma: float
     run_mode: str
     reducer_dropout: float
+    num_warmup_percent: float
+    num_hard_restarts_cycles: float
+    warm_restart_tmult: int
     
     # Tokenizer parameters
     tokenizer_name: str

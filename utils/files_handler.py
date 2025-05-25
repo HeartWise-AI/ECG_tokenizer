@@ -2,6 +2,8 @@ import os
 import csv
 import json
 import yaml
+import shutil
+
 from typing import Dict, Any
 
 
@@ -11,17 +13,35 @@ def load_yaml(config_path: str) -> Dict[str, Any]:
         config = yaml.safe_load(f)
     return config
 
-def generate_output_dir_name(args, run_id):
+def generate_output_dir_name(
+    config: dict[str, Any], 
+    run_id: str | None = None
+)->str:
     """
     Generates a directory name for output based on the provided configuration.
     """
     import time
+    current_time = time.strftime("%Y%m%d-%H%M%S")
 
-    model_dir = (
-        f"run_{run_id}"
+    run_folder = f"{run_id}_{current_time}" if run_id is not None else f"{current_time}_no_wandb"
+
+    model_dir = os.path.join(
+        config.base_checkpoint_path, 
+        config.pipeline_project,
+        config.wandb_project,
+        run_folder
     )
-
     return model_dir
+
+def backup_config(
+    config: dict[str, Any],
+    output_dir: str
+) -> None:
+    """
+    Backup the configuration file to the output directory by copying the original config file.
+    """
+    config_path: str = os.path.join(output_dir, "config.yaml")
+    shutil.copyfile(config.base_config_path, config_path)
 
 def load_api_keys(path: str) -> dict[str, str]:
     """
@@ -43,7 +63,8 @@ def load_api_keys(path: str) -> dict[str, str]:
     except FileNotFoundError:
         raise FileNotFoundError(f"The API keys file at {path} does not exist.")
     except json.JSONDecodeError:
-        raise json.JSONDecodeError(f"The API keys file at {path} is not a valid JSON file.")
+        # Simply re-raise the exception without trying to create a new one
+        raise
     return keys
 
 def save_to_csv(

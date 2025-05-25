@@ -5,6 +5,7 @@ import pandas as pd
 from torch.utils.data import Dataset
 from utils.ddp import DistributedUtils
 from utils.constants import lead_to_idx
+
 class ECGDataset(Dataset):
     def __init__(
         self, 
@@ -14,12 +15,22 @@ class ECGDataset(Dataset):
         normalize_waveforms: bool = True,
         lead_stats: dict[str, dict[str, float]] = None
     ):
-        self.data = pd.read_parquet(parquet_file)
-        self.expected_waveform_length = expected_waveform_length
-        self.num_leads = num_leads
-        self.normalize_waveforms = normalize_waveforms
-        self.lead_stats = lead_stats
+        self.data: pd.DataFrame = pd.read_parquet(parquet_file)
+        self.expected_waveform_length: int = expected_waveform_length
+        self.num_leads: int = num_leads
+        self.normalize_waveforms: bool = normalize_waveforms
+        self.lead_stats: dict[str, dict[str, float]] = lead_stats
         
+        if self.normalize_waveforms and self.lead_stats is None:
+            raise ValueError("lead_stats must be provided if normalize_waveforms is True") 
+        
+        if self.normalize_waveforms and self.lead_stats is not None:
+            print(f"Normalizing waveforms with lead statistics: {self.lead_stats}")
+        elif not self.normalize_waveforms and self.lead_stats is not None:
+            print(f"Not normalizing waveforms")
+        else:
+            print(f"Not normalizing waveforms")
+            
     def __len__(self):
         return len(self.data)
         
@@ -57,12 +68,6 @@ class ECGDataset(Dataset):
             if unnormalized_signal.shape[1] != self.num_leads:
                 return self.__getitem__((idx + 1) % len(self))
             
-            # signal_min: float = unnormalized_signal.min()
-            # signal_max: float = unnormalized_signal.max()
-            # signal_range: float = signal_max - signal_min
-            
-            # if signal_range == 0:
-            #     return self.__getitem__((idx + 1) % len(self))
             
             # Only normalize if flag is set and we have lead statistics
             try:
@@ -74,19 +79,19 @@ class ECGDataset(Dataset):
                         std = self.lead_stats[lead_name]["std"]
                         signal[:, lead_idx] = (unnormalized_signal[:, lead_idx] - mean) / std
                         
-                    # # Min-max normalization to scale between -1 and 1
-                    # signal_min = signal.min()
-                    # signal_max = signal.max()
-                    # signal = 2 * (signal - signal_min) / (signal_max - signal_min) - 1
                 else:
                     signal = unnormalized_signal
             except Exception as e:
-                raise print(f"Error normalizing signal: {e}")
+                print(f"Error normalizing signal: {e}")
+                raise Exception(f"Error normalizing signal: {e}")
 
-            return {'signal': np.transpose(signal, (1, 0))}
+            return {
+                'signal': np.transpose(signal, (1, 0)), 
+                'waveform_path': self.data.iloc[idx]['waveform_path']
+            }
         
         except Exception as e:
-            print(f"Error processing index {self.data[idx]['waveform_path']}: {str(e)}")
+            print(f"Error processing index {self.data.iloc[idx]['waveform_path']}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
 
 
