@@ -502,7 +502,6 @@ class ECGDatasetEmbeddings(Dataset):
             if unnormalized_signal.shape[1] != self.num_leads:
                 return self.__getitem__((idx + 1) % len(self))
             
-            epsilon: float = 1e-8
             signal_min: float = unnormalized_signal.min()
             signal_max: float = unnormalized_signal.max()
             signal_range: float = signal_max - signal_min
@@ -512,7 +511,6 @@ class ECGDatasetEmbeddings(Dataset):
                 print(f"Skipping {self.data_frame.iloc[idx]['waveform_path']}: signal has no variation (min={signal_min}, max={signal_max})")
                 return self.__getitem__((idx + 1) % len(self))
             
-            # signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
             sample = {'signal': unnormalized_signal, 'waveform_path': waveform_path}
             return sample
         except Exception as e:
