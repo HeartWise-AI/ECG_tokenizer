@@ -543,15 +543,7 @@ class ECGDatasetLinearProbe(Dataset):
             if not embedding_files:
                 raise ValueError(f"No embedding files found in '{self.embedding_folder}'. "
                                  "Ensure you have files ending with '_embedding.npy'.")
-            # keep only rows that have a corresponding embedding
-            # self.data_frame = self.data_frame[
-            #     self.data_frame['npy_path']
-            #         .apply(lambda x: os.path.splitext(os.path.basename(x))[0] in embedding_files)
-            # ]
-            # # fail if parquet has no rows matching those embeddings
-            # if self.data_frame.empty:
-            #     raise ValueError(f"No rows in parquet match embeddings in '{self.embedding_folder}'. "
-            #                      "Check your 'npy_path' values and embedding folder.")
+
             self.train_df, self.val_df, self.test_df = self._stratified_split(val_size, test_size, random_state)
             if self.split == 'train':
                 self.data_frame = self.train_df
