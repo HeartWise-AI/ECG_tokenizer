@@ -40,6 +40,9 @@ class WandbWrapper:
         
     def is_initialized(self)->bool:
         return self.initialized
+    
+    def get_run_id(self)->str:
+        return wandb.run.id
         
     def log(self, kwargs: dict[str, Any]):
         wandb.log(kwargs)

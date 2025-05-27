@@ -2,34 +2,35 @@ import os
 import torch
 import numpy as np
 from torch.amp import GradScaler
-from torch.optim import AdamW, RAdam
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
 
 from utils.registry import (
     ModelRegistry,
-    RunnerRegistry,
     ProjectRegistry 
 )
 from utils.ddp import DistributedUtils
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
+from utils.schedulers import get_scheduler
+from projects.base_project import BaseProject
 from models.gpt2_with_embeddings import GPT2WithEmbedding
-from runners.llm_finetuning_runner import LLMFinetuningRunner
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 from typing import Any
 
 @ProjectRegistry.register("ECG_tokenizer_LLM_finetuning")
-class LLMFinetuningProject:
+class LLMFinetuningProject(BaseProject):
     def __init__(
         self,
         config: LLMFinetuningConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config: LLMFinetuningConfig = config
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
+        super().__init__(config, wandb_wrapper)
+
+    def run(self):
+        super().run()
 
     def _setup_training_objects(self)->dict[str, Any]:
         tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
@@ -73,6 +74,21 @@ class LLMFinetuningProject:
             reducer_dropout=self.config.reducer_dropout
         ).to(self.config.device)
 
+        param_groups = [
+            {
+                "params": model.gpt2.parameters(),
+                "lr": self.config.llm_lr,
+                "weight_decay": self.config.llm_weight_decay,
+                "name": "llm"
+            },
+            {
+                "params": model.embedding_reducer.parameters(),
+                "lr": self.config.embedding_reducer_lr,
+                "weight_decay": self.config.embedding_reducer_weight_decay,
+                "name": "embedding_reducer"
+            }
+        ]
+        
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
             model,
@@ -80,16 +96,22 @@ class LLMFinetuningProject:
         )
 
         # Get the optimizer
-        if self.config.optimizer == "AdamW":
-            optimizer: AdamW = torch.optim.AdamW(model.parameters(), lr=self.config.lr)
-        elif self.config.optimizer == "RAdam":
-            optimizer: RAdam = torch.optim.RAdam(model.parameters(), lr=self.config.lr)
+        optimizer_class: torch.optim.Optimizer = getattr(torch.optim, self.config.optimizer)
+        optimizer: torch.optim.Optimizer = optimizer_class(param_groups)
 
         # Get the scheduler
-        if self.config.scheduler_type == "step":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=self.config.step_size, gamma=self.config.gamma)
-        elif self.config.scheduler_type == "cosine":
-            scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=self.config.num_epochs)
+        scheduler: LRScheduler = get_scheduler(
+            scheduler_name=self.config.scheduler_type,
+            optimizer=optimizer,
+            num_epochs=self.config.num_epochs,
+            train_dataloader=training_dataloader,
+            gamma=self.config.gamma if hasattr(self.config, 'gamma') else None,
+            step_size=self.config.step_size if hasattr(self.config, 'step_size') else None,
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps if hasattr(self.config, 'gradient_accumulation_steps') else 1,
+            num_warmup_percent=self.config.num_warmup_percent if hasattr(self.config, 'num_warmup_percent') else None,
+            num_hard_restarts_cycles=self.config.num_hard_restarts_cycles if hasattr(self.config, 'num_hard_restarts_cycles') else None,
+            warm_restart_tmult=self.config.warm_restart_tmult if hasattr(self.config, 'warm_restart_tmult') else None
+        )
 
         # Get the scaler
         scaler: GradScaler = torch.amp.GradScaler()
@@ -146,36 +168,7 @@ class LLMFinetuningProject:
             "model": model,
             "val_dataloader": validation_dataloader
         }
-    
-    def run(self):
-        runner_args = {
-            "config": self.config,
-            "wandb_wrapper": self.wandb_wrapper
-        }
-        if self.config.run_mode == "train":
-            training_objects: dict[str, Any] = self._setup_training_objects()
-            runner_args.update(training_objects)
-        elif self.config.run_mode == "inference":
-            inference_objects: dict[str, Any] = self._setup_inference_objects()
-            runner_args.update(inference_objects)
-
-        runner: LLMFinetuningRunner = RunnerRegistry.get(self.config.runner_name)(**runner_args)
-        runner.execute(mode=self.config.run_mode)
         
-        
-    def _load_checkpoint(
-        self, 
-        checkpoint_path: str
-    )->dict[str, Any]:
-        if not os.path.exists(checkpoint_path):
-            raise ValueError(f"Checkpoint file does not exist: {checkpoint_path}")
-        
-        print(
-            f"[LLMFinetuningProject] Loading checkpoint: {checkpoint_path}"
-        )
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        return checkpoint
-
     def _get_embedding_size(self, embeddings_dir: str) -> tuple[int, ...]:
         for fname in os.listdir(embeddings_dir):
             full_path = os.path.join(embeddings_dir, fname)

@@ -1,11 +1,14 @@
-from typing import Any
+from typing import Any, Dict, Union
 from transformers import BertTokenizer
+import torch
+from torch.utils.data import DataLoader
 
 from utils.registry import (
     ProjectRegistry, 
     ModelRegistry,
     RunnerRegistry
 )
+from projects.base_project import BaseProject
 from utils.files_handler import load_api_keys
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import BertReportClassifierConfig
@@ -16,18 +19,17 @@ from data.bert_clinical_report_dataset import get_distributed_clinical_report_da
 
 
 @ProjectRegistry.register("BERT_Report_Classifier")
-class BertReportClassifierProject:
+class BertReportClassifierProject(BaseProject):
     def __init__(
         self, 
         config: BertReportClassifierConfig,
         wandb_wrapper: WandbWrapper
     ):
-        self.config = config
-        self.wandb_wrapper = wandb_wrapper
-        
-    def _setup_training_objects(self)->dict[str, Any]:
-        raise NotImplementedError("Subclasses must implement this method")
+        super().__init__(config, wandb_wrapper)
     
+    def run(self):
+        super().run()
+        
     def _setup_inference_objects(self)->dict[str, Any]:
         huggingface_token: str = load_api_keys(self.config.api_keys_path)["HUGGING_FACE_TOKEN"]
         
@@ -60,17 +62,3 @@ class BertReportClassifierProject:
             "val_dataloader": validation_dataloader,
             "model": model
         }
-        
-    def run(self):
-        runner_args = {
-            "config": self.config,
-            "wandb_wrapper": self.wandb_wrapper
-        }
-        if self.config.run_mode == "train":
-            raise NotImplementedError("Training is not implemented")
-        elif self.config.run_mode == "inference":
-            inference_objects: dict[str, Any] = self._setup_inference_objects()
-            runner_args.update(inference_objects)
-                  
-        runner: BertReportClassifierRunner = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
-        runner.execute(mode=self.config.run_mode)

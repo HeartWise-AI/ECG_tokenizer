@@ -72,7 +72,7 @@ ECG_PATTERNS_TRANSLATION = {
     "2nd degree AV block - mobitz 2": "Bloc auriculo-ventriculaire du deuxième degré - Mobitz 2",
     "U wave": "Onde U",
     "R/S ratio in V1-V2 >1": "Rapport R/S dans les dérivations V1-V2 > 1",
-    "RV1 + SV6\xa0> 11 mm": "RV1 + SV6 supérieur à 11 mm",
+    "RV1 + SV6 > 11 mm": "RV1 + SV6 supérieur à 11 mm",
     "Left posterior fascicular block": "Hémibloc postérieur gauche",
     "Right atrial enlargement": "Hypertrophie atriale droite",
     "ST depression (septal- V1-V2)": "Dépression du segment ST dans les dérivations septales (V1-V2)",
@@ -525,3 +525,5 @@ BERT_THRESHOLDS = {
         "threshold": 0.27
     }
 }
+
+PTBXL_POWER_RATIO = 3.003154

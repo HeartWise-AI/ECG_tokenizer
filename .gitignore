@@ -14,3 +14,6 @@ parquets/
 *.parquet
 outputs/
 api_keys.json
+coverage.xml
+.coverage
+embeddings

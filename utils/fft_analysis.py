@@ -51,15 +51,21 @@ def load_ecg_data_from_parquet(parquet_path, max_samples=20000):
     
     path_col = path_cols[0]
     print(f"Using path column: {path_col}")
-    df = df.head(max_samples)
+    # df = df.head(max_samples)
 
     waveforms = []
+    cnt = 0
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Loading waveform files"):
+        if cnt >= max_samples:
+            break
         try:
             path = row[path_col]
             waveform = load_waveform_from_path(path)
+            if np.isnan(waveform).any():
+                continue
             if waveform is not None:
                 waveforms.append(waveform)
+            cnt += 1
         except Exception as e:
             print(f"Error loading file {path}: {e}")
             continue
@@ -101,7 +107,6 @@ def plot_mean_spectrum(signals, fs=250, color='blue', label='Mean Spectrum'):
     if len(signals) == 0:
         print(f"No signals to process for {label}")
         return None, None
-    
     all_magnitude_spectra = []
     for signal in tqdm(signals, desc=f"Computing FFT for {label}"):
         try:
@@ -163,13 +168,14 @@ def main():
         print("\n=== Processing MHI dataset ===")
         mhi_data = load_ecg_data_from_parquet(mhi_path, max_samples=20000)
         if len(mhi_data) > 0:
-            mhi_data = np.array([np.squeeze(signal, axis=2) for signal in mhi_data])
+            # mhi_data = np.array([np.squeeze(signal, axis=2) for signal in mhi_data])
             plot_mean_spectrum(mhi_data, color='red', label='MHI')
             data_plotted = True
     except Exception as e:
         print(f"Error processing MHI dataset: {e}")
 
     try:
+        print("\n=== Processing Code_15 dataset ===")
         code15_data = load_ecg_data_from_parquet(code15_path, max_samples=20000)
         if len(code15_data) > 0:
             plot_mean_spectrum(code15_data, color='green', label='Code_15')
@@ -184,7 +190,7 @@ def main():
         plt.grid(True)
         plt.legend()
         os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, "ecg_fft_comparison.png")
+        output_file = os.path.join(output_dir, "MIMIC_MHI.png")
         plt.savefig(output_file)
         print(f"\nPlot saved to {output_file}")
     else:

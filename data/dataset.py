@@ -128,15 +128,8 @@ class ECGDataset(Dataset):
             if signal_range == 0:
                 print(f"Skipping {self.data_frame.iloc[idx]['waveform_path']}: signal has no variation (min={signal_min}, max={signal_max})")
                 return self.__getitem__((idx + 1) % len(self))
-            
-            signal: np.ndarray = (unnormalized_signal - signal_min) / signal_range * 2 - 1
 
-            # if self.dataset_type == DatasetType.MIMIC:
-            #     aVL_idx = lead_to_idx['aVL']
-            #     aVF_idx = lead_to_idx['aVF']
-            #     signal[:, [aVL_idx, aVF_idx]] = signal[:, [aVF_idx, aVL_idx]]
-
-            return {'signal': np.transpose(signal, (1, 0))}
+            return {'signal': np.transpose(unnormalized_signal, (1, 0))}
         except Exception as e:
             print(f"Error processing index {self.data_frame.iloc[idx]['waveform_path']}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))

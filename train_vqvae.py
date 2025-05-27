@@ -120,7 +120,7 @@ def train(
     optimizer: optim.Optimizer,
     num_codes: int,
     checkpoint_dir: str,
-    num_epochs: int = 10,
+    num_epochs: int = 4,
     alpha: float = 1.0,
     start_epoch: int = 0
 ) -> None:
@@ -224,7 +224,7 @@ def main():
     )
     print(f"len(dataset_mimic_train): {len(dataset_mimic_train)}")
     dataset_mhi_train: ECGDataset = ECGDataset(
-        parquet_file=config["train_parquet_MHI_file_processed"],
+        parquet_file=config["train_parquet_MHI_file"],
         expected_waveform_length=config["waveform_length"],
         num_leads=config["num_leads"]
     )
@@ -286,7 +286,7 @@ def main():
     model: ResVQAutoEncoder = ResVQAutoEncoder(
         timesteps=config["waveform_length"],
         codebook_size=config["num_codes"],
-        implicit_neural_codebook=True
+        implicit_neural_codebook=TrueN
     ).to(device)
 
     if torch.cuda.device_count() > 1:
