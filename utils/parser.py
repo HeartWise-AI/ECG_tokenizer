@@ -42,7 +42,6 @@ class HeartWiseParser:
         train_group.add_argument('--criterion', type=str)
         train_group.add_argument('--num_layers', type=int)
         train_group.add_argument('--hidden_dim', type=int)
-        train_group.add_argument('--reducer_dropout', type=float)
         
         # Optimization parameters
         optim_group: argparse.ArgumentParser = parser.add_argument_group('Optimization')
