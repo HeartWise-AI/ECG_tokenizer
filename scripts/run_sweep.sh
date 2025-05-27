@@ -144,12 +144,6 @@ else
 fi
 
 # Extract configuration fields using yq
-mapfile -t COMMANDS < <(yq e '.command[]' "${SWEEP_CONFIG_PATH}")
-NAME=$(yq e '.parameters.name.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
-PROJECT=$(yq e '.parameters.project.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
-ENTITY=$(yq e '.parameters.entity.values[]' "${SWEEP_CONFIG_PATH}" | tr -d "'")
-
-# Fallback to top‑level metadata if parameters.* extraction yields empty
 if [ -z "${NAME}" ]; then
   NAME=$(yq e '.name' "${SWEEP_CONFIG_PATH}" | tr -d '"')
 fi
