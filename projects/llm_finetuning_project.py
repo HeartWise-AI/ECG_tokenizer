@@ -124,7 +124,7 @@ class LLMFinetuningProject(BaseProject):
             "scaler": scaler,
             "model": model,
         }
-    
+            
     def _setup_inference_objects(self)->dict[str, Any]:
         tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         tokenizer.pad_token = tokenizer.eos_token
@@ -178,3 +178,6 @@ class LLMFinetuningProject(BaseProject):
             except Exception as e:
                 print(f"Warning: could not load {full_path} due to {e}")
         raise ValueError(f"No valid embedding file found in directory: {embeddings_dir}")
+    
+    def _setup_extraction_objects(self)->dict[str, Any]:
+        raise NotImplementedError("Extraction is not implemented for this project")

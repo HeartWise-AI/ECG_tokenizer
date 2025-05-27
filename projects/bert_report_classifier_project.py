@@ -62,3 +62,9 @@ class BertReportClassifierProject(BaseProject):
             "val_dataloader": validation_dataloader,
             "model": model
         }
+    
+    def _setup_extraction_objects(self)->dict[str, Any]:
+        raise NotImplementedError("Extraction is not implemented for this project")
+    
+    def _setup_training_objects(self)->dict[str, Any]:
+        raise NotImplementedError("Training is not implemented for this project")
