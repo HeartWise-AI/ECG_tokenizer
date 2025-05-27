@@ -38,6 +38,10 @@ class HeartWiseParser:
         train_group.add_argument('--llm_lr', type=float)
         train_group.add_argument('--embedding_reducer_lr', type=float)
         train_group.add_argument('--batch_size', type=int)
+        train_group.add_argument('--weight_decay', type=float)
+        train_group.add_argument('--criterion', type=str)
+        train_group.add_argument('--num_layers', type=int)
+        train_group.add_argument('--hidden_dim', type=int)
         
         # Optimization parameters
         optim_group: argparse.ArgumentParser = parser.add_argument_group('Optimization')

@@ -60,10 +60,16 @@ class HeartWiseConfig:
     @classmethod
     def set_gpu_info_in_place(cls, config: 'HeartWiseConfig') -> None:
         """Set GPU information from environment variables."""
-        config.device = int(os.environ["LOCAL_RANK"])
-        config.world_size = int(os.environ["WORLD_SIZE"])
-        config.is_ref_device = (int(os.environ["LOCAL_RANK"]) == 0)
-        
+        try:
+            config.device = int(os.environ["LOCAL_RANK"])
+            config.world_size = int(os.environ["WORLD_SIZE"])
+            config.is_ref_device = (config.device == 0)
+        except KeyError:
+            # Not running in distributed mode; default to single GPU/CPU
+            config.device = 0
+            config.world_size = 1
+            config.is_ref_device = True
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for wandb."""
-        return asdict(self) 
+        return asdict(self)
