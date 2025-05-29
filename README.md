@@ -12,8 +12,8 @@
 1. 📥 **Clone the Repository**:
 
    ```bash
-   https://github.com/HeartWise-AI/DeepCORO_CLIP.git
-   cd DeepCORO_CLIP
+   https://github.com/HeartWise-AI/ECG_tokenizer.git
+   cd ECG_tokenizer
    ```
 
 2. **Set up Virtual Environment**:
