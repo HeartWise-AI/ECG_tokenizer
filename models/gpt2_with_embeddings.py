@@ -4,9 +4,11 @@ from transformers.generation.utils import GenerateOutput
 from transformers import GPT2LMHeadModel, PreTrainedModel
 
 from utils.registry import ModelRegistry
-from models.embedding_reducer import EmbeddingReducer
-from models.linear_reducer import LinearReducer
-from models.simple_embedding_reducer import SimpleEmbeddingReducer
+from models.adapters import (
+    LinearReducer, 
+    EmbeddingReducer, 
+    SimpleEmbeddingReducer
+)
 from typing import Union, Optional, Dict, Any
 
 @ModelRegistry.register("GPT2_WithEmbedding")
