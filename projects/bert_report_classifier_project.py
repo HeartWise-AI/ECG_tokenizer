@@ -1,20 +1,16 @@
-from typing import Any, Dict, Union
+from typing import Any
 from transformers import BertTokenizer
-import torch
-from torch.utils.data import DataLoader
 
 from utils.registry import (
     ProjectRegistry, 
-    ModelRegistry,
-    RunnerRegistry
+    ModelRegistry
 )
-from projects.base_project import BaseProject
-from utils.files_handler import load_api_keys
 from utils.wandb_wrapper import WandbWrapper
+from utils.files_handler import load_api_keys
 from utils.config import BertReportClassifierConfig
 from utils.huggingface_wrapper import HuggingFaceWrapper
+from projects.base_project import BaseProject
 from models.bert_classifier import BertClassifier
-from runners.bert_report_classifier_runner import BertReportClassifierRunner
 from data.bert_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 
@@ -26,6 +22,7 @@ class BertReportClassifierProject(BaseProject):
         wandb_wrapper: WandbWrapper
     ):
         super().__init__(config, wandb_wrapper)
+        self.config: BertReportClassifierConfig = config # cast to BertReportClassifierConfig to avoid type errors
     
     def run(self):
         super().run()

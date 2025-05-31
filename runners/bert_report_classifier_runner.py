@@ -32,7 +32,7 @@ class BertReportClassifierRunner(BaseRunner):
         self.model: BertClassifier = model
         self.config: BertReportClassifierConfig = config
         self.val_dataloader: DataLoader = val_dataloader
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
+        self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
         
     def execute(
         self, 
@@ -113,8 +113,8 @@ class BertReportClassifierRunner(BaseRunner):
             combined_predicted_classes = []
             combined_ground_truth_classes = []
             for res in gathered_results:
-                combined_predicted_classes.extend(res["predicted_classes"])
-                combined_ground_truth_classes.extend(res["ground_truth_classes"])
+                combined_predicted_classes.extend(res["predicted_classes"] if res is not None else [])
+                combined_ground_truth_classes.extend(res["ground_truth_classes"] if res is not None else [])
             
             metrics = compute_metrics(
                 df_gt=pd.DataFrame(combined_ground_truth_classes, columns=ECG_PATTERNS), 

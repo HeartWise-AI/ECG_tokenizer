@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 
 from utils.ddp import DistributedUtils
-from transformers import GPT2Tokenizer
-from torch.utils.data import Dataset, DataLoader
-from utils.config.heartwise_config import HeartWiseConfig
+from transformers import GPT2Tokenizer, BatchEncoding
+from torch.utils.data import Dataset, DataLoader, default_collate
+from utils.config.llm_finetuning_config import LLMFinetuningConfig
 
 
 class ECGClinicalReportDataset(Dataset):
@@ -32,7 +32,7 @@ class ECGClinicalReportDataset(Dataset):
     def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict | None:
         try:
             row = self.df.iloc[idx]
             if pd.isnull(row['waveform_path']) or pd.isnull(row['report']):
@@ -59,7 +59,7 @@ class ECGClinicalReportDataset(Dataset):
             
             report = row['report']
             
-            encoding = self.tokenizer.encode_plus(
+            encoding: BatchEncoding = self.tokenizer.encode_plus(
                 report,
                 add_special_tokens=True,
                 max_length=self.max_length,
@@ -68,8 +68,8 @@ class ECGClinicalReportDataset(Dataset):
                 return_tensors='pt'
             )
             
-            input_ids = encoding['input_ids'].squeeze()  # Shape: (max_length)
-            attention_mask = encoding['attention_mask'].squeeze()  # Shape: (max_length)
+            input_ids: torch.Tensor = torch.tensor(encoding['input_ids']).squeeze(0)  # Shape: (max_length)
+            attention_mask: torch.Tensor = torch.tensor(encoding['attention_mask']).squeeze(0)  # Shape: (max_length)
             
             return {
                 'embedding': embedding,  # (8, 128, 160)
@@ -84,7 +84,7 @@ class ECGClinicalReportDataset(Dataset):
             
             
 def get_clinical_report_dataloader(
-    config: HeartWiseConfig,
+    config: LLMFinetuningConfig,
     shuffle: bool = True,
     pin_memory: bool = True
 ):
@@ -140,4 +140,4 @@ def custom_collate_fn(batch):
     filtered_batch = [item for item in batch if item is not None]
     if len(filtered_batch) == 0:
         raise ValueError("All items in the batch were invalid. Check dataset integrity or file paths.")
-    return torch.utils.data.default_collate(filtered_batch)
+    return default_collate(filtered_batch)

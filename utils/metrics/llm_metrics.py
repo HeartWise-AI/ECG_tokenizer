@@ -25,7 +25,7 @@ class RougeMetric:
         generated_ids: torch.Tensor, 
         labels: torch.Tensor,
         tokenizer: GPT2Tokenizer
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes the average ROUGE-1 and ROUGE-L F1 scores over a batch.
 
@@ -35,7 +35,7 @@ class RougeMetric:
             tokenizer (GPT2Tokenizer): Tokenizer instance.
 
         Returns:
-            Dict[str, float]: Dictionary with keys "rouge1" and "rougeL" representing their respective F1 scores.
+            Dict[str, Union[float, List[str]]]: Dictionary with keys "rouge1" and "rougeL" representing their respective F1 scores, plus "predictions" and "references".
         """
         predictions = []
         references = []
@@ -60,7 +60,7 @@ class BleuMetric:
         generated_ids: torch.Tensor, 
         labels: torch.Tensor,
         tokenizer: GPT2Tokenizer
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes the average BLEU scores over a batch.
 
@@ -70,7 +70,7 @@ class BleuMetric:
             tokenizer (GPT2Tokenizer): Tokenizer instance.
 
         Returns:
-            Dict[str, float]: Dictionary with keys "bleu1" for unigram precision and "bleu4" for overall BLEU score (up to 4-grams).
+            Dict[str, Union[float, List[str]]]: Dictionary with keys "bleu1" for unigram precision and "bleu4" for overall BLEU score (up to 4-grams), plus "predictions" and "references".
         """
         predictions = []
         references = []
@@ -110,17 +110,17 @@ class MeteorMetric:
         generated_ids: torch.Tensor, 
         labels: torch.Tensor,
         tokenizer: GPT2Tokenizer
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes the average METEOR score over a batch.
 
         Args:
             generated_ids (torch.Tensor): Tensor of generated token ids.
             labels (torch.Tensor): Tensor of reference token ids.
-            tokenizer (GPT2Tokenizer): Tokenizer instance.
+            tokenizer: GPT2Tokenizer): Tokenizer instance.
 
         Returns:
-            Dict[str, float]: Dictionary with key "meteor" mapping to the average METEOR score for the batch.
+            Dict[str, Union[float, List[str]]]: Dictionary with key "meteor" mapping to the average METEOR score for the batch, plus "predictions" and "references".
         """
         predictions = []
         references = []
@@ -145,9 +145,13 @@ def update_best_metric(
     The entry (score, predictions, references) is added or replaces an existing entry
     in the provided best_metrics dictionary.
     """
-    score: float = llm_metrics[metric_name]
-    predictions: list[str] = llm_metrics["predictions"]
-    references: list[str] = llm_metrics["references"]
+    score = llm_metrics[metric_name]
+    predictions = llm_metrics["predictions"]
+    references = llm_metrics["references"]
+    
+    assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
+    assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
+    assert isinstance(references, list), f"Expected list for references, got {type(references)}"
 
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 
@@ -162,7 +166,9 @@ def update_best_metric(
     else:
         best_list.sort(key=lambda x: x["score"], reverse=True)
         # Replace if the new score is higher than the smallest among the best entries.
-        if score > best_list[-1]["score"]:
+        last_score = best_list[-1]["score"]
+        assert isinstance(last_score, float)
+        if score > last_score:
             best_list[-1] = entry
     
     best_list.sort(key=lambda x: x["score"], reverse=True)
@@ -181,6 +187,10 @@ def update_worst_metric(
     score = llm_metrics[metric_name]
     predictions = llm_metrics["predictions"]
     references = llm_metrics["references"]
+    
+    assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
+    assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
+    assert isinstance(references, list), f"Expected list for references, got {type(references)}"
 
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 
@@ -194,7 +204,9 @@ def update_worst_metric(
     else:
         worst_list.sort(key=lambda x: x["score"])
         # Replace if the new score is lower than the highest in the worst list.
-        if score < worst_list[-1]["score"]:
+        last_score = worst_list[-1]["score"]
+        assert isinstance(last_score, float)
+        if score < last_score:
             worst_list[-1] = entry
     
     worst_list.sort(key=lambda x: x["score"])
@@ -208,9 +220,13 @@ def update_random_batch_metric(
     """
     Update the random batch metric.
     """
-    score: float = llm_metrics[metric_name]
-    predictions: list[str] = llm_metrics["predictions"]
-    references: list[str] = llm_metrics["references"]
+    score = llm_metrics[metric_name]
+    predictions = llm_metrics["predictions"]
+    references = llm_metrics["references"]
+    
+    assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
+    assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
+    assert isinstance(references, list), f"Expected list for references, got {type(references)}"
     
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 

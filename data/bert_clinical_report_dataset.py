@@ -7,7 +7,7 @@ from torch.utils.data import (
 from transformers import BertTokenizer
 
 from utils.ddp import DistributedUtils
-from utils.config.heartwise_config import HeartWiseConfig    
+from utils.config.bert_classifier_config import BertReportClassifierConfig    
 
     
 class BertClinicalReportDataset(Dataset):
@@ -50,7 +50,7 @@ class BertClinicalReportDataset(Dataset):
         }
 
 def get_clinical_report_dataloader(
-    config: HeartWiseConfig,
+    config: BertReportClassifierConfig,
     tokenizer: BertTokenizer,
     shuffle: bool = True,
     pin_memory: bool = True

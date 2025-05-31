@@ -155,10 +155,10 @@ def compute_metrics(
         macro_f1_scores: list[float] = []
         for col in category_columns:
             # Compute metrics for each column
-            col_auc = roc_auc_score(category_gt[col], category_pred[col])
-            col_auprc = average_precision_score(category_gt[col], category_pred[col])
-            col_threshold = compute_best_threshold(category_gt[col], category_pred[col])
-            col_f1 = f1_score(category_gt[col], category_pred[col] >= col_threshold)
+            col_auc: float = float(roc_auc_score(category_gt[col], category_pred[col]))
+            col_auprc: float = float(average_precision_score(category_gt[col], category_pred[col]))
+            col_threshold: float = float(compute_best_threshold(category_gt[col], category_pred[col]))
+            col_f1: float = float(f1_score(category_gt[col], category_pred[col] >= col_threshold))
             metrics[col] = {
                 "auc": col_auc,
                 "auprc": col_auprc,
@@ -191,7 +191,7 @@ def compute_metrics(
             ravel_categories_pred, 
             average='micro'
         ))
-        best_micro_threshold: float = float(compute_best_threshold(ravel_categories_gt, ravel_categories_pred))
+        best_micro_threshold: float = float(compute_best_threshold(pd.Series(ravel_categories_gt), pd.Series(ravel_categories_pred)))
         cat_micro_f1: float = float(f1_score(ravel_categories_gt, ravel_categories_pred >= best_micro_threshold, average='micro'))                    
         
         # Compute Category Prevalence

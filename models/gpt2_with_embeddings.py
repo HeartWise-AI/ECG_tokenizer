@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from transformers import GPT2LMHeadModel
+from transformers.generation.utils import GenerateOutput
+from transformers import GPT2LMHeadModel, PreTrainedModel
 
 from utils.registry import ModelRegistry
 from models.embedding_reducer import EmbeddingReducer
@@ -15,16 +16,20 @@ class GPT2WithEmbedding(nn.Module):
         gpt2_model_name: str = 'gpt2', 
         gpt2_embedding_size: int = 768, 
         ecg_embedding_size: tuple[int, int, int] = (8, 128, 82),
-        reducer_name: str = None,
+        reducer_name: str = "GPT2_EmbeddingReducer",
         reducer_dropout: float = 0.2
     ):
         super(GPT2WithEmbedding, self).__init__()
-        self.gpt2: GPT2LMHeadModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
-        self.embedding_reducer: Union[
+        self.gpt2: PreTrainedModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
+        self.embedding_reducer_class: Union[
             EmbeddingReducer, 
             LinearReducer, 
             SimpleEmbeddingReducer
-        ] = ModelRegistry.get(reducer_name)(
+        ] = ModelRegistry.get(reducer_name)
+        if self.embedding_reducer is None:
+            raise ValueError(f"Reducer {reducer_name} not found in ModelRegistry")
+        
+        self.embedding_reducer = self.embedding_reducer_class(
             input_shape=ecg_embedding_size,
             output_size=gpt2_embedding_size, 
             dropout=reducer_dropout
@@ -122,7 +127,7 @@ class GPT2WithEmbedding(nn.Module):
         ecg_embeddings: torch.Tensor, 
         max_token_length: int = 512, 
         **generate_kwargs
-    ) -> torch.Tensor:
+    ) -> Union[GenerateOutput, torch.Tensor]:
         """
         Generate a clinical report conditioned solely on the ECG embeddings.
         This method uses GPT-2's generate() function with inputs_embeds.

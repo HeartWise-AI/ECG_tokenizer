@@ -15,7 +15,7 @@ class BaseRegistry:
         return decorator
     
     @classmethod
-    def get(cls, name: str) -> Optional[Type[Any]]:
+    def get(cls, name: str) -> Type[Any]:
         """Get a registered class by name."""
         if name not in cls._registry:
             raise ValueError(
