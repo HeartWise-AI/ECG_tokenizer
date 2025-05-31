@@ -1,8 +1,9 @@
 import torch
 
 from typing import Any
-from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
+from torch.optim.optimizer import Optimizer
+from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
 from utils.registry import (
@@ -28,6 +29,7 @@ class ECGTokenizerTrainingProject(BaseProject):
         wandb_wrapper: WandbWrapper
     ):
         super().__init__(config, wandb_wrapper)
+        self.config: ECGTokenizerTrainingConfig = config # cast to ECGTokenizerTrainingConfig to avoid type errors
     
     def run(self):
         super().run()
@@ -123,8 +125,8 @@ class ECGTokenizerTrainingProject(BaseProject):
         ]
         
         # Get the optimizer
-        optimizer_class: torch.optim.Optimizer = getattr(torch.optim, self.config.optimizer)
-        optimizer: torch.optim.Optimizer = optimizer_class(param_groups)
+        optimizer_class = getattr(torch.optim, self.config.optimizer)
+        optimizer: Optimizer = optimizer_class(param_groups)
 
         # Get the scheduler
         scheduler: LRScheduler = get_scheduler(
@@ -141,7 +143,7 @@ class ECGTokenizerTrainingProject(BaseProject):
         )
                 
         # Get the scaler
-        scaler: GradScaler = torch.amp.GradScaler()
+        scaler: GradScaler = GradScaler()
         
         return {
             "optimizer": optimizer,

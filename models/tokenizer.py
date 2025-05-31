@@ -1,4 +1,5 @@
 import torch.nn as nn
+from typing import List
 from vector_quantize_pytorch import ResidualVQ
 
 from utils.registry import ModelRegistry
@@ -205,36 +206,47 @@ class ECG_Tokenizer_Wrapper(nn.Module):
     """
     def __init__(
         self, 
-        encoder_name="Conv_Encoder", 
-        quantizer_name="ECG_Tokenizer_Quantizer", 
-        decoder_name="Linear_Decoder",
-        num_quantizers=8,
-        codebook_size=512,
-        decoder_mode=DecoderMode.RECONSTRUCTION,
-        num_classes=77
+        encoder_name: str = "Conv_Encoder", 
+        quantizer_name: str = "ECG_Tokenizer_Quantizer", 
+        decoder_name: str = "Linear_Decoder",
+        num_quantizers: int = 8,
+        codebook_size: int = 512,
+        decoder_mode: DecoderMode = DecoderMode.RECONSTRUCTION,
+        num_classes: int = 77
     ):
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
         # Save the names for potential reference
-        self.encoder_name = encoder_name
-        self.quantizer_name = quantizer_name
-        self.decoder_name = decoder_name
+        self.encoder_name: str = encoder_name
+        self.quantizer_name: str = quantizer_name
+        self.decoder_name: str = decoder_name
         
         # Use the DecoderMode enum instead of a string
-        self.decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
+        self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
 
         # Retrieve the components from the registry using the provided names
-        self.encoder = ModelRegistry.get(encoder_name)()
-        self.quantizer = ModelRegistry.get(quantizer_name)(
+        encoder_class = ModelRegistry.get(encoder_name)
+        if encoder_class is None:
+            raise ValueError(f"Encoder '{encoder_name}' not found in ModelRegistry")
+        self.encoder = encoder_class()
+        
+        quantizer_class = ModelRegistry.get(quantizer_name)
+        if quantizer_class is None:
+            raise ValueError(f"Quantizer '{quantizer_name}' not found in ModelRegistry")
+        self.quantizer = quantizer_class(
             num_quantizers=num_quantizers,
             codebook_size=codebook_size
         )
         
         # Initialize appropriate decoder based on mode
+        decoder_class = ModelRegistry.get(decoder_name)
+        if decoder_class is None:
+            raise ValueError(f"Decoder '{decoder_name}' not found in ModelRegistry")
+            
         if self.decoder_mode == DecoderMode.CLASSIFICATION and decoder_name == "Linear_Classifier_Decoder":
-            self.decoder = ModelRegistry.get(decoder_name)(num_classes=num_classes)
+            self.decoder = decoder_class(num_classes=num_classes)
         else:
-            self.decoder = ModelRegistry.get(decoder_name)()
+            self.decoder = decoder_class()
 
     def forward(self, x):
         features = self.encoder(x)
@@ -254,7 +266,7 @@ class ECG_CodebookClassifier(nn.Module):
         hidden_dim=4096
     ):
         super(ECG_CodebookClassifier, self).__init__()
-        layers = [nn.Flatten()]
+        layers: List[nn.Module] = [nn.Flatten()]
         input_dim = num_quantizers * prev_embedding_dim * embedding_dim
 
         if num_layers == 0:

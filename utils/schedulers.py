@@ -1,25 +1,29 @@
 import torch
+from torch.utils.data import DataLoader
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+from typing import Optional
 from transformers import (
     get_linear_schedule_with_warmup, 
     get_cosine_schedule_with_warmup, 
     get_cosine_with_hard_restarts_schedule_with_warmup
 )
 
-from utils.config import HeartWiseConfig
+from utils.config.heartwise_config import HeartWiseConfig
 
 def get_scheduler(
     scheduler_name: str, 
-    optimizer: torch.optim.Optimizer, 
+    optimizer: Optimizer, 
     num_epochs: int,
-    train_dataloader: torch.utils.data.DataLoader,
-    gamma: float = 0.3,
-    step_size: int = 15,
+    train_dataloader: DataLoader,
+    gamma: Optional[float] = 0.3,
+    step_size: Optional[int] = 15,
     gradient_accumulation_steps: int = 1,
-    num_warmup_percent: float = 0.1,
-    num_hard_restarts_cycles: float = 1.0,          
-    warm_restart_tmult: int = 2,
+    num_warmup_percent: Optional[float] = 0.1,
+    num_hard_restarts_cycles: Optional[float] = 1.0,          
+    warm_restart_tmult: Optional[int] = 2,
     num_restarts: int = 10  # New parameter for cosine_warm_restart
-) -> torch.optim.lr_scheduler.LRScheduler:
+) -> LRScheduler:
     """
     Configures and returns a learning rate scheduler based on the specified name.
 
@@ -41,6 +45,13 @@ def get_scheduler(
     Returns:
         torch.optim.lr_scheduler.LRScheduler: Configured learning rate scheduler.
     """
+    # Handle None values by using defaults
+    gamma = gamma if gamma is not None else 0.3
+    step_size = step_size if step_size is not None else 15
+    num_warmup_percent = num_warmup_percent if num_warmup_percent is not None else 0.1
+    num_hard_restarts_cycles = num_hard_restarts_cycles if num_hard_restarts_cycles is not None else 1.0
+    warm_restart_tmult = warm_restart_tmult if warm_restart_tmult is not None else 2
+    
     # Compute total number of optimizer update steps
     t_total = (len(train_dataloader) * num_epochs) // gradient_accumulation_steps
 
@@ -68,7 +79,7 @@ def get_scheduler(
             optimizer,
             T_0=T_0,  # Steps until first restart
             T_mult=warm_restart_tmult,  # Multiplier for subsequent restart periods
-            eta_min=0.0,
+            eta_min=0,
             last_epoch=-1
         )
 
@@ -101,7 +112,7 @@ def get_scheduler(
             optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=t_total,
-            num_cycles=num_hard_restarts_cycles  # Number of restart cycles
+            num_cycles=int(num_hard_restarts_cycles)  # Number of restart cycles
         )
 
     else:

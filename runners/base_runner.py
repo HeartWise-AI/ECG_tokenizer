@@ -1,12 +1,11 @@
 import os
 import torch
+from typing import Dict, Callable
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Union
-from tqdm import tqdm
 from torch.utils.data import DataLoader
+from torch.optim.optimizer import Optimizer
 
 from utils.enums import RunMode
-from utils.ddp import DistributedUtils
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
@@ -44,6 +43,17 @@ class BaseRunner(ABC):
             raise ValueError(f"Invalid mode: {mode}")
     
     @abstractmethod
+    def _run_epoch(
+        self,
+        mode: RunMode,
+        epoch: int,
+        dataloader: DataLoader,
+        step_fn: Callable,
+    ) -> dict[str, float]:
+        """Run an epoch of training or validation."""
+        pass
+    
+    @abstractmethod
     def train(self):
         """Execute training logic."""
         pass
@@ -60,67 +70,11 @@ class BaseRunner(ABC):
     def extract_embeddings(self):
         """Execute embedding extraction logic. Default implementation raises NotImplementedError.""" 
         raise NotImplementedError("Embedding extraction not implemented for this runner")
-    
-    def _run_epoch(
-        self,
-        mode: RunMode,
-        epoch: int,
-        dataloader: DataLoader,
-        step_fn: callable,
-    ) -> Dict[str, float]:
-        """
-        Common epoch running logic that can be used by subclasses.
         
-        Args:
-            mode: The run mode (TRAIN/VALIDATE)
-            epoch: Current epoch number
-            dataloader: DataLoader to iterate over
-            step_fn: Function to call for each batch
-            
-        Returns:
-            Dictionary of metrics for the epoch
-        """
-        # Create progress bar
-        data_iter = tqdm(
-            dataloader,
-            desc=f"[GPU {self.config.device}]: {mode} epoch {epoch}/{self.config.num_epochs}",
-            leave=True,
-            disable=not self.config.is_ref_device
-        )
-        
-        # Sync before starting batch iterations
-        DistributedUtils.sync_process_group(
-            world_size=self.config.world_size,
-            device_ids=self.config.device
-        )
-        
-        total_loss = 0.0
-        num_batches = 0
-        
-        for batch_idx, batch in enumerate(data_iter):
-            # Execute the step function
-            outputs = step_fn(batch, batch_idx)
-            
-            if isinstance(outputs, dict) and 'loss' in outputs:
-                total_loss += outputs['loss']
-                num_batches += 1
-        
-        # Calculate average loss
-        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        
-        return {f"{mode}/loss": avg_loss}
-    
-    def _sync_process_group(self):
-        """Synchronize the distributed process group."""
-        DistributedUtils.sync_process_group(
-            world_size=self.config.world_size,
-            device_ids=self.config.device
-        )
-    
     def _save_checkpoint(
         self,
         model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer,
+        optimizer: Optimizer,
         epoch: int,
         loss: float,
         checkpoint_path: str,
@@ -144,7 +98,7 @@ class BaseRunner(ABC):
         
         checkpoint_data = {
             "model_state_dict": model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict() if optimizer else None,
+            "optimizer_state_dict": optimizer.state_dict(),
             "epoch": epoch,
             "loss": loss,
             "config": self.config.__dict__ if hasattr(self.config, '__dict__') else None,

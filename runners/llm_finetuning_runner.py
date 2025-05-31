@@ -1,11 +1,12 @@
 import os
 import torch
 import pandas as pd
-from torch.optim import AdamW
-from torch.amp import GradScaler
-from transformers import GPT2Tokenizer
+from torch.optim.adamw import AdamW
 from torch.utils.data import DataLoader
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
+from transformers import GPT2Tokenizer
 
 from utils.enums import RunMode
 from utils.ddp import DistributedUtils
@@ -29,11 +30,10 @@ from models.gpt2_with_embeddings import GPT2WithEmbedding
 
 import random
 from tqdm import tqdm
-from collections import defaultdict
 from typing import (
     Any, 
     Union, 
-    DefaultDict
+    Callable
 )
 
 
@@ -50,16 +50,16 @@ class LLMFinetuningRunner(BaseRunner):
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
     ):
-        self.config: LLMFinetuningConfig = config
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
-        self.train_dataloader: DataLoader = train_dataloader
-        self.val_dataloader: DataLoader = val_dataloader
-        self.optimizer: AdamW = optimizer
-        self.scheduler: LRScheduler = scheduler
-        self.scaler: GradScaler = scaler
         self.model: GPT2WithEmbedding = model
+        self.config: LLMFinetuningConfig = config
+        self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
+        self.train_dataloader: DataLoader | None = train_dataloader
+        self.val_dataloader: DataLoader | None = val_dataloader
+        self.optimizer: AdamW | None = optimizer
+        self.scheduler: LRScheduler | None = scheduler
+        self.scaler: GradScaler | None = scaler
         self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
-    
+        
     def execute(
         self, 
         mode: RunMode
@@ -67,6 +67,11 @@ class LLMFinetuningRunner(BaseRunner):
         super().execute(mode)
         
     def train(self):
+        if self.optimizer is None:
+            raise ValueError("Optimizer cannot be None")
+        if self.scaler is None:
+            raise ValueError("Scaler cannot be None")
+        
         best_val_loss: float = float('inf')
         
         for epoch in range(1, self.config.num_epochs + 1):
@@ -81,7 +86,7 @@ class LLMFinetuningRunner(BaseRunner):
                 epoch
             )
                         
-            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log(
                     epoch_metrics
                 )
@@ -119,7 +124,7 @@ class LLMFinetuningRunner(BaseRunner):
                 )
             
             # Sync after validation epoch, before next epoch            
-            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 # Add learning rate metrics from training epoch metrics
                 lr_metrics = {}
                 for key, value in epoch_metrics.items():
@@ -148,9 +153,12 @@ class LLMFinetuningRunner(BaseRunner):
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
         
+        if self.train_dataloader is None or self.val_dataloader is None:
+            raise ValueError("Train or validation dataloader is not set")
+        
         # Get the dataloader and step function
         dataloader: DataLoader = self.train_dataloader if mode == RunMode.TRAIN else self.val_dataloader
-        step_fn: callable = self._train_step if mode == RunMode.TRAIN else self._val_step
+        step_fn: Callable | None = self._train_step if mode == RunMode.TRAIN else self._val_step
         
         # Create a progress bar for the epoch
         data_iter: tqdm = tqdm(
@@ -183,7 +191,7 @@ class LLMFinetuningRunner(BaseRunner):
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
-            outputs: dict[str, torch.Tensor] = step_fn(
+            outputs: dict[str, torch.Tensor] | torch.Tensor = step_fn(
                 embeddings=embeddings, 
                 input_ids=input_ids, 
                 attention_mask=attention_mask, 
@@ -197,7 +205,7 @@ class LLMFinetuningRunner(BaseRunner):
             # Extract learning rate metrics
             for key, value in outputs.items():
                 if key.startswith('lr_'):
-                    metrics[key] = value
+                    metrics[key] = float(value) if isinstance(value, torch.Tensor) else value
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
@@ -234,7 +242,7 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Log the loss to wandb
             if mode == RunMode.TRAIN:
-                if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+                if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                     log_dict = {
                         f"{mode}/loss": gathered_metrics[f'{mode}/loss'],  # Log the gathered loss for current batch
                         f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
@@ -260,7 +268,7 @@ class LLMFinetuningRunner(BaseRunner):
             })
         
         # === New Block: Log best and worst metrics as HTML to wandb ===
-        if mode == RunMode.VALIDATE and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+        if mode == RunMode.VALIDATE and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
             # helper function to create an HTML table given the metrics dictionary
             def create_html_table(metrics_dict, table_title):
                 html = f"<h3>{table_title}</h3>"
@@ -305,22 +313,22 @@ class LLMFinetuningRunner(BaseRunner):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         # Clear gradients
+        assert self.optimizer is not None
+        assert self.scaler is not None
+        
         self.optimizer.zero_grad()
         
         # Forward pass with autocast for mixed precision
-        with torch.amp.autocast(
-            device_type='cuda',
-            dtype=torch.bfloat16
-        ):
+        with autocast('cuda', dtype=torch.bfloat16):
             outputs: dict[str, torch.Tensor] = self.model(
                 ecg_embeddings=embeddings,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
             )
-            loss: torch.Tensor = outputs.loss
+            loss: torch.Tensor = outputs['loss']
 
         # Backward pass with gradient scaling
         self.scaler.scale(loss).backward()
@@ -336,12 +344,9 @@ class LLMFinetuningRunner(BaseRunner):
                 
         # Get learning rate metrics
         lr_metrics = {}
-        for pg in self.optimizer.param_groups:
+        for pg in self.optimizer.param_groups if self.optimizer else []:
             if "name" in pg:
                 lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
-            else:
-                # Fallback for any unnamed groups
-                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
         
         # Step the scheduler if it should be updated per-iteration
         if self.scheduler and self.scheduler_per_iteration:
@@ -380,15 +385,12 @@ class LLMFinetuningRunner(BaseRunner):
 
             # Get learning rate metrics
             lr_metrics = {}
-            for pg in self.optimizer.param_groups:
+            for pg in self.optimizer.param_groups if self.optimizer else []:
                 if "name" in pg:
                     lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
-                else:
-                    # Fallback for any unnamed groups
-                    lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
 
             return {
-                "loss": outputs.loss,
+                "loss": outputs['loss'],
                 "generated_ids": generated_ids,
                 **lr_metrics
             }
@@ -411,12 +413,15 @@ class LLMFinetuningRunner(BaseRunner):
         return generated_ids     
 
     def inference(self):
+        if self.val_dataloader is None:
+            raise ValueError("Validation dataloader is not set")
+            
         self.model.eval()
         
         predicted_reports: list[str] = []
         reference_reports: list[str] = []
         waveform_names: list[str] = []
-        tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer
+        tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer  # type: ignore
         
         for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader), disable=not self.config.is_ref_device):
             embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
@@ -451,9 +456,9 @@ class LLMFinetuningRunner(BaseRunner):
             combined_predicted_reports = []
             combined_reference_reports = []
             for res in gathered_results:
-                combined_waveform_names.extend(res["waveform_names"])
-                combined_predicted_reports.extend(res["predicted_reports"])
-                combined_reference_reports.extend(res["reference_reports"])
+                combined_waveform_names.extend(res["waveform_names"] if res is not None else [])
+                combined_predicted_reports.extend(res["predicted_reports"] if res is not None else [])
+                combined_reference_reports.extend(res["reference_reports"] if res is not None else [])
                     
             df = pd.DataFrame({
                 'waveform_name': combined_waveform_names,
@@ -481,9 +486,9 @@ class LLMFinetuningRunner(BaseRunner):
         checkpoint: dict[str, Any] = {
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict() if hasattr(self.model, 'module') else self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
-            'scaler_state_dict': self.scaler.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
             'loss': loss,
             'config': self.config
         }
@@ -504,12 +509,13 @@ class LLMFinetuningRunner(BaseRunner):
             best_model_path: str = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_model_path)
             
-        if self.wandb_wrapper.is_initialized():
+        if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
             # Get current learning rates
             lr_metrics = {}
-            for pg in self.optimizer.param_groups:
-                if "name" in pg:
-                    lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+            if self.optimizer is not None:
+                for pg in self.optimizer.param_groups:
+                    if "name" in pg:
+                        lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
                 else:
                     # Fallback for any unnamed groups
                     lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
@@ -525,9 +531,9 @@ class LLMFinetuningRunner(BaseRunner):
         outputs: dict[str, torch.Tensor],
         labels: torch.Tensor,
         dataloader: DataLoader,
-        best_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
-        worst_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
-        random_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
+        best_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
+        worst_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
+        random_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch: bool = False,
     ) -> dict[str, float]:
         """Compute metrics for validation and update best/worst batch metrics."""
@@ -541,7 +547,7 @@ class LLMFinetuningRunner(BaseRunner):
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
                 labels,
-                dataloader.dataset.tokenizer
+                dataloader.dataset.tokenizer  # type: ignore
             )
             for metric_name, metric_value in LLM_metrics.items():
                 if metric_name not in ('predictions', 'references'):
@@ -569,22 +575,25 @@ class LLMFinetuningRunner(BaseRunner):
                             k=1  # TODO: k > 1 implemented but haven't been tested with k > 1
                         )
                     
-                    computed_metrics[metric_name] = metric_value
+                    metric_value = float(metric_value) if isinstance(metric_value, torch.Tensor) else metric_value
+                    if isinstance(metric_value, float):
+                        computed_metrics[metric_name] = float(metric_value)
+                    
         return computed_metrics
     
     def _init_validation_metrics(
             self,
             dataloader: DataLoader
         ) -> tuple[
-            DefaultDict[str, Union[list[str], list[float]]],
-            DefaultDict[str, Union[list[str], list[float]]],
-            DefaultDict[str, Union[list[str], list[float]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
             int
         ]:
             # Initialize dictionaries for best, worst, and random batch metrics.
-            worst_batch_metrics = defaultdict(list)
-            best_batch_metrics = defaultdict(list)
-            random_batch_metrics = defaultdict(list)
+            worst_batch_metrics = {}
+            best_batch_metrics = {}
+            random_batch_metrics = {}
             # Select a random batch index
             random_batch_idx = random.randint(0, len(dataloader) - 1)
             return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx    

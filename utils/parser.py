@@ -29,11 +29,11 @@ class HeartWiseParser:
         parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Train ECG_tokenizer linear probing model")
 
         # base config
-        base_group: argparse.ArgumentParser = parser.add_argument_group('Base')
+        base_group = parser.add_argument_group('Base')
         base_group.add_argument('--base_config', type=str, required=True)
 
         # Training parameters
-        train_group: argparse.ArgumentParser = parser.add_argument_group('Training')
+        train_group = parser.add_argument_group('Training')
         train_group.add_argument('--lr', type=float)
         train_group.add_argument('--llm_lr', type=float)
         train_group.add_argument('--embedding_reducer_lr', type=float)
@@ -44,7 +44,7 @@ class HeartWiseParser:
         train_group.add_argument('--hidden_dim', type=int)
         
         # Optimization parameters
-        optim_group: argparse.ArgumentParser = parser.add_argument_group('Optimization')
+        optim_group = parser.add_argument_group('Optimization')
         optim_group.add_argument('--optimizer', type=str)
         optim_group.add_argument('--scheduler_type', type=str)
         optim_group.add_argument('--step_size', type=int)
@@ -57,15 +57,15 @@ class HeartWiseParser:
         optim_group.add_argument('--embedding_reducer_weight_decay', type=float)
         
         # Tokenizer parameters
-        tokenizer_group: argparse.ArgumentParser = parser.add_argument_group('Tokenizer')
+        tokenizer_group = parser.add_argument_group('Tokenizer')
         tokenizer_group.add_argument('--max_token_length', type=int)
 
         # Embedding reducer parameters
-        embedding_reducer_group: argparse.ArgumentParser = parser.add_argument_group('Embedding Reducer')
+        embedding_reducer_group = parser.add_argument_group('Embedding Reducer')
         embedding_reducer_group.add_argument('--reducer_dropout', type=float)
 
         # Checkpointing parameters
-        checkpoint_group: argparse.ArgumentParser = parser.add_argument_group('Checkpointing')
+        checkpoint_group = parser.add_argument_group('Checkpointing')
         checkpoint_group.add_argument('--project', type=parse_optional_str)
         checkpoint_group.add_argument('--entity', type=parse_optional_str)
         checkpoint_group.add_argument('--name', type=parse_optional_str)

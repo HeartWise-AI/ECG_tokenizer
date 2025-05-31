@@ -9,17 +9,22 @@ from utils.constants import lead_to_idx
 class ECGDataset(Dataset):
     def __init__(
         self, 
-        parquet_file: str = None, 
+        parquet_file: str, 
         expected_waveform_length: int = 2500,
         num_leads: int = 12,
         normalize_waveforms: bool = True,
-        lead_stats: dict[str, dict[str, float]] = None
+        lead_stats: dict[str, dict[str, float]] | None = None
     ):
-        self.data: pd.DataFrame = pd.read_parquet(parquet_file)
+        try:
+            self.data: pd.DataFrame = pd.read_parquet(parquet_file)
+        except Exception as e:
+            print(f"Error reading parquet file: {e}")
+            raise Exception(f"Error reading parquet file: {e}")
+        
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
         self.normalize_waveforms: bool = normalize_waveforms
-        self.lead_stats: dict[str, dict[str, float]] = lead_stats
+        self.lead_stats: dict[str, dict[str, float]] | None = lead_stats
         
         if self.normalize_waveforms and self.lead_stats is None:
             raise ValueError("lead_stats must be provided if normalize_waveforms is True") 
@@ -34,19 +39,19 @@ class ECGDataset(Dataset):
     def __len__(self):
         return len(self.data)
         
-    def load_signal(self, waveform_path: str):
+    def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
         return np.load(waveform_path)
     
-    def load_signal(self, waveform_path: str):
+    def load_ecg_embedding(self, waveform_path: str) -> np.ndarray:
         return np.load(waveform_path)
     
     def __getitem__(self, idx):
         
         try:
-            if not os.path.exists(self.data.iloc[idx]['waveform_path']):
+            if not os.path.exists(self.data.iloc[idx]['waveform_path_psa']):
                 return self.__getitem__((idx + 1) % len(self))
-            
-            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data.iloc[idx]['waveform_path'])
+
+            unnormalized_signal: np.ndarray = self.load_ecg_signal(waveform_path=self.data.iloc[idx]['waveform_path_psa'])
             
             # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
             if len(unnormalized_signal.shape) == 3:
@@ -87,11 +92,11 @@ class ECGDataset(Dataset):
 
             return {
                 'signal': np.transpose(signal, (1, 0)), 
-                'waveform_path': self.data.iloc[idx]['waveform_path']
+                'waveform_path': self.data.iloc[idx]['waveform_path_psa']
             }
         
         except Exception as e:
-            print(f"Error processing index {self.data.iloc[idx]['waveform_path']}: {str(e)}")
+            print(f"Error processing index {self.data.iloc[idx]['waveform_path_psa']}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
 
 
@@ -100,7 +105,7 @@ def get_distributed_ecg_dataloader(
     expected_waveform_length: int = 2500,
     num_leads: int = 12,
     normalize_waveforms: bool = True,
-    lead_stats: dict[str, dict[str, float]] = None,
+    lead_stats: dict[str, dict[str, float]] | None = None,
     batch_size: int = 32,
     num_workers: int = 16,
     num_replicas: int = 1,

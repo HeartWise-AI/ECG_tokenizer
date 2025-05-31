@@ -32,7 +32,7 @@ class WandbWrapper:
                 wandb.init(
                     project=config.wandb_project,
                     entity=config.wandb_entity,
-                    config=config,
+                    config=config.to_dict(),
                 )
             else:
                 wandb.init(mode="disabled")
@@ -42,7 +42,7 @@ class WandbWrapper:
         return self.initialized
     
     def get_run_id(self)->str:
-        return wandb.run.id
+        return wandb.run.id if wandb.run is not None else "no_wandb"
         
     def log(self, kwargs: dict[str, Any]):
         wandb.log(kwargs)

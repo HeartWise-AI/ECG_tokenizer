@@ -1,7 +1,8 @@
 import os
 import torch
 import numpy as np
-from torch.amp import GradScaler
+from torch.optim.optimizer import Optimizer
+from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
@@ -11,9 +12,9 @@ from utils.registry import (
     ProjectRegistry 
 )
 from utils.ddp import DistributedUtils
-from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import get_scheduler
+from utils.config.llm_finetuning_config import LLMFinetuningConfig
 from projects.base_project import BaseProject
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
@@ -28,6 +29,7 @@ class LLMFinetuningProject(BaseProject):
         wandb_wrapper: WandbWrapper
     ):
         super().__init__(config, wandb_wrapper)
+        self.config: LLMFinetuningConfig = config # cast to LLMFinetuningConfig to avoid type errors
 
     def run(self):
         super().run()
@@ -96,8 +98,8 @@ class LLMFinetuningProject(BaseProject):
         )
 
         # Get the optimizer
-        optimizer_class: torch.optim.Optimizer = getattr(torch.optim, self.config.optimizer)
-        optimizer: torch.optim.Optimizer = optimizer_class(param_groups)
+        optimizer_class = getattr(torch.optim, self.config.optimizer)
+        optimizer: Optimizer = optimizer_class(param_groups)
 
         # Get the scheduler
         scheduler: LRScheduler = get_scheduler(
@@ -114,7 +116,7 @@ class LLMFinetuningProject(BaseProject):
         )
 
         # Get the scaler
-        scaler: GradScaler = torch.amp.GradScaler()
+        scaler: GradScaler = GradScaler()
                 
         return {
             "train_dataloader": training_dataloader,
