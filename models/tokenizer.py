@@ -1,6 +1,7 @@
+import torch
 import torch.nn as nn
-from typing import List
-from vector_quantize_pytorch import ResidualVQ
+from typing import List, Optional
+from models.local_residual_vq import ResidualVQ
 
 from utils.registry import ModelRegistry
 from utils.enums import DecoderMode
@@ -158,10 +159,14 @@ class ECG_Tokenizer_Quantizer(nn.Module):
             implicit_neural_codebook=True
         )
 
-    def forward(self, x):
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        return_all_codes: bool = False
+    ):
         # The ResidualVQ layer returns (quantized, indices, commit_loss)
-        quantized, indices, commit_loss = self.quantizer(x)
-        return quantized, indices, commit_loss
+        quantizer_outputs = self.quantizer(x, return_all_codes=return_all_codes)
+        return quantizer_outputs
 
 @ModelRegistry.register("Conv_Decoder")
 class Conv_Decoder(nn.Module):
@@ -212,7 +217,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         num_quantizers: int = 8,
         codebook_size: int = 512,
         decoder_mode: DecoderMode = DecoderMode.RECONSTRUCTION,
-        num_classes: int = 77
+        num_classes: int = 77,
     ):
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
@@ -248,11 +253,30 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         else:
             self.decoder = decoder_class()
 
-    def forward(self, x):
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        return_all_codes: bool = False
+    ):
         features = self.encoder(x)
-        quantized, indices, commit_loss = self.quantizer(features)
-        reconstructed_output = self.decoder(quantized)
-        return reconstructed_output, indices, commit_loss
+        
+        quantizer_outputs = self.quantizer(
+            features,
+            return_all_codes=return_all_codes
+        )
+                
+        # If no decoder, return quantized, indices, commit_loss
+        if not self.decoder: # happens when we to use the quantized ecg embeddings as input to the LLM or other models
+            return quantizer_outputs
+        
+        if return_all_codes:
+            quantized, indices, commit_loss, all_codes = quantizer_outputs
+            reconstructed_output = self.decoder(quantized)
+            return reconstructed_output, indices, commit_loss, all_codes
+        else:
+            quantized, indices, commit_loss = quantizer_outputs
+            reconstructed_output = self.decoder(quantized)
+            return reconstructed_output, indices, commit_loss
 
 @ModelRegistry.register("ECG_CodebookClassifier")
 class ECG_CodebookClassifier(nn.Module):
