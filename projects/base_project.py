@@ -84,5 +84,5 @@ class BaseProject(ABC):
             ECGTokenizerRunner, 
             LLMFinetuningRunner,
             BertReportClassifierRunner
-        ] = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        ] = RunnerRegistry.get(self.config.runner_name)(**runner_args)
         runner.execute(mode=self.config.run_mode)    
