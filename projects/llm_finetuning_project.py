@@ -16,7 +16,7 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import get_scheduler
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
 from projects.base_project import BaseProject
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.gpt2_tokenizer_wrapper import GPT2TokenizerWrapper
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 from typing import Any
@@ -35,13 +35,14 @@ class LLMFinetuningProject(BaseProject):
         super().run()
 
     def _setup_training_objects(self)->dict[str, Any]:
-        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
         tokenizer.pad_token = tokenizer.eos_token
 
         # Get the dataloaders
         training_dataloader = get_distributed_clinical_report_dataloader(
-            reports_path=self.config.train_dataset_path,
-            embeddings_path=self.config.train_embeddings_path,
+            dataset_path=self.config.train_dataset_path,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
@@ -53,8 +54,9 @@ class LLMFinetuningProject(BaseProject):
         )
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
-            reports_path=self.config.validation_dataset_path,
-            embeddings_path=self.config.validation_embeddings_path,
+            dataset_path=self.config.validation_dataset_path,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
@@ -67,16 +69,19 @@ class LLMFinetuningProject(BaseProject):
 
         # Get the model
         print("Getting embedding size...")
-        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.train_embeddings_path)
-        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
+        model: GPT2TokenizerWrapper = ModelRegistry.get(self.config.trainable_model_name)(
+            ecg_tokenizer_path=self.config.ecg_tokenizer_path,
+            ecg_tokenizer_num_quantizers=self.config.ecg_tokenizer_num_quantizers,
+            ecg_tokenizer_codebook_size=self.config.ecg_tokenizer_codebook_size,
+            ecg_encoder_name=self.config.ecg_encoder_name,
+            ecg_quantizer_name=self.config.ecg_quantizer_name,
+            ecg_decoder_name=self.config.ecg_decoder_name,
             gpt2_model_name=self.config.huggingface_model_name, 
             gpt2_embedding_size=self.config.gpt2_embedding_size, 
-            ecg_embedding_size=ecg_embedding_size,
-            reducer_name=self.config.embedding_reducer_name,
-            reducer_dropout=self.config.reducer_dropout
+            ecg_embedding_size=self.config.ecg_embedding_size
         ).to(self.config.device)
 
-        param_groups = [
+        param_groups: list[dict[str, Any]] = [
             {
                 "params": model.gpt2.parameters(),
                 "lr": self.config.llm_lr,
@@ -84,10 +89,10 @@ class LLMFinetuningProject(BaseProject):
                 "name": "llm"
             },
             {
-                "params": model.embedding_reducer.parameters(),
-                "lr": self.config.embedding_reducer_lr,
-                "weight_decay": self.config.embedding_reducer_weight_decay,
-                "name": "embedding_reducer"
+                "params": model.embedding_adapter.parameters(),
+                "lr": self.config.embedding_adapter_lr,
+                "weight_decay": self.config.embedding_adapter_weight_decay,
+                "name": "embedding_adapter"
             }
         ]
         
@@ -147,7 +152,7 @@ class LLMFinetuningProject(BaseProject):
         # Get the model
         print("Getting embedding size...")
         ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.validation_embeddings_path)
-        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
+        model: GPT2TokenizerWrapper = ModelRegistry.get(self.config.trainable_model_name)(
             gpt2_model_name=self.config.huggingface_model_name, 
             gpt2_embedding_size=self.config.gpt2_embedding_size, 
             ecg_embedding_size=ecg_embedding_size, 
