@@ -3,7 +3,7 @@ import torch
 import pandas as pd
 from torch.optim.adamw import AdamW
 from torch.utils.data import DataLoader
-from torch.amp.autocast_mode import autocast
+# from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import GPT2Tokenizer
@@ -26,7 +26,7 @@ from utils.metrics.llm_metrics import (
     update_random_batch_metric
 )
 from runners.base_runner import BaseRunner
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.gpt2_tokenizer_wrapper import GPT2TokenizerWrapper
 
 import random
 from tqdm import tqdm
@@ -41,7 +41,7 @@ from typing import (
 class LLMFinetuningRunner(BaseRunner):
     def __init__(
         self, 
-        model: GPT2WithEmbedding,
+        model: GPT2TokenizerWrapper,
         config: LLMFinetuningConfig, 
         val_dataloader: DataLoader,
         wandb_wrapper: WandbWrapper | None = None,
@@ -50,7 +50,7 @@ class LLMFinetuningRunner(BaseRunner):
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
     ):
-        self.model: GPT2WithEmbedding = model
+        self.model: GPT2TokenizerWrapper = model
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
         self.train_dataloader: DataLoader | None = train_dataloader
@@ -185,14 +185,14 @@ class LLMFinetuningRunner(BaseRunner):
         
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
-            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
+            signal: torch.Tensor = batch['signal'].to(self.config.device)
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
             outputs: dict[str, torch.Tensor] | torch.Tensor = step_fn(
-                embeddings=embeddings, 
+                signal=signal, 
                 input_ids=input_ids, 
                 attention_mask=attention_mask, 
                 labels=labels
@@ -309,7 +309,7 @@ class LLMFinetuningRunner(BaseRunner):
 
     def _train_step(
         self, 
-        embeddings: torch.Tensor,
+        signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor
@@ -321,9 +321,12 @@ class LLMFinetuningRunner(BaseRunner):
         self.optimizer.zero_grad()
         
         # Forward pass with autocast for mixed precision
-        with autocast('cuda', dtype=torch.bfloat16):
+        with torch.amp.autocast(
+            device_type='cuda',
+            dtype=torch.bfloat16
+        ):
             outputs: dict[str, torch.Tensor] = self.model(
-                ecg_embeddings=embeddings,
+                ecg_signal=signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
@@ -359,14 +362,14 @@ class LLMFinetuningRunner(BaseRunner):
 
     def _val_step(
         self, 
-        embeddings: torch.Tensor,
+        signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         with torch.no_grad():
             outputs: dict[str, torch.Tensor] = self.model(
-                ecg_embeddings=embeddings,
+                ecg_signal=signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
@@ -374,12 +377,12 @@ class LLMFinetuningRunner(BaseRunner):
             
             if hasattr(self.model, 'module'):
                 generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal=signal, 
                     max_token_length=self.config.max_token_length
                 )
             else:
                 generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal=signal, 
                     max_token_length=self.config.max_token_length
                 )
 
@@ -397,17 +400,17 @@ class LLMFinetuningRunner(BaseRunner):
 
     def _inference_step(
         self,
-        embeddings: torch.Tensor,
+        signal: torch.Tensor,
     ) -> torch.Tensor:
         with torch.no_grad():
             if hasattr(self.model, 'module'):
                 generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal=signal, 
                     max_token_length=self.config.max_token_length
                 )
             else:
                 generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal=signal, 
                     max_token_length=self.config.max_token_length
                 )   
         return generated_ids     
@@ -424,11 +427,11 @@ class LLMFinetuningRunner(BaseRunner):
         tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer  # type: ignore
         
         for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader), disable=not self.config.is_ref_device):
-            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
+            signal: torch.Tensor = batch['signal'].to(self.config.device)
             labels: torch.Tensor = batch['input_ids'].to(self.config.device)
             batch_waveform_names: list[str] = batch['waveform_name']
             generated_ids: torch.Tensor = self._inference_step(
-                embeddings=embeddings,
+                signal=signal,
             )
                         
             for gen, lab, filename in zip(generated_ids, labels, batch_waveform_names):
