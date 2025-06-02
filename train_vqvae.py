@@ -286,7 +286,7 @@ def main():
     model: ResVQAutoEncoder = ResVQAutoEncoder(
         timesteps=config["waveform_length"],
         codebook_size=config["num_codes"],
-        implicit_neural_codebook=TrueN
+        implicit_neural_codebook=True
     ).to(device)
 
     if torch.cuda.device_count() > 1:
