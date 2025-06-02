@@ -1,4 +1,5 @@
     
+from typing import Tuple
 from dataclasses import dataclass
 
 from utils.registry import ConfigRegistry
@@ -9,21 +10,21 @@ from utils.config.heartwise_config import HeartWiseConfig
 class LLMFinetuningConfig(HeartWiseConfig):   
     # Training hyperparameters
     seed: int
-    llm_lr: float
-    embedding_reducer_lr: float
-    num_workers: int
-    batch_size: int
-    llm_weight_decay: float
-    embedding_reducer_weight_decay: float
+    run_mode: str
     num_epochs: int
+    num_workers: int
+    runner_name: str
+    llm_lr: float
+    llm_weight_decay: float
+    embedding_adapter_lr: float
+    embedding_adapter_weight_decay: float
+    embedding_adapter_dropout: float
+    batch_size: int
     criterion: str
     optimizer: str
-    runner_name: str
     scheduler_type: str
     step_size: int
     gamma: float
-    run_mode: str
-    reducer_dropout: float
     num_warmup_percent: float
     num_hard_restarts_cycles: float
     warm_restart_tmult: int
@@ -35,8 +36,21 @@ class LLMFinetuningConfig(HeartWiseConfig):
     # Model parameters
     huggingface_model_name: str
     trainable_model_name: str
-    embedding_reducer_name: str
+    embedding_adapter_name: str
     gpt2_embedding_size: int
+
+    # ECG tokenizer parameters
+    ecg_tokenizer_path: str
+    ecg_tokenizer_num_quantizers: int
+    ecg_tokenizer_codebook_size: int
+    ecg_encoder_name: str
+    ecg_quantizer_name: str
+    ecg_decoder_name: str
+    ecg_embedding_size: Tuple[int, int, int]
+    
+    # ECG parameters
+    ecg_waveform_length: int
+    ecg_num_leads: int
 
     # Metrics
     metrics: list[str]
@@ -45,10 +59,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     base_checkpoint_path: str
     train_dataset_path: str
     validation_dataset_path: str
-    train_embeddings_path: str
-    validation_embeddings_path: str
     output_dir: str
-    checkpoint_dir: str
     
     # Inference parameters
+    checkpoint_dir: str
     inference_dataset_path: str
