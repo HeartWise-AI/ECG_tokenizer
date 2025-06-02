@@ -68,7 +68,6 @@ class LLMFinetuningProject(BaseProject):
         )
 
         # Get the model
-        print("Getting embedding size...")
         model: GPT2TokenizerWrapper = ModelRegistry.get(self.config.trainable_model_name)(
             ecg_tokenizer_path=self.config.ecg_tokenizer_path,
             ecg_tokenizer_num_quantizers=self.config.ecg_tokenizer_num_quantizers,
@@ -137,8 +136,9 @@ class LLMFinetuningProject(BaseProject):
         tokenizer.pad_token = tokenizer.eos_token
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
-            reports_path=self.config.inference_dataset_path,
-            embeddings_path=self.config.validation_embeddings_path,
+            dataset_path=self.config.inference_dataset_path,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
             max_token_length=self.config.max_token_length,
             batch_size=self.config.batch_size,
