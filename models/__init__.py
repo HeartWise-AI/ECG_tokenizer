@@ -6,6 +6,7 @@ from models.adapters import (
 )
 from models.bert_classifier import BertClassifier
 from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.gpt2_tokenizer_wrapper import GPT2TokenizerWrapper
 from models.tokenizer import (
     ECG_Tokenizer_Wrapper,
     ECG_CodebookClassifier,
@@ -19,6 +20,7 @@ __all__ = [
     "LinearReducer", 
     "EmbeddingReducer", 
     "GPT2WithEmbedding",
+    "GPT2TokenizerWrapper",
     "SimpleEmbeddingReducer",
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
