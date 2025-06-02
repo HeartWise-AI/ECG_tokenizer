@@ -12,70 +12,94 @@ from utils.config.llm_finetuning_config import LLMFinetuningConfig
 class ECGClinicalReportDataset(Dataset):
     def __init__(
         self, 
-        embeddings_path: str, 
-        reports_path: str, 
+        dataset_path: str, 
+        ecg_waveform_length: int,
+        ecg_num_leads: int,
         tokenizer: GPT2Tokenizer, 
         max_length: int = 512
     ):
         """
         Args:
-            embeddings_path (str): Path to the ECG embeddings.
-            reports_path (str): Path to the clinical reports.
+            dataset_path (str): Path to the dataset.
             tokenizer (PreTrainedTokenizer): Tokenizer for the clinical reports.
             max_length (int): Maximum token length for the reports.
         """
-        self.embeddings_path: str = embeddings_path
-        self.df: pd.DataFrame = pd.read_parquet(reports_path)
+        try:
+            self.df: pd.DataFrame = pd.read_parquet(dataset_path)
+        except Exception as e:
+            print(f"Error reading parquet file: {e}")
+            raise Exception(f"Error reading parquet file: {e}")
+        
+        self.ecg_waveform_length: int = ecg_waveform_length
+        self.ecg_num_leads: int = ecg_num_leads
         self.tokenizer: GPT2Tokenizer = tokenizer
         self.max_length: int = max_length
 
     def __len__(self):
         return len(self.df)
 
+    def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
+        try:
+            waveform: np.ndarray = np.load(waveform_path)
+        except Exception as e:
+            print(f"Error loading ECG signal: {e}")
+            raise Exception(f"Error loading ECG signal: {e}")
+        
+        # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
+        if len(waveform.shape) == 3:
+            waveform = waveform.squeeze(-1)
+            
+        assert len(waveform.shape) == 2, f"Unnormalized signal has shape {waveform.shape}"
+        
+        return waveform
+
     def __getitem__(self, idx: int) -> dict | None:
         try:
+            # Get the row
             row = self.df.iloc[idx]
-            if pd.isnull(row['waveform_path']) or pd.isnull(row['report']):
+            
+            # Check if the waveform path or report is missing
+            if pd.isnull(row['waveform_path_original']) or pd.isnull(row['report']):
                 print(f"Missing waveform_path or report for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get('waveform_path')}, report: {row.get('report')}")
-                return None
+                      f"waveform_path: {row.get('waveform_path_original')}, report: {row.get('report')}")
+                return self.__getitem__((idx + 1) % len(self))
 
-            # Get the embedding path
-            waveform_path = row['waveform_path']
-            waveform_path = waveform_path.split('/')[-1]
-            waveform_name = waveform_path.split('.')[0]
-            embedding_path = os.path.join(self.embeddings_path, waveform_name + '_embedding.npy')
+            # Load the waveform
+            waveform: np.ndarray = self.load_ecg_signal(
+                waveform_path=row['waveform_path_original']
+            )
             
-            # Try to load the embedding
-            try:
-                embedding = torch.tensor(
-                    np.load(embedding_path),
-                    dtype=torch.float
-                )  # Shape: (8, 128, 160)
-            except (FileNotFoundError, OSError) as e:
-                print(f"Could not load embedding for index {idx}, skipping this item. "
-                      f"embedding_path: {embedding_path}")
-                return None
+            if np.isnan(waveform).any():
+                return self.__getitem__((idx + 1) % len(self))
             
-            report = row['report']
+            current_length: int = waveform.shape[0]
+            if current_length > self.ecg_waveform_length:
+                step: int = waveform.shape[0] // self.ecg_waveform_length
+                waveform = waveform[::step, :]
             
+            if waveform.shape[0] != self.ecg_waveform_length:
+                return self.__getitem__((idx + 1) % len(self))
+            
+            if waveform.shape[1] != self.ecg_num_leads:
+                return self.__getitem__((idx + 1) % len(self))
+            
+            # Tokenize the report
             encoding: BatchEncoding = self.tokenizer.encode_plus(
-                report,
+                row['report'],
                 add_special_tokens=True,
                 max_length=self.max_length,
                 padding='max_length',
                 truncation=True,
                 return_tensors='pt'
-            )
-            
-            input_ids: torch.Tensor = torch.tensor(encoding['input_ids']).squeeze(0)  # Shape: (max_length)
-            attention_mask: torch.Tensor = torch.tensor(encoding['attention_mask']).squeeze(0)  # Shape: (max_length)
+            )          
+            input_ids: torch.Tensor = encoding['input_ids'].squeeze()  # Shape: (max_length)
+            attention_mask: torch.Tensor = encoding['attention_mask'].squeeze()  # Shape: (max_length)
             
             return {
-                'embedding': embedding,  # (8, 128, 160)
+                'signal': np.transpose(waveform, (1, 0)),  # (2500, 12)
                 'input_ids': input_ids,  # (max_length)
                 'attention_mask': attention_mask,  # (max_length)
-                'waveform_name': waveform_name
+                'waveform_name': row['waveform_name']
             }
             
         except Exception as e:
@@ -104,8 +128,9 @@ def get_clinical_report_dataloader(
     )
     
 def get_distributed_clinical_report_dataloader(
-    reports_path: str,
-    embeddings_path: str,
+    dataset_path: str,
+    ecg_waveform_length: int,
+    ecg_num_leads: int,
     tokenizer: GPT2Tokenizer,
     max_token_length: int = 512,
     batch_size: int = 32,
@@ -116,8 +141,9 @@ def get_distributed_clinical_report_dataloader(
     pin_memory: bool = True
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
-        embeddings_path=embeddings_path, 
-        reports_path=reports_path, 
+        dataset_path=dataset_path, 
+        ecg_waveform_length=ecg_waveform_length,
+        ecg_num_leads=ecg_num_leads,
         tokenizer=tokenizer, 
         max_length=max_token_length
     )
