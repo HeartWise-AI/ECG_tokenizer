@@ -5,19 +5,25 @@ from constants import ECG_PATTERNS
 
 
 if __name__ == "__main__":
-    ecg_patterns = list(ECG_PATTERNS.keys())
-    
-    df = pd.read_parquet('/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_val.parquet')
+        
+    df = pd.read_parquet('/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet')
 
-    columns_names = ['report', 'waveform_path']
-    columns_names.extend(ecg_patterns)
+    columns_names = [
+        'report', 
+        'dataset',
+        'waveform_name', 
+        'waveform_path_psa', 
+        'waveform_path_original', 
+    ]
+    feature_cols = columns_names.copy()
+    columns_names.extend(ECG_PATTERNS)
     new_df = df[columns_names].copy()
-    new_df[ecg_patterns] = new_df[ecg_patterns].astype(int)
+    new_df[ECG_PATTERNS] = new_df[ECG_PATTERNS].astype(int)
 
     splitter = DataSplitter(
         df=new_df, 
-        feature_col=['report', 'waveform_path'], 
-        label_cols=ecg_patterns,
+        feature_col=feature_cols, 
+        label_cols=ECG_PATTERNS,
         stratify_method='multilabel'
     )
     split_data = splitter.split(train_size=0.6, val_size=0.2, test_size=0.2)
@@ -35,4 +41,4 @@ if __name__ == "__main__":
     # Save split DataFrames
     # split_data['train_df'].to_parquet("parquets/mhi/test_trial_v1.1_with_report_stratified_train.parquet")
     # split_data['val_df'].to_parquet("parquets/mhi/test_trial_v1.1_with_report_stratified_val.parquet")
-    split_data['test_df'].to_parquet("parquets/mimic/mimic_v4_clean_val_subset.parquet")
+    split_data['test_df'].to_parquet("parquets/merged_datasets/test/mimic_mhi_psa_test_updated_stratified_20%.parquet")
