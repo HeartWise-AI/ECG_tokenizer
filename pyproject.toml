@@ -29,5 +29,28 @@ packages = [
     "models",
     "config",
     "runners",
-    "projects"
+    "projects",
+    "utils/config"
 ]
+
+[tool.pyright]
+exclude = [
+    ".venv/**",
+    "**/.venv/**",
+    ".pytest_cache/**",
+    "**/__pycache__/**",
+    ".git/**",
+    "wandb/**",
+    "checkpoints/**",
+    "outputs/**",
+    "logs/**",
+    "*.egg-info/**"
+]
+ignore = [
+    ".venv",
+    "wandb",
+    "checkpoints", 
+    "outputs"
+]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
