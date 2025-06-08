@@ -16,10 +16,10 @@ from runners.bert_report_classifier_runner import BertReportClassifierRunner
 class BaseProject(ABC):
     def __init__(
         self, 
-        config: HeartWiseConfig,
+        config: Any,
         wandb_wrapper: WandbWrapper
     ):
-        self.config: HeartWiseConfig = config
+        self.config: Any = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
         
     @abstractmethod
