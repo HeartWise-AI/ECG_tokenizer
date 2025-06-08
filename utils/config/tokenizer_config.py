@@ -1,16 +1,16 @@
 
 from dataclasses import dataclass
 
+from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
 from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
-@ConfigRegistry.register("ECG_Tokenizer_Training")
+@ConfigRegistry.register(ConfigName.ECG_TOKENIZER_TRAINING)
 class ECGTokenizerTrainingConfig(HeartWiseConfig):
     # Pipeline parameters
-    run_mode: str
+    runner_name: str
     num_epochs: int
-    seed: int
     base_checkpoint_path: str
     
     # Training parameters

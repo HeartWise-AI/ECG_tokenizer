@@ -2,11 +2,12 @@
 from typing import Optional
 from dataclasses import dataclass
 
+from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
 from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
-@ConfigRegistry.register("ECG_tokenizer_linear_probing")
+@ConfigRegistry.register(ConfigName.ECG_TOKENIZER_LINEAR_PROBING)
 class LinearProbingConfig(HeartWiseConfig):
     # Model architecture parameters
     num_layers: int
@@ -17,7 +18,6 @@ class LinearProbingConfig(HeartWiseConfig):
     num_quantizers: int
     
     # Training hyperparameters
-    seed: int
     lr: float
     batch_size: int
     weight_decay: float
