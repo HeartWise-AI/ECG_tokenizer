@@ -11,6 +11,7 @@ from utils.registry import (
     ModelRegistry,
     ProjectRegistry 
 )
+from utils.enums import ProjectName
 from utils.ddp import DistributedUtils
 from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import get_scheduler
@@ -21,7 +22,7 @@ from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dat
 
 from typing import Any
 
-@ProjectRegistry.register("ECG_tokenizer_LLM_finetuning")
+@ProjectRegistry.register(ProjectName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningProject(BaseProject):
     def __init__(
         self,
