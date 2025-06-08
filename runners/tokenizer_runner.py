@@ -18,16 +18,16 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from utils.ddp import DistributedUtils
 from utils.registry import RunnerRegistry
-from utils.enums import RunMode, DecoderMode
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import ECGTokenizerTrainingConfig
 from utils.metrics.ecg_metrics import compute_metrics
 from utils.schedulers import scheduler_is_per_iteration
+from utils.enums import RunMode, DecoderMode, RunnerName
 from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
 from models.tokenizer import ECG_Tokenizer_Wrapper, ResidualVQ
 
 
-@RunnerRegistry.register("ECG_Tokenizer_Training")
+@RunnerRegistry.register(RunnerName.ECG_TOKENIZER_TRAINING)
 class ECGTokenizerRunner:
     def __init__(
         self, 
