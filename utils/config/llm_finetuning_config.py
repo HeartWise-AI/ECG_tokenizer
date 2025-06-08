@@ -2,15 +2,14 @@
 from typing import Tuple
 from dataclasses import dataclass
 
+from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
 from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
-@ConfigRegistry.register("ECG_tokenizer_LLM_finetuning")
+@ConfigRegistry.register(ConfigName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningConfig(HeartWiseConfig):   
     # Training hyperparameters
-    seed: int
-    run_mode: str
     num_epochs: int
     num_workers: int
     runner_name: str
