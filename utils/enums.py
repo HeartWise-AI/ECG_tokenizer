@@ -23,7 +23,50 @@ class DecoderMode(str, Enum):
     """Enum for different decoder modes in the tokenizer."""
     RECONSTRUCTION = "reconstruction"  # For reconstructing the signal
     CLASSIFICATION = "classification"  # For classifying into independent classes
+    LLM = "llm"                       # For generating text with LLM
     EMBEDDING = "embedding"           # For generating embeddings without reconstruction
 
     def __str__(self):
         return self.value
+    
+class ProjectName(str, Enum):
+    """Enum for different project names."""
+    BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"
+    ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training"
+    ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
+    ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    
+    def __str__(self):
+        return self.value
+
+class RunnerName(str, Enum):
+    """Enum for different runner names."""
+    LLM_FINETUNING = "LLM_finetuning_runner"
+    ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
+    
+    def __str__(self):
+        return self.value
+    
+class ConfigName(str, Enum):
+    """Enum for different config names."""
+    BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"
+    ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training"
+    ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
+    ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"    
+    
+    def __str__(self):
+        return self.value
+    
+class ModelName(str, Enum):
+    """Enum for different model names."""
+    CONV_ENCODER = "Conv_Encoder"
+    RESIDUAL_CONV_ENCODER = "Residual_Conv_Encoder"
+    CONV_DECODER = "Conv_Decoder"
+    ECG_TOKENIZER_WRAPPER = "ECG_Tokenizer_Training" # TODO: Change to ECG_Tokenizer_Wrapper and create a new model variable in CONFIG
+    ECG_TOKENIZER_QUANTIZER = "ECG_Tokenizer_Quantizer"
+    LINEAR_CLASSIFIER_DECODER = "Linear_Classifier_Decoder"
+    RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"
+    CLS_TOKEN_CLASSIFIER_DECODER = "CLS_Token_Classifier_Decoder"
+    
+    def __str__(self):
+        return self.value   
