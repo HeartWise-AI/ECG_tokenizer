@@ -42,7 +42,7 @@ class ECGTokenizerClassifierDataset(Dataset):
         row: pd.Series = self.data.iloc[index]
         
         unnormalized_signal: np.ndarray = self.load_signal(
-            waveform_path=row['waveform_path']
+            waveform_path=row['waveform_path_psa']
         ).astype(np.float32)
 
         # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
