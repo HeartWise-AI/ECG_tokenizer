@@ -20,11 +20,12 @@ class HeartWiseConfig:
     base_config_path: str
     
     # Common attributes used by all projects (set dynamically)
+    seed: int
     device: int
-    world_size: int
-    is_ref_device: bool
-    output_dir: str
     run_mode: str
+    world_size: int
+    output_dir: str
+    is_ref_device: bool
                     
     @classmethod
     def update_config_with_args(cls, base_config: 'HeartWiseConfig', args: Any) -> 'HeartWiseConfig':  
