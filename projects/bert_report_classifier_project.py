@@ -5,6 +5,7 @@ from utils.registry import (
     ProjectRegistry, 
     ModelRegistry
 )
+from utils.enums import ProjectName
 from utils.wandb_wrapper import WandbWrapper
 from utils.files_handler import load_api_keys
 from utils.config import BertReportClassifierConfig
@@ -14,7 +15,7 @@ from models.bert_classifier import BertClassifier
 from data.bert_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 
-@ProjectRegistry.register("BERT_Report_Classifier")
+@ProjectRegistry.register(ProjectName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierProject(BaseProject):
     def __init__(
         self, 

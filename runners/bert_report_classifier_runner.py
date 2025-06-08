@@ -5,7 +5,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from utils.ddp import DistributedUtils
 
-from utils.enums import RunMode
+from utils.enums import RunMode, ProjectName
 from utils.registry import RunnerRegistry
 from utils.files_handler import (
     save_json, 
@@ -20,7 +20,7 @@ from runners.base_runner import BaseRunner
 from models.bert_classifier import BertClassifier
 
 
-@RunnerRegistry.register("BERT_Report_Classifier")
+@RunnerRegistry.register(ProjectName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierRunner(BaseRunner):
     def __init__(
         self, 
