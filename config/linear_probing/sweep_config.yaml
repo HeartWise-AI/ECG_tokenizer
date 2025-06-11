@@ -2,18 +2,18 @@ command:
   - python
   - ./linear_probe.py
   - "--base_config"
-  - "config/base_config.yaml"
+  - "config/linear_probing/base_config.yaml"
   - ${args}
 
 method: bayes
 
 name: "final_sweep"
-project: "ECG_tokenizer_linear_probing"
-entity: "mhi_ai"
+project: "ECG_Tokenizer_Linear_Probing"
+entity: "jacques-delfrate"
 
 metric:
-  name: val/metrics['Rhythm Disorders']['macro_auprc']
-  goal: maximize
+  name: validate/cls_loss
+  goal: minimize
 
 parameters:
   lr:
@@ -36,9 +36,9 @@ parameters:
   name:
     values: ["sweep"]
   project:
-    values: ["ECG_tokenizer_linear_probing"]
+    values: ["ECG_Tokenizer_Linear_Probing"]
   entity:
-    values: ["mhi_ai"]
+    values: ["jacques-delfrate"]
 
 early_terminate:
   type: hyperband
