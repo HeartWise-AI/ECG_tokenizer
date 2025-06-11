@@ -1,5 +1,3 @@
-    
-from typing import Optional
 from dataclasses import dataclass
 
 from utils.enums import ConfigName
@@ -8,29 +6,44 @@ from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
 @ConfigRegistry.register(ConfigName.ECG_TOKENIZER_LINEAR_PROBING)
-class LinearProbingConfig(HeartWiseConfig):
-    # Model architecture parameters
-    num_layers: int
-    hidden_dim: int
-    embedding_dim: int
-    prev_embedding_dim: int
-    num_classes: int
-    num_quantizers: int
-    
-    # Training hyperparameters
-    lr: float
-    batch_size: int
-    weight_decay: float
+class ECGTokenizerLinearProbingConfig(HeartWiseConfig):
+    # Pipeline parameters
+    pretrained_tokenizer_path: str
+    runner_name: str
     num_epochs: int
+    base_checkpoint_path: str
+    
+    # Training parameters
+    lr: float
+    scheduler_type: str
+    lr_step_period: int
+    factor: float
+    optimizer: str
+    weight_decay: float
+    step_size: int
+    gamma: float
+    num_warmup_percent: float
+    num_hard_restarts_cycles: float
+    warm_restart_tmult: int
+    
+    # VQVAE parameters
+    decoder_name: str
+    
+    # Decoder mode
+    decoder_mode: str
+    
+    # Classification parameters
+    num_classes: int
     criterion: str
     
-    # Data and checkpoint paths
-    base_checkpoint_path: str
-    csv_file: str
-    parquet_file: str
-    model_path: str
-    embedding_dir: str
+    # Dataset parameters
+    train_dataset_path: str
+    validation_dataset_path: str
+    num_workers: int
+    batch_size: int
     
-    # Experiment tracking
-    name: str
-    classifier_experiment_name: Optional[str]
+    # Waveform parameters
+    num_leads: int
+    waveform_length: int
+    normalize_waveforms: bool
+    lead_stats: dict[str, dict[str, float]]
