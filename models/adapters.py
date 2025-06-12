@@ -1,19 +1,20 @@
 import torch.nn as nn
 from utils.registry import ModelRegistry
+from utils.enums import AdapterName
 
-@ModelRegistry.register("GPT2_LinearReducer")
-class LinearReducer(nn.Module):
+@ModelRegistry.register(AdapterName.GPT2_LINEAR_ADAPTER)
+class LinearAdapter(nn.Module):
     def __init__(
         self,
         input_shape: tuple[int, int, int] = (8, 128, 160),
         output_size: int = 768,
         dropout: float = 0.0  # Set dropout > 0 to enable dropout regularization
     ):
-        super(LinearReducer, self).__init__()
+        super(LinearAdapter, self).__init__()
         # Calculate the flattened input size (e.g. 8 * 128 * 160 = 163840)
         self.flatten_dim: int = input_shape[0] * input_shape[1] * input_shape[2]
         
-        self.reducer: nn.Sequential = nn.Sequential(
+        self.adapter: nn.Sequential = nn.Sequential(
             nn.Flatten(),
             nn.Linear(self.flatten_dim, 1024),
             nn.ReLU(),
@@ -22,17 +23,17 @@ class LinearReducer(nn.Module):
         )
     
     def forward(self, x):
-        return self.reducer(x) 
+        return self.adapter(x) 
     
-@ModelRegistry.register("GPT2_EmbeddingReducer")
-class EmbeddingReducer(nn.Module):
+@ModelRegistry.register(AdapterName.GPT2_EMBEDDING_ADAPTER)
+class EmbeddingAdapter(nn.Module):
     def __init__(
         self, 
         input_shape: tuple[int, int, int] = (8, 128, 160), 
         output_size: int = 768,
         dropout: float = 0.2
     ):
-        super(EmbeddingReducer, self).__init__()
+        super(EmbeddingAdapter, self).__init__()
         self.input_shape: tuple[int, int, int] = input_shape
         self.output_size: int = output_size
         self.conv_layers: nn.Sequential = nn.Sequential(
@@ -84,15 +85,15 @@ class EmbeddingReducer(nn.Module):
 import torch.nn as nn
 from utils.registry import ModelRegistry
 
-@ModelRegistry.register("GPT2_SimpleEmbeddingReducer")
-class SimpleEmbeddingReducer(nn.Module):
+@ModelRegistry.register(AdapterName.GPT2_SIMPLE_EMBEDDING_ADAPTER)
+class SimpleEmbeddingAdapter(nn.Module):
     def __init__(
         self,
         input_shape: tuple[int, int, int] = (8, 128, 160),
         output_size: int = 768,
         dropout: float = 0.2
     ):
-        super(SimpleEmbeddingReducer, self).__init__()
+        super(SimpleEmbeddingAdapter, self).__init__()
         # Global average pooling over the height and width dimensions.
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         # Map from the number of channels (first element in input_shape) to the desired output size.
