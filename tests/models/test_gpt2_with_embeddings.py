@@ -4,30 +4,31 @@ from unittest.mock import patch, MagicMock
 
 from models.gpt2_with_embeddings import GPT2WithEmbedding
 from utils.registry import ModelRegistry
+from utils.enums import AdapterName
 
 class TestGPT2WithEmbedding(unittest.TestCase):
     
     @patch('models.gpt2_with_embeddings.GPT2LMHeadModel')
     @patch('models.gpt2_with_embeddings.ModelRegistry')
     def setUp(self, mock_registry, mock_gpt2):
-        # Mock the GPT2 model and embedding reducer
+        # Mock the GPT2 model and embedding adapter
         self.mock_gpt2_instance = MagicMock()
         self.mock_gpt2_instance.config.n_embd = 768
         self.mock_gpt2_instance.config.eos_token_id = 50256
         self.mock_gpt2_instance.get_input_embeddings().weight.size = lambda: torch.Size([50257, 768])
         mock_gpt2.from_pretrained.return_value = self.mock_gpt2_instance
         
-        # Mock the embedding reducer
-        self.mock_reducer = MagicMock()
-        mock_registry.get.return_value.return_value = self.mock_reducer
+        # Mock the embedding adapter
+        self.mock_adapter = MagicMock()
+        mock_registry.get.return_value.return_value = self.mock_adapter
         
         # Create model instance
         self.model = GPT2WithEmbedding(
             gpt2_model_name='gpt2',
             gpt2_embedding_size=768,
             ecg_embedding_size=(8, 128, 82),
-            reducer_name='GPT2_EmbeddingReducer',
-            reducer_dropout=0.2
+            adapter_name=AdapterName.GPT2_EMBEDDING_ADAPTER,
+            adapter_dropout=0.2
         )
         
         # Set up common test variables
@@ -38,14 +39,14 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         self.labels = torch.randint(0, 50256, (self.batch_size, 10))
         
         # Configure mock returns
-        self.mock_reducer.return_value = torch.randn(self.batch_size, 768)
+        self.mock_adapter.return_value = torch.randn(self.batch_size, 768)
         self.mock_gpt2_instance.get_input_embeddings().return_value = torch.randn(self.batch_size, 11, 768)
         
     def test_init(self):
         """Test model initialization"""
         self.assertIsInstance(self.model, GPT2WithEmbedding)
         self.assertEqual(self.model.gpt2, self.mock_gpt2_instance)
-        self.assertEqual(self.model.embedding_reducer, self.mock_reducer)
+        self.assertEqual(self.model.embedding_adapter, self.mock_adapter)
         
     def test_forward(self):
         """Test forward pass"""
@@ -63,7 +64,7 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         )
         
         # Assertions
-        self.mock_reducer.assert_called_once_with(self.ecg_embeddings)
+        self.mock_adapter.assert_called_once_with(self.ecg_embeddings)
         self.assertIsNotNone(outputs)
         self.mock_gpt2_instance.assert_called_once()
         
@@ -97,7 +98,7 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         )
         
         # Assertions
-        self.mock_reducer.assert_called_with(self.ecg_embeddings)
+        self.mock_adapter.assert_called_with(self.ecg_embeddings)
         self.mock_gpt2_instance.generate.assert_called_once()
         self.assertTrue(torch.equal(generated, expected_output))
         

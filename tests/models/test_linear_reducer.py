@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.linear_reducer import LinearReducer
+from models.adapters import LinearAdapter
 
-class TestLinearReducer(unittest.TestCase):
+class TestLinearAdapter(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = LinearReducer(
+        self.model = LinearAdapter(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,43 +18,43 @@ class TestLinearReducer(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, LinearReducer)
+        self.assertIsInstance(self.model, LinearAdapter)
         
         # Test that flatten dim is correctly calculated
         expected_flatten_dim = self.input_shape[0] * self.input_shape[1] * self.input_shape[2]
         self.assertEqual(self.model.flatten_dim, expected_flatten_dim)
         
         # Test that layers are correctly initialized
-        self.assertIsNotNone(self.model.reducer)
-        self.assertEqual(len(self.model.reducer), 5)  # Flatten, Linear, ReLU, Dropout, Linear
+        self.assertIsNotNone(self.model.adapter)
+        self.assertEqual(len(self.model.adapter), 5)  # Flatten, Linear, ReLU, Dropout, Linear
         
         # Check first linear layer
-        linear1 = self.model.reducer[1]
+        linear1 = self.model.adapter[1]
         self.assertIsInstance(linear1, torch.nn.Linear)
         self.assertEqual(linear1.in_features, expected_flatten_dim)
         self.assertEqual(linear1.out_features, 1024)
         
         # Check dropout layer
-        dropout = self.model.reducer[3]
+        dropout = self.model.adapter[3]
         self.assertIsInstance(dropout, torch.nn.Dropout)
         self.assertEqual(dropout.p, self.dropout)
         
         # Check last linear layer
-        linear2 = self.model.reducer[4]
+        linear2 = self.model.adapter[4]
         self.assertIsInstance(linear2, torch.nn.Linear)
         self.assertEqual(linear2.in_features, 1024)
         self.assertEqual(linear2.out_features, self.output_size)
     
     def test_init_no_dropout(self):
         """Test initialization with no dropout"""
-        model = LinearReducer(
+        model = LinearAdapter(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=0.0
         )
         
         # Check that dropout layer is replaced with Identity
-        dropout_or_identity = model.reducer[3]
+        dropout_or_identity = model.adapter[3]
         self.assertIsInstance(dropout_or_identity, torch.nn.Identity)
     
     def test_forward(self):
