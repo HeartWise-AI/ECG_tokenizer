@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.embedding_reducer import EmbeddingReducer
+from models.adapters import EmbeddingAdapter
 
-class TestEmbeddingReducer(unittest.TestCase):
+class TestEmbeddingAdapter(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = EmbeddingReducer(
+        self.model = EmbeddingAdapter(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,7 +18,7 @@ class TestEmbeddingReducer(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, EmbeddingReducer)
+        self.assertIsInstance(self.model, EmbeddingAdapter)
         self.assertEqual(self.model.input_shape, self.input_shape)
         self.assertEqual(self.model.output_size, self.output_size)
         

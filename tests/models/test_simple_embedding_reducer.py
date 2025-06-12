@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.simple_embedding_reducer import SimpleEmbeddingReducer
+from models.adapters import SimpleEmbeddingAdapter
 
-class TestSimpleEmbeddingReducer(unittest.TestCase):
+class TestSimpleEmbeddingAdapter(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = SimpleEmbeddingReducer(
+        self.model = SimpleEmbeddingAdapter(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,7 +18,7 @@ class TestSimpleEmbeddingReducer(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, SimpleEmbeddingReducer)
+        self.assertIsInstance(self.model, SimpleEmbeddingAdapter)
         
         # Test components are correctly initialized
         self.assertIsInstance(self.model.global_pool, torch.nn.AdaptiveAvgPool2d)
