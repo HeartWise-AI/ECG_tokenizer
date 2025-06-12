@@ -41,7 +41,7 @@ class ProjectName(str, Enum):
 
 class RunnerName(str, Enum):
     """Enum for different runner names."""
-    LLM_FINETUNING = "LLM_finetuning_runner"
+    LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing_Runner"
     
@@ -81,3 +81,12 @@ class ModelName(str, Enum):
     
     def __str__(self):
         return self.value   
+    
+class AdapterName(str, Enum):
+    """Enum for different adapter names."""
+    GPT2_LINEAR_ADAPTER = "GPT2_LinearAdapter"
+    GPT2_EMBEDDING_ADAPTER = "GPT2_EmbeddingAdapter"
+    GPT2_SIMPLE_EMBEDDING_ADAPTER = "GPT2_SimpleEmbeddingAdapter"
+    
+    def __str__(self):
+        return self.value
