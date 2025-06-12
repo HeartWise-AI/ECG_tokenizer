@@ -28,6 +28,7 @@ from models.tokenizer import ECG_Tokenizer_Wrapper, ResidualVQ
 
 
 @RunnerRegistry.register(RunnerName.ECG_TOKENIZER_TRAINING)
+@RunnerRegistry.register(RunnerName.ECG_TOKENIZER_LINEAR_PROBING)
 class ECGTokenizerRunner:
     def __init__(
         self, 
@@ -178,6 +179,14 @@ class ECGTokenizerRunner:
         
         # Set the model to training or evaluation mode
         self.ecg_tokenizer.train(mode == RunMode.TRAIN)
+        
+        # Verify frozen components are handled correctly
+        if self.config.is_ref_device:
+            print("\n" + "="*50)
+            print("VERIFYING FROZEN COMPONENT STATUS:")
+            print("="*50)
+            self.ecg_tokenizer.module._check_frozen_components_status()
+            print("="*50 + "\n")
         
         if self.train_dataloader is None or self.validation_dataloader is None:
             raise ValueError("Train or validation dataloader is not set")
@@ -415,7 +424,7 @@ class ECGTokenizerRunner:
         alpha: float = 1.0
         with autocast('cuda', dtype=torch.bfloat16):
             # Get the output, indices, and commit loss
-            out, indices, cmt_loss = self.ecg_tokenizer(signals)
+            out, indices, cmt_loss, _ = self.ecg_tokenizer(signals)
             # Check the mode using DecoderMode enum
             decoder_mode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
             decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
@@ -517,7 +526,7 @@ class ECGTokenizerRunner:
                 lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
         
         with autocast('cuda', dtype=torch.bfloat16):
-            out, indices, cmt_loss = self.ecg_tokenizer(signals)
+            out, indices, cmt_loss, _ = self.ecg_tokenizer(signals)
             
             # Check the mode using DecoderMode enum
             decoder_mode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
