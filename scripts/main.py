@@ -16,6 +16,7 @@ from utils.parser import HeartWiseParser
 from utils.registry import ProjectRegistry
 from projects import (
     LLMFinetuningProject,
+    ECGTokenizerLinearProbing,
     BertReportClassifierProject,
     ECGTokenizerTrainingProject
 )
@@ -28,6 +29,7 @@ def main(config: HeartWiseConfig):
     try:
         # Set seed for reproducibility
         if hasattr(config, "seed"):
+            print(f"Setting seed to {config.seed} for reproducibility")
             set_seed(config.seed)
         
         # Initialize process group with explicit device ID and world size
@@ -52,6 +54,7 @@ def main(config: HeartWiseConfig):
         # Initialize the project
         project: Union[
             LLMFinetuningProject, 
+            ECGTokenizerLinearProbing,
             BertReportClassifierProject,
             ECGTokenizerTrainingProject
         ] = ProjectRegistry.get(
