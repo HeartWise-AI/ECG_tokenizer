@@ -30,7 +30,6 @@ class HeartWiseParser:
         train_group = parser.add_argument_group('Training')
         train_group.add_argument('--lr', type=float)
         train_group.add_argument('--llm_lr', type=float)
-        train_group.add_argument('--embedding_reducer_lr', type=float)
         train_group.add_argument('--batch_size', type=int)
         train_group.add_argument('--weight_decay', type=float)
         train_group.add_argument('--criterion', type=str)
@@ -48,16 +47,17 @@ class HeartWiseParser:
         optim_group.add_argument('--num_hard_restarts_cycles', type=float)
         optim_group.add_argument('--warm_restart_tmult', type=int)
         optim_group.add_argument('--llm_weight_decay', type=float)
-        optim_group.add_argument('--embedding_reducer_weight_decay', type=float)
         
         # Tokenizer parameters
         tokenizer_group = parser.add_argument_group('Tokenizer')
         tokenizer_group.add_argument('--max_token_length', type=int)
 
-        # Embedding reducer parameters
-        embedding_reducer_group = parser.add_argument_group('Embedding Reducer')
-        embedding_reducer_group.add_argument('--reducer_dropout', type=float)
-
+        # Embedding adapter parameters
+        adapter_group = parser.add_argument_group('Embedding Adapter')
+        adapter_group.add_argument('--adapter_dropout', type=float)
+        adapter_group.add_argument('--adapter_lr', type=float)
+        adapter_group.add_argument('--adapter_weight_decay', type=float)
+        
         # Checkpointing parameters
         checkpoint_group = parser.add_argument_group('Checkpointing')
         checkpoint_group.add_argument('--project', type=parse_optional_str)
