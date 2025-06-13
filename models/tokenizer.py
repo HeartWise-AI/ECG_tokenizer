@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Optional, Dict, Any, Union
 from models.local_residual_vq import ResidualVQ
 
 from utils.registry import ModelRegistry
@@ -396,6 +396,8 @@ class Conv_Decoder(nn.Module):
         return x   
 
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_WRAPPER)
+@ModelRegistry.register(ModelName.ECG_TOKENIZER_LLM_FINETUNING)
+@ModelRegistry.register(ModelName.ECG_TOKENIZER_LINEAR_PROBING)
 class ECG_Tokenizer_Wrapper(nn.Module):
     """
     Combined tokenization wrapper that encapsulates the encoder, quantizer, and decoder.
@@ -418,6 +420,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         codebook_size: int = 512,
         decoder_mode: DecoderMode = DecoderMode.LLM,
         num_classes: int = 77,
+        # Additional parameters for GPT2 decoder
+        gpt2_model_name: str = 'gpt2',
+        gpt2_embedding_size: int = 768,
+        adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
+        adapter_dropout: float = 0.2,
     ):
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
@@ -425,6 +432,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.encoder_name: str = encoder_name
         self.quantizer_name: str = quantizer_name
         self.decoder_name: str = decoder_name
+        self.using_pretrained_weights: bool = False
         
         # Use the DecoderMode enum instead of a string
         self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
@@ -448,19 +456,180 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         if decoder_class is None:
             raise ValueError(f"Decoder '{decoder_name}' not found in ModelRegistry")
             
-        if self.decoder_mode == DecoderMode.CLASSIFICATION and decoder_name in ["Linear_Classifier_Decoder", "CLS_Token_Classifier_Decoder"]:
+        if self.decoder_mode == DecoderMode.CLASSIFICATION and decoder_name in [
+                ModelName.LINEAR_CLASSIFIER_DECODER, 
+                ModelName.CLS_TOKEN_CLASSIFIER_DECODER,
+                ModelName.RESNET_CLASSIFIER_DECODER
+            ]:
             self.decoder = decoder_class(num_classes=num_classes)
-        elif self.decoder_mode == DecoderMode.CLASSIFICATION and decoder_name == "ResNet_Classifier_Decoder":
-            self.decoder = decoder_class(num_classes=num_classes)
-        else:
+        elif self.decoder_mode == DecoderMode.LLM and decoder_name == ModelName.GPT2_DECODER:
+            # For LLM mode, we need the quantized feature shape from the quantizer
+            # Assuming the quantizer outputs (batch, 128, sequence_length)
+            quantized_feature_shape = (128, 82)  # This should match your quantizer output
+            self.decoder = decoder_class(
+                gpt2_model_name=gpt2_model_name,
+                gpt2_embedding_size=gpt2_embedding_size,
+                quantized_feature_shape=quantized_feature_shape,
+                adapter_name=adapter_name,
+                adapter_dropout=adapter_dropout
+            )
+        elif self.decoder_mode == DecoderMode.RECONSTRUCTION:
             self.decoder = decoder_class()
+        else:
+            raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
+
+    def _load_pretrained_weights(
+        self, 
+        pretrained_state_dict: dict[str, torch.Tensor],
+        freeze_pretrained_components: bool = True
+    )->None:
+        """Load pretrained weights selectively based on configuration."""
+        print("Loading pretrained weights...")
+        
+        # Get current model's state dict for shape comparison
+        current_state_dict = self.state_dict()
+        
+        # Filter state dict based on configuration
+        filtered_state_dict = {}
+        
+        for key, value in pretrained_state_dict.items():
+            should_load = False
+            
+            # Check encoder loading
+            if key.startswith('encoder.'):
+                should_load = True
+                
+            # Check quantizer loading (base VQ layers but skip MLPs)
+            elif key.startswith('quantizer.'):
+                # Load VQ layers but skip MLPs for retraining
+                if 'mlps.' in key:
+                    should_load = True
+                else:
+                    should_load = True
+                            
+            if should_load and key in current_state_dict:
+                # Check if shapes match
+                if current_state_dict[key].shape == value.shape:
+                    filtered_state_dict[key] = value
+                else:
+                    print(f"Shape mismatch for {key}: current {current_state_dict[key].shape} vs pretrained {value.shape}")
+            elif should_load:
+                print(f"Key {key} not found in current model")
+        
+        # Load the filtered state dict
+        self.load_state_dict(filtered_state_dict, strict=False)
+        print(f"Loaded {len(filtered_state_dict)} parameters from pretrained model")
+        
+        # Freeze the loaded components (encoder and quantizer base)
+        if freeze_pretrained_components:
+            self._freeze_pretrained_components()
+            
+        self.using_pretrained_weights = True
+        
+    def _freeze_pretrained_components(self):
+        """Freeze encoder and quantizer components (except MLPs)."""
+        # Freeze encoder completely
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        
+        # Freeze quantizer VQ layers but keep MLPs trainable
+        for name, param in self.quantizer.named_parameters():
+            # if 'mlps.' not in name:  # Freeze everything except MLPs
+            param.requires_grad = False
+        
+    def get_training_info(self) -> dict:
+        """Get information about trainable vs frozen parameters."""
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.parameters())
+        
+        # Component-wise breakdown
+        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        encoder_total = sum(p.numel() for p in self.encoder.parameters())
+        
+        quantizer_trainable = sum(p.numel() for p in self.quantizer.parameters() if p.requires_grad)
+        quantizer_total = sum(p.numel() for p in self.quantizer.parameters())
+        
+        decoder_trainable = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
+        decoder_total = sum(p.numel() for p in self.decoder.parameters())
+        
+        # MLPs specific info
+        mlp_trainable = 0
+        mlp_total = 0
+        if hasattr(self.quantizer, 'quantizer') and hasattr(self.quantizer.quantizer, 'mlps'):
+            mlp_trainable = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters() if p.requires_grad)
+            mlp_total = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters())
+        
+        return {
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "frozen_params": total_params - trainable_params,
+            "trainable_ratio": trainable_params / total_params * 100,
+            "encoder": {"trainable": encoder_trainable, "total": encoder_total},
+            "quantizer": {"trainable": quantizer_trainable, "total": quantizer_total},
+            "quantizer_mlps": {"trainable": mlp_trainable, "total": mlp_total},
+            "decoder": {"trainable": decoder_trainable, "total": decoder_total}
+        }
+
+    def train(self, mode: bool = True):
+        """
+        Override train method to handle frozen components properly.
+        Sets the model to training mode but keeps frozen components in eval mode.
+        """
+        # Call parent train method first
+        super().train(mode)
+        
+        # If we're in training mode, set frozen components to eval mode
+        if mode and self.using_pretrained_weights:
+            self._set_frozen_components_to_eval()
+        
+        return self
+    
+    def _set_frozen_components_to_eval(self):
+        """Set frozen components to eval mode to prevent BatchNorm updates."""
+        # Check if encoder is frozen and set to eval mode
+        encoder_frozen = all(not p.requires_grad for p in self.encoder.parameters())
+        if encoder_frozen:
+            self.encoder.eval()
+            
+        # For quantizer, check if base layers are frozen
+        if hasattr(self.quantizer, 'quantizer'):
+            # Check if VQ layers (non-MLP parts) are frozen
+            vq_params_frozen = True
+            for name, param in self.quantizer.named_parameters():
+                if 'mlps.' not in name and param.requires_grad:
+                    vq_params_frozen = False
+                    break
+            
+            if vq_params_frozen:
+                # Set the entire quantizer to eval, then set MLPs back to train if they're trainable
+                self.quantizer.eval()
+                
+                # Check if MLPs should be in training mode
+                if hasattr(self.quantizer.quantizer, 'mlps'):
+                    mlp_params_trainable = any(p.requires_grad for p in self.quantizer.quantizer.mlps.parameters())
+                    if mlp_params_trainable:
+                        self.quantizer.quantizer.mlps.train()
+    
+    def _check_frozen_components_status(self):
+        """Debug method to check the training status of components."""
+        print("Component training status:")
+        print(f"  Encoder: {'TRAIN' if self.encoder.training else 'EVAL'}")
+        print(f"  Quantizer: {'TRAIN' if self.quantizer.training else 'EVAL'}")
+        if hasattr(self.quantizer.quantizer, 'mlps'):
+            print(f"  Quantizer MLPs: {'TRAIN' if self.quantizer.quantizer.mlps.training else 'EVAL'}")
+        print(f"  Decoder: {'TRAIN' if self.decoder.training else 'EVAL'}")
 
     def forward(
         self, 
-        x: torch.Tensor, 
-        return_all_codes: bool = False
-    ):
-        features = self.encoder(x)
+        ecg_signal: torch.Tensor, 
+        return_all_codes: bool = False,
+        # Additional parameters for LLM mode
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None
+    )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
+        ecg_signal = ecg_signal.to(dtype=torch.float32)  # or torch.bfloat16 if you prefer
+        features = self.encoder(ecg_signal)
         
         quantizer_outputs = self.quantizer(
             features,
@@ -468,17 +637,78 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         )
                 
         # If no decoder, return quantized, indices, commit_loss
-        if not self.decoder: # happens when we to use the quantized ecg embeddings as input to the LLM or other models
+        if not self.decoder:
             return quantizer_outputs
         
         if return_all_codes:
             quantized, indices, commit_loss, all_codes = quantizer_outputs
-            reconstructed_output = self.decoder(quantized)
-            return reconstructed_output, indices, commit_loss, all_codes
         else:
             quantized, indices, commit_loss = quantizer_outputs
+            all_codes = None
+            
+        # Handle different decoder types
+        if self.decoder_mode == DecoderMode.LLM and self.decoder_name == ModelName.GPT2_DECODER:
+            # For GPT2 decoder, pass the quantized features and optional LLM parameters
+            decoder_output = self.decoder(
+                quantized_features=quantized,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            # GPT2 decoder returns a dict - return it directly for LLM mode
+            if isinstance(decoder_output, dict):
+                return decoder_output  # Return the dict directly instead of extracting tensor
+            else:
+                reconstructed_output = decoder_output
+                # Create a dict for consistency
+                return {"logits": reconstructed_output, "indices": indices, "commit_loss": commit_loss}
+        else:
+            # Standard decoder (classification or reconstruction)
             reconstructed_output = self.decoder(quantized)
-            return reconstructed_output, indices, commit_loss
+            
+        if return_all_codes:
+            return reconstructed_output, indices, commit_loss, all_codes
+        else:
+            return reconstructed_output, indices, commit_loss, None
+
+    @torch.no_grad()
+    def generate_report(
+        self,
+        x: torch.Tensor,
+        max_token_length: int = 512,
+        **generate_kwargs
+    ) -> torch.Tensor:
+        """
+        Generate a clinical report from ECG signal using the GPT2 decoder.
+        Only available when decoder_mode is LLM and decoder is GPT2_DECODER.
+        
+        Args:
+            x: ECG signal tensor
+            max_token_length: Maximum length of generated tokens
+            **generate_kwargs: Additional arguments for generation
+            
+        Returns:
+            Generated token IDs
+        """
+        if self.decoder_mode != DecoderMode.LLM or self.decoder_name != ModelName.GPT2_DECODER:
+            raise ValueError("generate_report() is only available with GPT2_DECODER in LLM mode")
+        
+        if self.decoder is None:
+            raise ValueError("No decoder available for generation")
+        
+        # Ensure input is in the right dtype
+        x = x.to(dtype=torch.float32)
+        
+        # Get quantized features
+        features = self.encoder(x)
+        quantized, _, _ = self.quantizer(features)
+        
+        # Generate report using the GPT2 decoder
+        return self.decoder.generate_report(
+            quantized_features=quantized,
+            max_token_length=max_token_length,
+            **generate_kwargs
+        )
 
 @ModelRegistry.register("ECG_CodebookClassifier")
 class ECG_CodebookClassifier(nn.Module):
