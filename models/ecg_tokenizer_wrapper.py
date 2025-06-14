@@ -645,7 +645,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         else:
             quantized, indices, commit_loss = quantizer_outputs
             all_codes = None
-            
+
         # Handle different decoder types
         if self.decoder_mode == DecoderMode.LLM and self.decoder_name == ModelName.GPT2_DECODER:
             # For GPT2 decoder, pass the quantized features and optional LLM parameters
