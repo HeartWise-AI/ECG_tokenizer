@@ -85,6 +85,7 @@ class ModelName(str, Enum):
 class AdapterName(str, Enum):
     """Enum for different adapter names."""
     GPT2_LINEAR_ADAPTER = "GPT2_LinearAdapter"
+    GPT2_SEQUENCE_ADAPTER = "GPT2_SequenceAdapter"
     GPT2_EMBEDDING_ADAPTER = "GPT2_EmbeddingAdapter"
     GPT2_SIMPLE_EMBEDDING_ADAPTER = "GPT2_SimpleEmbeddingAdapter"
     
