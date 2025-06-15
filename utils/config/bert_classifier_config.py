@@ -7,7 +7,9 @@ from utils.config.heartwise_config import HeartWiseConfig
 @ConfigRegistry.register("BERT_Report_Classifier")
 class BertReportClassifierConfig(HeartWiseConfig):
     # Pipeline parameters
+    base_checkpoint_path: str
     output_folder: str
+    runner_name: str
     # Inference parameters
     predictions_reports_path: str
     batch_size: int
