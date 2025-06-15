@@ -16,7 +16,7 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.enums import DecoderMode, ProjectName
 from utils.config import ECGTokenizerTrainingConfig
 from projects.base_project import BaseProject
-from models.tokenizer import ECG_Tokenizer_Wrapper
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from data.ecg_dataset import get_distributed_ecg_dataloader
 from data.ecg_tokenizer_classifier_dataset import get_distributed_ecg_tokenizer_classifier_dataloader
 
