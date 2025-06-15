@@ -15,7 +15,8 @@ class ECGClinicalReportDataset(Dataset):
         embeddings_path: str, 
         reports_path: str, 
         tokenizer: GPT2Tokenizer, 
-        max_length: int = 512
+        max_length: int = 512,
+        subset_fraction: float = 1.0
     ):
         """
         Args:
@@ -23,9 +24,18 @@ class ECGClinicalReportDataset(Dataset):
             reports_path (str): Path to the clinical reports.
             tokenizer (PreTrainedTokenizer): Tokenizer for the clinical reports.
             max_length (int): Maximum token length for the reports.
+            subset_fraction (float): Fraction of the dataset to use (e.g., 0.1 for 10%).
         """
         self.embeddings_path: str = embeddings_path
         self.df: pd.DataFrame = pd.read_parquet(reports_path)
+        
+        # Apply subset if specified
+        if subset_fraction < 1.0:
+            subset_size = int(len(self.df) * subset_fraction)
+            # Use a fixed seed for reproducibility
+            self.df = self.df.sample(n=subset_size, random_state=42).reset_index(drop=True)
+            print(f"Using subset of dataset: {subset_size}/{len(pd.read_parquet(reports_path))} samples ({subset_fraction*100:.1f}%)")
+        
         self.tokenizer: GPT2Tokenizer = tokenizer
         self.max_length: int = max_length
 
@@ -35,13 +45,13 @@ class ECGClinicalReportDataset(Dataset):
     def __getitem__(self, idx):
         try:
             row = self.df.iloc[idx]
-            if pd.isnull(row['waveform_path']) or pd.isnull(row['report']):
+            if pd.isnull(row['waveform_path_psa']) or pd.isnull(row['report']):
                 print(f"Missing waveform_path or report for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get('waveform_path')}, report: {row.get('report')}")
+                      f"waveform_path: {row.get('waveform_path_psa')}, report: {row.get('report')}")
                 return None
 
             # Get the embedding path
-            waveform_path = row['waveform_path']
+            waveform_path = row['waveform_path_psa']
             waveform_path = waveform_path.split('/')[-1]
             waveform_name = waveform_path.split('.')[0]
             embedding_path = os.path.join(self.embeddings_path, waveform_name + '_embedding.npy')
@@ -113,13 +123,15 @@ def get_distributed_clinical_report_dataloader(
     num_replicas: int = 1,
     rank: int = 0,
     shuffle: bool = True,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    subset_fraction: float = 1.0
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         embeddings_path=embeddings_path, 
         reports_path=reports_path, 
         tokenizer=tokenizer, 
-        max_length=max_token_length
+        max_length=max_token_length,
+        subset_fraction=subset_fraction
     )
     
     return DistributedUtils.get_distributed_dataloader(

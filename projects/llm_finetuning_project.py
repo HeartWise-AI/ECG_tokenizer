@@ -47,7 +47,8 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=True, 
-            pin_memory=True
+            pin_memory=True,
+            subset_fraction=1.0  # Use only 10% of training data
         )
         
         validation_dataloader = get_distributed_clinical_report_dataloader(
@@ -60,23 +61,77 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False, 
-            pin_memory=True
+            pin_memory=True,
+            subset_fraction=1.0  # Use only 10% of validation data
         )
 
         # Get the model
         print("Getting embedding size...")
         ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.train_embeddings_path)
-        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
-            gpt2_model_name=self.config.huggingface_model_name, 
-            gpt2_embedding_size=self.config.gpt2_embedding_size, 
-            ecg_embedding_size=ecg_embedding_size,
-            reducer_name=self.config.embedding_reducer_name,
-            reducer_dropout=self.config.reducer_dropout
-        ).to(self.config.device)
+        
+        # Get model class and parameters based on model type
+        model_class_name = self.config.get_model_class_name()
+        embedding_size = self.config.get_embedding_size()
+        
+        # Create model with appropriate parameters based on model type
+        model_kwargs = {
+            "ecg_embedding_size": ecg_embedding_size,
+            "reducer_name": self.config.embedding_reducer_name or self.config.get_default_reducer_name(),
+            "reducer_dropout": self.config.reducer_dropout
+        }
+        
+        if self.config.model_type == "gpt2":
+            model_kwargs.update({
+                "gpt2_model_name": self.config.huggingface_model_name,
+                "gpt2_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "bloom":
+            model_kwargs.update({
+                "bloom_model_name": self.config.huggingface_model_name,
+                "bloom_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "opt":
+            model_kwargs.update({
+                "opt_model_name": self.config.huggingface_model_name,
+                "opt_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "mistral":
+            model_kwargs.update({
+                "mistral_model_name": self.config.huggingface_model_name,
+                "mistral_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "gptneo":
+            model_kwargs.update({
+                "gptneo_model_name": self.config.huggingface_model_name,
+                "gptneo_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "gptj":
+            model_kwargs.update({
+                "gptj_model_name": self.config.huggingface_model_name,
+                "gptj_embedding_size": embedding_size
+            })
+        
+        model = ModelRegistry.get(model_class_name)(**model_kwargs).to(self.config.device)
+
+        # Get the base model for parameter grouping (different models have different attribute names)
+        if hasattr(model, 'gpt2'):
+            base_model = model.gpt2
+        elif hasattr(model, 'bloom'):
+            base_model = model.bloom
+        elif hasattr(model, 'opt'):
+            base_model = model.opt
+        elif hasattr(model, 'mistral'):
+            base_model = model.mistral
+        elif hasattr(model, 'gptneo'):
+            base_model = model.gptneo
+        elif hasattr(model, 'gptj'):
+            base_model = model.gptj
+        else:
+            raise ValueError(f"Unknown model type: {self.config.model_type}")
 
         param_groups = [
             {
-                "params": model.gpt2.parameters(),
+                "params": base_model.parameters(),
                 "lr": self.config.llm_lr,
                 "weight_decay": self.config.llm_weight_decay,
                 "name": "llm"
@@ -139,18 +194,57 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False, 
-            pin_memory=True
+            pin_memory=True,
+            subset_fraction=0.1  # Use only 10% of inference data
         )        
         
         # Get the model
         print("Getting embedding size...")
         ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.validation_embeddings_path)
-        model: GPT2WithEmbedding = ModelRegistry.get(self.config.trainable_model_name)(
-            gpt2_model_name=self.config.huggingface_model_name, 
-            gpt2_embedding_size=self.config.gpt2_embedding_size, 
-            ecg_embedding_size=ecg_embedding_size, 
-            reducer_name=self.config.embedding_reducer_name
-        ).to(self.config.device)
+        
+        # Get model class and parameters based on model type
+        model_class_name = self.config.get_model_class_name()
+        embedding_size = self.config.get_embedding_size()
+        
+        # Create model with appropriate parameters based on model type
+        model_kwargs = {
+            "ecg_embedding_size": ecg_embedding_size,
+            "reducer_name": self.config.embedding_reducer_name or self.config.get_default_reducer_name(),
+            "reducer_dropout": self.config.reducer_dropout
+        }
+        
+        if self.config.model_type == "gpt2":
+            model_kwargs.update({
+                "gpt2_model_name": self.config.huggingface_model_name,
+                "gpt2_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "bloom":
+            model_kwargs.update({
+                "bloom_model_name": self.config.huggingface_model_name,
+                "bloom_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "opt":
+            model_kwargs.update({
+                "opt_model_name": self.config.huggingface_model_name,
+                "opt_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "mistral":
+            model_kwargs.update({
+                "mistral_model_name": self.config.huggingface_model_name,
+                "mistral_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "gptneo":
+            model_kwargs.update({
+                "gptneo_model_name": self.config.huggingface_model_name,
+                "gptneo_embedding_size": embedding_size
+            })
+        elif self.config.model_type == "gptj":
+            model_kwargs.update({
+                "gptj_model_name": self.config.huggingface_model_name,
+                "gptj_embedding_size": embedding_size
+            })
+        
+        model = ModelRegistry.get(model_class_name)(**model_kwargs).to(self.config.device)
 
         # Wrap the model in DDP
         model = DistributedUtils.DDP(
@@ -168,6 +262,16 @@ class LLMFinetuningProject(BaseProject):
             "model": model,
             "val_dataloader": validation_dataloader
         }
+    
+    def _setup_extraction_objects(self)->dict[str, Any]:
+        """
+        Extraction is not supported for LLM finetuning projects.
+        LLM finetuning uses pre-extracted embeddings passed via config.
+        """
+        raise NotImplementedError(
+            "Extraction is not supported for LLM finetuning projects. "
+            "Use ECGTokenizerTrainingProject for embedding extraction."
+        )
         
     def _get_embedding_size(self, embeddings_dir: str) -> tuple[int, ...]:
         for fname in os.listdir(embeddings_dir):

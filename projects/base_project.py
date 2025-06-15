@@ -76,7 +76,7 @@ class BaseProject(ABC):
             
         elif self.config.run_mode == RunMode.EXTRACT_EMBEDDINGS:
             runner_args.update(self._setup_extraction_objects())
-        
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
         elif self.config.run_mode == RunMode.INFERENCE:
             runner_args.update(self._setup_inference_objects())
         
@@ -84,5 +84,5 @@ class BaseProject(ABC):
             ECGTokenizerRunner, 
             LLMFinetuningRunner,
             BertReportClassifierRunner
-        ] = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        ] = RunnerRegistry.get(self.config.runner_name)(**runner_args)
         runner.execute(mode=self.config.run_mode)    
