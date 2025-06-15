@@ -1,46 +1,75 @@
-import os
 import torch
-import numpy as np
+
+from typing import Any
+from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
 from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import GPT2Tokenizer
 
+from utils.ddp import DistributedUtils
+from utils.schedulers import get_scheduler
 from utils.registry import (
     ModelRegistry,
-    ProjectRegistry 
+    ProjectRegistry
 )
 from utils.enums import ProjectName
-from utils.ddp import DistributedUtils
 from utils.wandb_wrapper import WandbWrapper
-from utils.schedulers import get_scheduler
-from utils.config.llm_finetuning_config import LLMFinetuningConfig
+from utils.config import LLMFinetuningConfig, ECGTokenizerTrainingConfig
 from projects.base_project import BaseProject
-from models.gpt2_tokenizer_wrapper import GPT2TokenizerWrapper
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
-from typing import Any
+# Add the config to the safe globals
+torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
 
 @ProjectRegistry.register(ProjectName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningProject(BaseProject):
     def __init__(
-        self,
-        config: LLMFinetuningConfig,
+        self, 
+        config: LLMFinetuningConfig, 
         wandb_wrapper: WandbWrapper
     ):
         super().__init__(config, wandb_wrapper)
-        self.config: LLMFinetuningConfig = config # cast to LLMFinetuningConfig to avoid type errors
-
+        self.config: LLMFinetuningConfig = config # cast to ECGTokenizerLinearProbingConfig to avoid type errors
+        
     def run(self):
         super().run()
-
+        
     def _setup_training_objects(self)->dict[str, Any]:
+        
+        # Load the pretrained tokenizer
+        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        # Get the config from the pretrained tokenizer
+        pretrained_config = state_dict['config']
+        print(pretrained_config)                
+        # Initialize the tokenizer with the appropriate configuration
+        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
+            encoder_name=pretrained_config.encoder_name, 
+            quantizer_name=pretrained_config.quantizer_name,
+            decoder_name=self.config.decoder_name, # use the decoder from the current config
+            num_quantizers=pretrained_config.num_quantizers,
+            codebook_size=pretrained_config.codebook_size,
+            decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
+            adapter_name=self.config.adapter_name,
+        ).to(self.config.device)
+        # Set the codebook size to the pretrained codebook size
+        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
+        
+        # Load the pretrained state dict
+        pretrained_state_dict = state_dict['model_state_dict']
+        ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
+        
+        # Print training configuration
+        self._print_training_config(ecg_tokenizer)
+               
+        # Load the tokenizer
         tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
         tokenizer.pad_token = tokenizer.eos_token
-
+               
         # Get the dataloaders
-        training_dataloader = get_distributed_clinical_report_dataloader(
+        train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
@@ -54,7 +83,7 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True
         )
         
-        validation_dataloader = get_distributed_clinical_report_dataloader(
+        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
@@ -68,40 +97,28 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True
         )
 
-        # Get the model
-        model: GPT2TokenizerWrapper = ModelRegistry.get(self.config.trainable_model_name)(
-            ecg_tokenizer_path=self.config.ecg_tokenizer_path,
-            ecg_tokenizer_num_quantizers=self.config.ecg_tokenizer_num_quantizers,
-            ecg_tokenizer_codebook_size=self.config.ecg_tokenizer_codebook_size,
-            ecg_encoder_name=self.config.ecg_encoder_name,
-            ecg_quantizer_name=self.config.ecg_quantizer_name,
-            ecg_decoder_name=self.config.ecg_decoder_name,
-            gpt2_model_name=self.config.huggingface_model_name, 
-            gpt2_embedding_size=self.config.gpt2_embedding_size, 
-            ecg_embedding_size=self.config.ecg_embedding_size
-        ).to(self.config.device)
-
-        param_groups: list[dict[str, Any]] = [
+        # Wrap the model in DDP
+        ecg_tokenizer = DistributedUtils.DDP(
+            ecg_tokenizer,
+            device_ids=[self.config.device]
+        )
+        
+        # Get the parameter groups
+        param_groups = [
             {
-                "params": model.gpt2.parameters(),
+                "params": ecg_tokenizer.module.decoder.gpt2.parameters(),
                 "lr": self.config.llm_lr,
                 "weight_decay": self.config.llm_weight_decay,
                 "name": "llm"
             },
             {
-                "params": model.embedding_adapter.parameters(),
-                "lr": self.config.embedding_adapter_lr,
-                "weight_decay": self.config.embedding_adapter_weight_decay,
-                "name": "embedding_adapter"
+                "params": ecg_tokenizer.module.decoder.adapter.parameters(),
+                "lr": self.config.adapter_lr,
+                "weight_decay": self.config.adapter_weight_decay,
+                "name": "adapter"
             }
         ]
         
-        # Wrap the model in DDP
-        model = DistributedUtils.DDP(
-            model,
-            device_ids=[self.config.device]
-        )
-
         # Get the optimizer
         optimizer_class = getattr(torch.optim, self.config.optimizer)
         optimizer: Optimizer = optimizer_class(param_groups)
@@ -111,7 +128,7 @@ class LLMFinetuningProject(BaseProject):
             scheduler_name=self.config.scheduler_type,
             optimizer=optimizer,
             num_epochs=self.config.num_epochs,
-            train_dataloader=training_dataloader,
+            train_dataloader=train_dataloader,
             gamma=self.config.gamma if hasattr(self.config, 'gamma') else None,
             step_size=self.config.step_size if hasattr(self.config, 'step_size') else None,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps if hasattr(self.config, 'gradient_accumulation_steps') else 1,
@@ -119,73 +136,45 @@ class LLMFinetuningProject(BaseProject):
             num_hard_restarts_cycles=self.config.num_hard_restarts_cycles if hasattr(self.config, 'num_hard_restarts_cycles') else None,
             warm_restart_tmult=self.config.warm_restart_tmult if hasattr(self.config, 'warm_restart_tmult') else None
         )
-
+                
         # Get the scaler
         scaler: GradScaler = GradScaler()
-                
+        
         return {
-            "train_dataloader": training_dataloader,
-            "val_dataloader": validation_dataloader,
             "optimizer": optimizer,
             "scheduler": scheduler,
             "scaler": scaler,
-            "model": model,
+            "model": ecg_tokenizer,
+            "train_dataloader": train_dataloader,
+            "validation_dataloader": validation_dataloader
         }
-            
-    def _setup_inference_objects(self)->dict[str, Any]:
-        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-        tokenizer.pad_token = tokenizer.eos_token
+    
+    def _print_training_config(self, model: ECG_Tokenizer_Wrapper):
+        """Print the current training configuration."""
+        print("\n" + "="*60)
+        print("LLM FINETUNING CONFIGURATION")
+        print("="*60)
         
-        validation_dataloader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.inference_dataset_path,
-            ecg_waveform_length=self.config.ecg_waveform_length,
-            ecg_num_leads=self.config.ecg_num_leads,
-            tokenizer=tokenizer,
-            max_token_length=self.config.max_token_length,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            num_replicas=self.config.world_size,
-            rank=self.config.device,
-            shuffle=False, 
-            pin_memory=True
-        )        
+        training_info = model.get_training_info()
         
-        # Get the model
-        print("Getting embedding size...")
-        ecg_embedding_size: tuple[int, ...] = self._get_embedding_size(self.config.validation_embeddings_path)
-        model: GPT2TokenizerWrapper = ModelRegistry.get(self.config.trainable_model_name)(
-            gpt2_model_name=self.config.huggingface_model_name, 
-            gpt2_embedding_size=self.config.gpt2_embedding_size, 
-            ecg_embedding_size=ecg_embedding_size, 
-            reducer_name=self.config.embedding_reducer_name
-        ).to(self.config.device)
+        print(f"Total parameters: {training_info['total_params']:,}")
+        print(f"Trainable parameters: {training_info['trainable_params']:,}")
+        print(f"Frozen parameters: {training_info['frozen_params']:,}")
+        print(f"Trainable ratio: {training_info['trainable_ratio']:.2f}%")
 
-        # Wrap the model in DDP
-        model = DistributedUtils.DDP(
-            model,
-            device_ids=[self.config.device]
-        )
+        print(f"\nAdapter: {model.decoder.adapter_name}")
+        print(f"Decoder: {model.decoder_name} ({model.decoder_mode.value} mode)")
         
-        # Load the checkpoint
-        checkpoint = self._load_checkpoint(self.config.checkpoint_dir)
+        print("\nComponent-wise breakdown:")
+        print(f"  Encoder: {training_info['encoder']['trainable']:,}/{training_info['encoder']['total']:,} trainable")
+        print(f"  Quantizer: {training_info['quantizer']['trainable']:,}/{training_info['quantizer']['total']:,} trainable")
+        print(f"    └─ MLPs: {training_info['quantizer_mlps']['trainable']:,}/{training_info['quantizer_mlps']['total']:,} trainable")
+        print(f"  Decoder: {training_info['decoder']['trainable']:,}/{training_info['decoder']['total']:,} trainable")
         
-        # Load the model state dict
-        model.module.load_state_dict(checkpoint["model_state_dict"])
-        
-        return {
-            "model": model,
-            "val_dataloader": validation_dataloader
-        }
-        
-    def _get_embedding_size(self, embeddings_dir: str) -> tuple[int, ...]:
-        for fname in os.listdir(embeddings_dir):
-            full_path = os.path.join(embeddings_dir, fname)
-            try:
-                embedding = np.load(full_path)
-                return embedding.shape
-            except Exception as e:
-                print(f"Warning: could not load {full_path} due to {e}")
-        raise ValueError(f"No valid embedding file found in directory: {embeddings_dir}")
+        print("="*60 + "\n")
+    
+    def _setup_inference_objects(self)->dict[str, Any]:
+        raise NotImplementedError("Inference is not implemented for this project")
     
     def _setup_extraction_objects(self)->dict[str, Any]:
         raise NotImplementedError("Extraction is not implemented for this project")
