@@ -9,57 +9,50 @@ from utils.config.heartwise_config import HeartWiseConfig
 @dataclass
 @ConfigRegistry.register(ConfigName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningConfig(HeartWiseConfig):   
-    # Training hyperparameters
-    num_epochs: int
-    num_workers: int
+    # Pipeline parameters
+    pretrained_tokenizer_path: str
     runner_name: str
+    num_epochs: int
+    base_checkpoint_path: str
+    
+    # Training hyperparameters
     llm_lr: float
+    adapter_lr: float
     llm_weight_decay: float
-    embedding_adapter_lr: float
-    embedding_adapter_weight_decay: float
-    embedding_adapter_dropout: float
-    batch_size: int
-    criterion: str
-    optimizer: str
+    adapter_weight_decay: float
     scheduler_type: str
+    lr_step_period: int
+    factor: float
+    optimizer: str
     step_size: int
     gamma: float
     num_warmup_percent: float
     num_hard_restarts_cycles: float
     warm_restart_tmult: int
-    
-    # Tokenizer parameters
-    tokenizer_name: str
+
+    # VQVAE parameters
+    decoder_mode: str
+    decoder_name: str
+        
+    # LLM tokenizer parameters
     max_token_length: int
+    tokenizer_name: str
 
     # Model parameters
     huggingface_model_name: str
     trainable_model_name: str
-    embedding_adapter_name: str
+    adapter_name: str
     gpt2_embedding_size: int
-
-    # ECG tokenizer parameters
-    ecg_tokenizer_path: str
-    ecg_tokenizer_num_quantizers: int
-    ecg_tokenizer_codebook_size: int
-    ecg_encoder_name: str
-    ecg_quantizer_name: str
-    ecg_decoder_name: str
-    ecg_embedding_size: Tuple[int, int, int]
     
-    # ECG parameters
-    ecg_waveform_length: int
-    ecg_num_leads: int
-
     # Metrics
     metrics: list[str]
-
-    # Data and checkpoint paths
-    base_checkpoint_path: str
+    
+    # Dataset parameters
     train_dataset_path: str
     validation_dataset_path: str
-    output_dir: str
+    num_workers: int
+    batch_size: int
     
-    # Inference parameters
-    checkpoint_dir: str
-    inference_dataset_path: str
+    # Waveform parameters
+    ecg_waveform_length: int
+    ecg_num_leads: int
