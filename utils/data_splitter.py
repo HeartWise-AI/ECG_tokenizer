@@ -4,7 +4,13 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 
 class DataSplitter:
-    def __init__(self, df: pd.DataFrame, feature_col: str, label_cols: list, stratify_method='auto'):
+    def __init__(
+        self, 
+        df: pd.DataFrame, 
+        feature_col: str | list[str], 
+        label_cols: str | list[str], 
+        stratify_method: str = 'auto'
+    ):
         """
         Initialize the DataSplitter.
         
@@ -28,7 +34,13 @@ class DataSplitter:
         if self.stratify_method == 'binary':
             self.y = self.y.ravel()
 
-    def split(self, train_size=0.8, val_size=0.1, test_size=0.1, random_state=42):
+    def split(
+        self, 
+        train_size: float = 0.8, 
+        val_size: float = 0.1, 
+        test_size: float = 0.1, 
+        random_state: int = 42
+    )->dict[str, pd.DataFrame | np.ndarray]:
         """
         Split the data into train, validation, and test sets.
         
@@ -74,7 +86,10 @@ class DataSplitter:
             'X_test': X_test, 'y_test': y_test
         }
 
-    def check_distribution(self, split_data):
+    def check_distribution(
+        self, 
+        split_data: dict[str, pd.DataFrame | np.ndarray]
+    )->dict[str, dict[str, np.ndarray]]:
         """
         Check the distribution of labels in the split datasets.
         
