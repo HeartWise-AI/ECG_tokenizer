@@ -107,7 +107,7 @@ export OMP_NUM_THREADS=1
 # Run the training
 torchrun \
     --nproc_per_node=$NUM_GPUS \
-    --master_port=29500 \
+    --master_port=29200 \
     --nnodes=1 \
     --node_rank=0 \
     scripts/main.py \
