@@ -24,7 +24,7 @@ from utils.metrics.ecg_metrics import compute_metrics
 from utils.schedulers import scheduler_is_per_iteration
 from utils.enums import RunMode, DecoderMode, RunnerName
 from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
-from models.tokenizer import ECG_Tokenizer_Wrapper, ResidualVQ
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper, ResidualVQ
 
 
 @RunnerRegistry.register(RunnerName.ECG_TOKENIZER_TRAINING)

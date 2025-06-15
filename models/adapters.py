@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from utils.registry import ModelRegistry
 from utils.enums import AdapterName
@@ -107,4 +108,75 @@ class SimpleEmbeddingAdapter(nn.Module):
         # Map directly to GPT-2's embedding size.
         x = self.fc(x)
         x = self.dropout(x)
-        return x  # Output shape: (batch, output_size) 
+        return x  # Output shape: (batch, output_size)
+    
+@ModelRegistry.register(AdapterName.GPT2_SEQUENCE_ADAPTER)
+class SequenceAdapter(nn.Module):
+    def __init__(
+        self, 
+        input_shape: tuple[int, int] = (128, 82), 
+        output_size: int = 768, 
+        dropout: float = 0.2, 
+    ):
+        super().__init__()
+        
+        # Extract the actual feature dimensions
+        # NOTE: For ECG encoder output (batch, 128, 82):
+        # - 128 = sequence length (temporal dimension)  
+        # - 82 = feature dimension (quantized features)
+        # GPT2Decoder may add extra dim: (batch, 1, 128, 82) -> handled in forward()
+        seq_len = input_shape[0]  # 128 = sequence length
+        channels = input_shape[1]  # 82 = feature dimension
+        
+        # Project channels to a smaller intermediate dimension first
+        self.channel_projection = nn.Sequential(
+            nn.Linear(channels, output_size // 2),
+            nn.LayerNorm(output_size // 2),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+                
+        # Use attention to aggregate sequence information more intelligently
+        self.attention = nn.MultiheadAttention(
+            embed_dim=output_size // 2, 
+            num_heads=8, 
+            dropout=dropout, 
+            batch_first=True
+        )
+        self.attention_norm = nn.LayerNorm(output_size // 2)
+        
+        # Final projection to output size
+        self.final_projection = nn.Sequential(
+            nn.Linear(output_size // 2, output_size),
+            nn.LayerNorm(output_size),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Learnable positional embeddings for sequence length
+        self.positional_embedding = nn.Parameter(
+            torch.randn(1, seq_len, output_size // 2) * 0.02
+        )
+
+    def forward(self, x):
+        # Handle 4D input from GPT2Decoder: (batch, 1, seq_len, channels) -> (batch, seq_len, channels)
+        if x.dim() == 4 and x.size(1) == 1:
+            x = x.squeeze(1)  # Remove the extra dimension
+        
+        # Project channels: (batch, seq_len, channels) -> (batch, seq_len, output_size//2)
+        x = self.channel_projection(x)
+        
+        # Add positional embeddings
+        x = x + self.positional_embedding
+
+        # Apply self-attention to aggregate sequence information
+        attended, _ = self.attention(x, x, x)
+        x = self.attention_norm(attended + x)  # Residual connection
+        
+        # Global average pooling over sequence dimension
+        x = x.mean(dim=1)  # (batch, output_size//2)
+                
+        # Final projection to GPT2 embedding size
+        x = self.final_projection(x)  # (batch, output_size)
+
+        return x 
