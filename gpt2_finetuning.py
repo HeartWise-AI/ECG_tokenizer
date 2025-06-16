@@ -41,8 +41,7 @@ dataset = ECGClinicalReportDataset(
     embeddings_path=all_embeddings_path,
     reports_path=all_reports_path,
     tokenizer=tokenizer,
-    max_length=512,
-    subset_fraction=1.0  # Use only 10% of the data
+    max_length=512
 )
 
 
