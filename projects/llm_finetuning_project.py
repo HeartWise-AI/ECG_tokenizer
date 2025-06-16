@@ -47,6 +47,9 @@ class LLMFinetuningProject(BaseProject):
         if self.config.is_ref_device:
             print(f"Pretrained config: {pretrained_config}")                
         
+        # Set encoder_name to the pretrained encoder_name -> otherwise the encoder_name is not saved in the checkpoint
+        self.config.encoder_name = pretrained_config.encoder_name
+        
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             encoder_name=pretrained_config.encoder_name, 
