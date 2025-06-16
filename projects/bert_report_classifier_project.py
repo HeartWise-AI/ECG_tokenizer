@@ -68,4 +68,3 @@ class BertReportClassifierProject(BaseProject):
     
     def _setup_training_objects(self)->dict[str, Any]:
         raise NotImplementedError("Training is not implemented for this project")
-
