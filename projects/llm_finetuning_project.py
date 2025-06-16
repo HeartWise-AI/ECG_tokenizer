@@ -22,6 +22,7 @@ from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 # Add the config to the safe globals
+torch.serialization.add_safe_globals([LLMFinetuningConfig])
 torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
 
 @ProjectRegistry.register(ProjectName.ECG_TOKENIZER_LLM_FINETUNING)
@@ -185,21 +186,22 @@ class LLMFinetuningProject(BaseProject):
             print(f"Pretrained config: {pretrained_config}")              
         
         # Initialize the tokenizer with the appropriate configuration
+        # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             encoder_name=pretrained_config.encoder_name, 
             quantizer_name=pretrained_config.quantizer_name,
-            decoder_name=self.config.decoder_name, # use the decoder from the current config
+            decoder_name=pretrained_config.decoder_name, 
             num_quantizers=pretrained_config.num_quantizers,
             codebook_size=pretrained_config.codebook_size,
-            decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
-            adapter_name=self.config.adapter_name,
+            decoder_mode=pretrained_config.decoder_mode,
+            adapter_name=pretrained_config.adapter_name,
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
         
         # Load the pretrained state dict
         pretrained_state_dict = state_dict['model_state_dict']
-        ecg_tokenizer.load_state_dict(pretrained_state_dict)
+        ecg_tokenizer.load_state_dict(pretrained_state_dict, weights_only=True)
         ecg_tokenizer.eval()
         
         # Load the tokenizer
