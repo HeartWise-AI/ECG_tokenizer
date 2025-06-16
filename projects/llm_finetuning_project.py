@@ -37,13 +37,15 @@ class LLMFinetuningProject(BaseProject):
     def run(self):
         super().run()
         
-    def _setup_training_objects(self)->dict[str, Any]:
-        
+    def _setup_training_objects(self)->dict[str, Any]: 
         # Load the pretrained tokenizer
         state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        
         # Get the config from the pretrained tokenizer
         pretrained_config = state_dict['config']
-        print(pretrained_config)                
+        if self.config.is_ref_device:
+            print(f"Pretrained config: {pretrained_config}")                
+        
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             encoder_name=pretrained_config.encoder_name, 
@@ -174,7 +176,61 @@ class LLMFinetuningProject(BaseProject):
         print("="*60 + "\n")
     
     def _setup_inference_objects(self)->dict[str, Any]:
-        raise NotImplementedError("Inference is not implemented for this project")
+        # Load the pretrained tokenizer
+        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        
+        # Get the config from the pretrained tokenizer
+        pretrained_config = state_dict['config']
+        if self.config.is_ref_device:
+            print(f"Pretrained config: {pretrained_config}")              
+        
+        # Initialize the tokenizer with the appropriate configuration
+        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
+            encoder_name=pretrained_config.encoder_name, 
+            quantizer_name=pretrained_config.quantizer_name,
+            decoder_name=self.config.decoder_name, # use the decoder from the current config
+            num_quantizers=pretrained_config.num_quantizers,
+            codebook_size=pretrained_config.codebook_size,
+            decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
+            adapter_name=self.config.adapter_name,
+        ).to(self.config.device)
+        # Set the codebook size to the pretrained codebook size
+        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
+        
+        # Load the pretrained state dict
+        pretrained_state_dict = state_dict['model_state_dict']
+        ecg_tokenizer.load_state_dict(pretrained_state_dict)
+        ecg_tokenizer.eval()
+        
+        # Load the tokenizer
+        tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        
+        # Get the dataloaders
+        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
+            dataset_path=self.config.validation_dataset_path,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
+            tokenizer=tokenizer,
+            max_token_length=self.config.max_token_length,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=False, 
+            pin_memory=True
+        )
+
+        # Wrap the model in DDP
+        ecg_tokenizer = DistributedUtils.DDP(
+            ecg_tokenizer,
+            device_ids=[self.config.device]
+        )
+        
+        return {
+            "model": ecg_tokenizer,
+            "validation_dataloader": validation_dataloader
+        }
     
     def _setup_extraction_objects(self)->dict[str, Any]:
         raise NotImplementedError("Extraction is not implemented for this project")
