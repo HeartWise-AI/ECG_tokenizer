@@ -49,6 +49,8 @@ class LLMFinetuningProject(BaseProject):
         
         # Set encoder_name to the pretrained encoder_name -> otherwise the encoder_name is not saved in the checkpoint
         self.config.encoder_name = pretrained_config.encoder_name
+        # Set quantizer_name to the pretrained quantizer_name -> otherwise the quantizer_name is not saved in the checkpoint
+        self.config.quantizer_name = pretrained_config.quantizer_name
         
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
@@ -191,7 +193,8 @@ class LLMFinetuningProject(BaseProject):
         # Initialize the tokenizer with the appropriate configuration
         # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
-            encoder_name=pretrained_config.encoder_name, 
+            # encoder_name=pretrained_config.encoder_name,
+            encoder_name='Conv_Encoder', 
             quantizer_name=pretrained_config.quantizer_name,
             decoder_name=pretrained_config.decoder_name, 
             num_quantizers=pretrained_config.num_quantizers,
