@@ -27,8 +27,8 @@ class GPT2Decoder(nn.Module):
         self, 
         gpt2_model_name: str = 'gpt2', 
         gpt2_embedding_size: int = 768, 
-        quantized_feature_shape: Tuple[int, int] = (128, 82),  # (channels, sequence_length)
-        adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
+        quantized_feature_shape: Tuple[int, int] = (128, 82),  # For SequenceAdapter: (seq_len, features)
+        adapter_name: str = "GPT2_SequenceAdapter",  # Changed default to match the 2D shape
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # Default generation parameters
@@ -91,7 +91,7 @@ class GPT2Decoder(nn.Module):
         Forward pass for the GPT2Decoder.
         
         Args:
-            quantized_features: Quantized features from ECG tokenizer (batch, channels, sequence_length)
+            quantized_features: Quantized features from ECG tokenizer (batch, seq_len, features)
             input_ids: Token IDs for the text input (batch, seq_length) - optional for generation mode
             attention_mask: Optional mask for padding tokens (batch, seq_length)
             labels: Optional labels for computing the language modeling loss (batch, seq_length)
@@ -185,7 +185,7 @@ class GPT2Decoder(nn.Module):
         Generate a clinical report from quantized ECG features.
         
         Args:
-            quantized_features: Quantized features from ECG tokenizer
+            quantized_features: Quantized features from ECG tokenizer (batch, seq_len, features)
             max_token_length: Maximum length of generated tokens
             **generate_kwargs: Additional keyword arguments for generation
             
