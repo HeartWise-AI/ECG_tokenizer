@@ -68,7 +68,6 @@ class HeartWiseConfig:
         data_parameters['world_size'] = int(os.environ["WORLD_SIZE"])
         data_parameters['is_ref_device'] = (data_parameters['device'] == 0)
         data_parameters['output_dir'] = ""
-        data_parameters['run_mode'] = "train"
         
         return registered_config(**data_parameters)    
 
