@@ -1,0 +1,59 @@
+# Example configuration for GPT-J model finetuning
+pipeline_project: "ECG_tokenizer_LLM_finetuning"
+
+# Wandb configuration
+wandb_project: "ecg_tokenizer_gptj_finetuning"
+wandb_entity: "your_wandb_entity"
+use_wandb: true
+
+# Base configuration
+base_config_path: "config/examples/gptj_llm_finetuning.yaml"
+
+# Model configuration - GPT-J specific
+model_type: "gptj"
+huggingface_model_name: "EleutherAI/gpt-j-6B"
+trainable_model_name: "GPTJ_WithEmbedding"
+embedding_reducer_name: "GPTJ_SimpleEmbeddingReducer"
+
+# Training hyperparameters (adjusted for very large model)
+seed: 42
+llm_lr: 0.00002  # Very low learning rate for large model
+embedding_reducer_lr: 0.001
+num_workers: 4
+batch_size: 2    # Very small batch size for large model
+llm_weight_decay: 0.01
+embedding_reducer_weight_decay: 0.01
+num_epochs: 3    # Few epochs for large model
+criterion: "CrossEntropyLoss"
+optimizer: "AdamW"
+runner_name: "LLMFinetuningRunner"
+scheduler_type: "CosineAnnealingWarmRestarts"
+step_size: 2
+gamma: 0.1
+run_mode: "train"
+reducer_dropout: 0.1
+num_warmup_percent: 0.2
+num_hard_restarts_cycles: 1.0
+warm_restart_tmult: 2
+
+# Tokenizer configuration
+tokenizer_name: "EleutherAI/gpt-j-6B"
+max_token_length: 512
+
+# Data paths
+train_dataset_path: "data/train_ecg_reports.parquet"
+validation_dataset_path: "data/val_ecg_reports.parquet"
+train_embeddings_path: "embeddings/train_ecg_embeddings.npy"
+validation_embeddings_path: "embeddings/val_ecg_embeddings.npy"
+inference_dataset_path: "data/test_ecg_reports.parquet"
+
+# Output paths
+output_dir: "outputs/gptj_finetuning"
+checkpoint_dir: "checkpoints/gptj_finetuning"
+base_checkpoint_path: "checkpoints/gptj_finetuning/best_model.pt"
+
+# Metrics
+metrics: ["accuracy", "bleu", "rouge"]
+
+# Model-specific embedding sizes (automatically managed)
+gptj_embedding_size: 4096  # GPT-J-6B hidden size

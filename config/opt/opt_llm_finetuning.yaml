@@ -1,0 +1,59 @@
+# Example configuration for OPT model finetuning
+pipeline_project: "ECG_tokenizer_LLM_finetuning"
+
+# Wandb configuration
+wandb_project: "ecg_tokenizer_opt_finetuning"
+wandb_entity: "your_wandb_entity"
+use_wandb: true
+
+# Base configuration
+base_config_path: "config/examples/opt_llm_finetuning.yaml"
+
+# Model configuration - OPT specific
+model_type: "opt"
+huggingface_model_name: "facebook/opt-350m"
+trainable_model_name: "OPT_WithEmbedding"
+embedding_reducer_name: "OPT_SimpleEmbeddingReducer"
+
+# Training hyperparameters
+seed: 42
+llm_lr: 0.0001
+embedding_reducer_lr: 0.001
+num_workers: 4
+batch_size: 8
+llm_weight_decay: 0.01
+embedding_reducer_weight_decay: 0.01
+num_epochs: 10
+criterion: "CrossEntropyLoss"
+optimizer: "AdamW"
+runner_name: "LLMFinetuningRunner"
+scheduler_type: "CosineAnnealingWarmRestarts"
+step_size: 5
+gamma: 0.1
+run_mode: "train"
+reducer_dropout: 0.1
+num_warmup_percent: 0.1
+num_hard_restarts_cycles: 2.0
+warm_restart_tmult: 2
+
+# Tokenizer configuration
+tokenizer_name: "facebook/opt-350m"
+max_token_length: 512
+
+# Data paths
+train_dataset_path: "data/train_ecg_reports.parquet"
+validation_dataset_path: "data/val_ecg_reports.parquet"
+train_embeddings_path: "embeddings/train_ecg_embeddings.npy"
+validation_embeddings_path: "embeddings/val_ecg_embeddings.npy"
+inference_dataset_path: "data/test_ecg_reports.parquet"
+
+# Output paths
+output_dir: "outputs/opt_finetuning"
+checkpoint_dir: "checkpoints/opt_finetuning"
+base_checkpoint_path: "checkpoints/opt_finetuning/best_model.pt"
+
+# Metrics
+metrics: ["accuracy", "bleu", "rouge"]
+
+# Model-specific embedding sizes (automatically managed)
+opt_embedding_size: 512  # OPT-350m hidden size
