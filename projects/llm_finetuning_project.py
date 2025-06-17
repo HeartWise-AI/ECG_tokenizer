@@ -51,6 +51,10 @@ class LLMFinetuningProject(BaseProject):
         self.config.encoder_name = pretrained_config.encoder_name
         # Set quantizer_name to the pretrained quantizer_name -> otherwise the quantizer_name is not saved in the checkpoint
         self.config.quantizer_name = pretrained_config.quantizer_name
+        # Set num_quantizers to the pretrained num_quantizers -> otherwise the num_quantizers is not saved in the checkpoint
+        self.config.num_quantizers = pretrained_config.num_quantizers
+        # Set codebook_size to the pretrained codebook_size -> otherwise the codebook_size is not saved in the checkpoint
+        self.config.codebook_size = pretrained_config.codebook_size
         
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
@@ -194,11 +198,11 @@ class LLMFinetuningProject(BaseProject):
         # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             # encoder_name=pretrained_config.encoder_name,
-            encoder_name='Conv_Encoder', 
-            quantizer_name=pretrained_config.quantizer_name,
+            encoder_name='Residual_Conv_Encoder', # TODO: change this
+            quantizer_name='ECG_Tokenizer_Quantizer', # TODO: change this
             decoder_name=pretrained_config.decoder_name, 
-            num_quantizers=pretrained_config.num_quantizers,
-            codebook_size=pretrained_config.codebook_size,
+            num_quantizers=8, # TODO: change this
+            codebook_size=512, # TODO: change this
             decoder_mode=pretrained_config.decoder_mode,
             adapter_name=pretrained_config.adapter_name,
         ).to(self.config.device)
@@ -207,7 +211,7 @@ class LLMFinetuningProject(BaseProject):
         
         # Load the pretrained state dict
         pretrained_state_dict = state_dict['model_state_dict']
-        ecg_tokenizer.load_state_dict(pretrained_state_dict, weights_only=True)
+        ecg_tokenizer._load_state_dict(pretrained_state_dict, strict=True)
         ecg_tokenizer.eval()
         
         # Load the tokenizer
