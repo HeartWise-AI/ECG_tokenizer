@@ -18,17 +18,17 @@ from utils.registry import ModelRegistry
 @ModelRegistry.register(ModelName.GPT2_DECODER)
 class GPT2Decoder(nn.Module):
     """
-    GPT-2 decoder for text generation from quantized ECG features.
+    GPT-2 decoder that generates clinical reports from quantized ECG features.
     
-    This decoder takes quantized features from the ECG tokenizer and generates text reports.
-    The adapter transforms quantized features to GPT-2's input embedding space.
+    Transforms ECG quantized features into GPT-2's embedding space via an adapter,
+    then generates text reports using either teacher forcing or ECG-only training.
     """
     def __init__(
         self, 
         gpt2_model_name: str = 'gpt2', 
         gpt2_embedding_size: int = 768, 
-        quantized_feature_shape: Tuple[int, int] = (128, 82),  # For SequenceAdapter: (seq_len, features)
-        adapter_name: str = "GPT2_SequenceAdapter",  # Changed default to match the 2D shape
+        quantized_feature_shape: Tuple[int, int] = (128, 82),
+        adapter_name: str = "GPT2_SequenceAdapter",
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # Default generation parameters
@@ -37,6 +37,21 @@ class GPT2Decoder(nn.Module):
         default_temperature: float = 0.85,
         default_num_beams: int = 4,
     ):
+        """
+        Initialize the GPT-2 decoder.
+        
+        Args:
+            gpt2_model_name: Pre-trained GPT-2 model name from HuggingFace.
+            gpt2_embedding_size: GPT-2 embedding dimension (must match model).
+            quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
+            adapter_name: Name of adapter to transform ECG features to GPT-2 space.
+            adapter_dropout: Dropout rate for the adapter.
+            label_ignore_index: Index to ignore in loss computation.
+            default_do_sample: Default sampling strategy for generation.
+            default_top_p: Default nucleus sampling parameter.
+            default_temperature: Default temperature for generation.
+            default_num_beams: Default number of beams for beam search.
+        """
         super(GPT2Decoder, self).__init__()
         
         # Store configuration
@@ -83,38 +98,53 @@ class GPT2Decoder(nn.Module):
     def forward(
         self, 
         quantized_features: torch.Tensor,
-        input_ids: Optional[torch.Tensor] = None, 
+        input_ids: torch.Tensor, 
+        labels: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None, 
-        labels: Optional[torch.Tensor] = None
     ) -> Dict[str, Any]:
         """
-        Forward pass for the GPT2Decoder.
+        Forward pass for training or generation setup.
         
         Args:
-            quantized_features: Quantized features from ECG tokenizer (batch, seq_len, features)
-            input_ids: Token IDs for the text input (batch, seq_length) - optional for generation mode
-            attention_mask: Optional mask for padding tokens (batch, seq_length)
-            labels: Optional labels for computing the language modeling loss (batch, seq_length)
+            quantized_features: ECG features from tokenizer (batch, seq_len, features).
+            input_ids: Text token IDs (batch, seq_len). Required for training.
+            attention_mask: Attention mask for padding tokens (batch, seq_len).
+            labels: Target labels for loss computation (batch, seq_len).
             
         Returns:
-            Dictionary containing loss, logits, and other outputs from the GPT-2 model
+            Dictionary with loss, logits, and other GPT-2 outputs.
+            
+        Raises:
+            ValueError: If input_ids is None during training.
         """
         # Transform quantized features to GPT-2 embedding space
         quantized_features = quantized_features.to(dtype=torch.float32)
+        ecg_embedding = self.adapter(quantized_features)  # (batch, embedding_size)       
+
+        return self._forward_teacher_forcing(ecg_embedding, input_ids, labels, attention_mask)
+
+    def _forward_teacher_forcing(
+        self, 
+        ecg_embedding: torch.Tensor,
+        input_ids: torch.Tensor, 
+        labels: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None, 
+    ) -> Dict[str, Any]:
+        """
+        Forward pass with teacher forcing (standard training approach).
         
-        # Add batch dimension if needed for adapter
-        if len(quantized_features.shape) == 3:  # (batch, channels, seq_len)
-            adapter_input = quantized_features.unsqueeze(1)  # (batch, 1, channels, seq_len)
-        else:
-            adapter_input = quantized_features
+        Prepends ECG token to input sequence and replaces its embedding
+        with the processed ECG signal embedding.
+        
+        Args:
+            ecg_embedding: Processed ECG features (batch, embedding_dim).
+            input_ids: Text token IDs (batch, seq_len).
+            attention_mask: Attention mask for padding (batch, seq_len).
+            labels: Target labels for loss computation (batch, seq_len).
             
-        ecg_embedding = self.adapter(adapter_input)  # (batch, embedding_size)
-        
-        # If no input_ids provided (generation mode), use only ECG embedding
-        if input_ids is None:
-            return self._generate_from_ecg_embedding(ecg_embedding)
-        
-        # Training mode: combine ECG embedding with text tokens
+        Returns:
+            GPT-2 model outputs with loss and logits.
+        """
         batch_size = input_ids.size(0)
         
         # Prepend the special ECG token ID to input_ids
@@ -155,25 +185,6 @@ class GPT2Decoder(nn.Module):
         )
         return outputs
 
-    def _generate_from_ecg_embedding(self, ecg_embedding: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Helper method for generation mode when no input_ids are provided."""
-        batch_size = ecg_embedding.size(0)
-        
-        # Create ECG token
-        ecg_token = torch.full(
-            (batch_size, 1),
-            self.ecg_token_id,
-            dtype=torch.long,
-            device=ecg_embedding.device
-        )
-        
-        # Create input embedding
-        input_embedding = self.gpt2.get_input_embeddings()(ecg_token)
-        input_embedding[:, 0, :] = ecg_embedding
-        
-        # Return the embedding for generation
-        return {"inputs_embeds": input_embedding, "ecg_token": ecg_token}
-
     @torch.no_grad()
     def generate_report(
         self, 
@@ -182,15 +193,20 @@ class GPT2Decoder(nn.Module):
         **generate_kwargs
     ) -> Union[GenerateOutput, torch.Tensor]:
         """
-        Generate a clinical report from quantized ECG features.
+        Generate clinical report from quantized ECG features.
         
         Args:
-            quantized_features: Quantized features from ECG tokenizer (batch, seq_len, features)
-            max_token_length: Maximum length of generated tokens
-            **generate_kwargs: Additional keyword arguments for generation
+            quantized_features: ECG features from tokenizer (batch, seq_len, features).
+            max_token_length: Maximum number of tokens to generate.
+            **generate_kwargs: Additional parameters for GPT-2 generation.
             
         Returns:
-            Tensor containing generated token IDs for reports
+            Generated token IDs (batch, generated_length).
+            
+        Example:
+            >>> features = tokenizer.encode(ecg_signal)  # (1, 128, 82)
+            >>> tokens = decoder.generate_report(features, max_token_length=100)
+            >>> report = tokenizer.decode(tokens[0])
         """
         # Transform features to embedding space
         if len(quantized_features.shape) == 3:
@@ -215,7 +231,7 @@ class GPT2Decoder(nn.Module):
         # Get input embeddings
         input_embedding = self.gpt2.get_input_embeddings()(ecg_token)
         input_embedding[:, 0, :] = ecg_embedding
-        
+
         # Set generation parameters
         generate_kwargs = generate_kwargs.copy()
         generate_kwargs.setdefault("attention_mask", attention_mask)
