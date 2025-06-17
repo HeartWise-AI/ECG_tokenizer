@@ -23,18 +23,39 @@ from data.ecg_tokenizer_classifier_dataset import get_distributed_ecg_tokenizer_
 
 @ProjectRegistry.register(ProjectName.ECG_TOKENIZER_TRAINING)
 class ECGTokenizerTrainingProject(BaseProject):
+    """ECG tokenizer training project.
+    
+    Implements training of an ECG tokenizer model. Supports both classification
+    and reconstruction modes.
+    """    
     def __init__(
         self, 
         config: ECGTokenizerTrainingConfig,
         wandb_wrapper: WandbWrapper
     ):
+        """Initialize ECG tokenizer training project.
+        
+        Args:
+            config: ECG tokenizer training configuration
+            wandb_wrapper: Weights & Biases logging wrapper
+        """        
         super().__init__(config, wandb_wrapper)
         self.config: ECGTokenizerTrainingConfig = config # cast to ECGTokenizerTrainingConfig to avoid type errors
     
     def run(self):
+        """Execute the ECG tokenizer training workflow."""
         super().run()
                     
     def _setup_training_objects(self)->dict[str, Any]:
+        """Setup objects required for ECG tokenizer training.
+        
+        Loads dataset, initializes tokenizer, and prepares training infrastructure
+        including data loaders, optimizer, scheduler, and gradient scaler.
+        
+        Returns:
+            Dictionary containing training objects: optimizer, scheduler, 
+            scaler, model, and data loaders
+        """    
         # Check if we're in classification mode using DecoderMode enum
         decoder_mode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
         decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
@@ -159,6 +180,14 @@ class ECGTokenizerTrainingProject(BaseProject):
         }
         
     def _setup_extraction_objects(self)->dict[str, Any]:
+        """Setup objects required for ECG tokenizer embedding extraction.
+        
+        Loads dataset, initializes tokenizer, and prepares extraction infrastructure
+        including data loader.
+        
+        Returns:
+            Dictionary containing ECG tokenizer and embedding extraction data loader
+        """    
         embedding_extraction_dataloader: DataLoader = get_distributed_ecg_dataloader(
             parquet_file=self.config.embedding_extraction_dataset_path,
             expected_waveform_length=self.config.waveform_length,
@@ -206,5 +235,9 @@ class ECGTokenizerTrainingProject(BaseProject):
         }
     
     def _setup_inference_objects(self)->dict[str, Any]:
-        """Setup objects needed for inference mode."""
+        """Setup objects needed for inference mode.
+        
+        Raises:
+            NotImplementedError: Inference not implemented for ECG tokenizer
+        """        
         raise NotImplementedError("Inference is not implemented for ECG Tokenizer project")

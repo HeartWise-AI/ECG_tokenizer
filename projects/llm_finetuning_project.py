@@ -27,18 +27,40 @@ torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
 
 @ProjectRegistry.register(ProjectName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningProject(BaseProject):
+    """LLM finetuning project for ECG tokenizer models.
+    
+    Implements finetuning of a pretrained LLM on ECG tokenizer features.
+    The decoder/classifier head is trained while encoder and quantizer remain frozen.
+    """    
     def __init__(
         self, 
         config: LLMFinetuningConfig, 
         wandb_wrapper: WandbWrapper
     ):
+        """Initialize LLM finetuning project.
+        
+        Args:
+            config: LLM finetuning configuration
+            wandb_wrapper: Weights & Biases logging wrapper
+        """        
         super().__init__(config, wandb_wrapper)
         self.config: LLMFinetuningConfig = config # cast to ECGTokenizerLinearProbingConfig to avoid type errors
         
     def run(self):
+        """Execute the LLM finetuning workflow."""
         super().run()
         
     def _setup_training_objects(self)->dict[str, Any]: 
+        """Setup objects required for LLM finetuning training.
+        
+        Loads pretrained tokenizer, freezes encoder/quantizer components,
+        and prepares training infrastructure including data loaders,
+        optimizer, scheduler, and gradient scaler.
+        
+        Returns:
+            Dictionary containing training objects: optimizer, scheduler, 
+            scaler, model, and data loaders
+        """        
         # Load the pretrained tokenizer
         state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
         
@@ -164,7 +186,14 @@ class LLMFinetuningProject(BaseProject):
         }
     
     def _print_training_config(self, model: ECG_Tokenizer_Wrapper):
-        """Print the current training configuration."""
+        """Print detailed training configuration and model statistics.
+        
+        Displays parameter counts, trainable ratios, and component-wise
+        breakdown of the model architecture for LLM finetuning setup.
+        
+        Args:
+            model: ECG tokenizer wrapper model to analyze
+        """
         print("\n" + "="*60)
         print("LLM FINETUNING CONFIGURATION")
         print("="*60)
@@ -188,6 +217,14 @@ class LLMFinetuningProject(BaseProject):
         print("="*60 + "\n")
     
     def _setup_inference_objects(self)->dict[str, Any]:
+        """Setup objects for inference mode.
+        
+        Loads pretrained tokenizer, initializes tokenizer,
+        and prepares data loader for inference on clinical reports.
+        
+        Returns:
+            Dictionary containing validation data loader and model for inference
+        """        
         # Load the pretrained tokenizer
         state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
         
@@ -248,4 +285,9 @@ class LLMFinetuningProject(BaseProject):
         }
     
     def _setup_extraction_objects(self)->dict[str, Any]:
+        """Setup objects for extraction mode.
+        
+        Raises:
+            NotImplementedError: Extraction not implemented for LLM finetuning
+        """        
         raise NotImplementedError("Extraction is not implemented for this project")
