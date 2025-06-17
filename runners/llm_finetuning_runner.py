@@ -398,39 +398,82 @@ class LLMFinetuningRunner(BaseRunner):
     def _inference_step(
         self,
         ecg_signal: torch.Tensor,
-    ) -> torch.Tensor:
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         with torch.no_grad():
+            outputs: dict[str, torch.Tensor] = self.model(
+                ecg_signal=ecg_signal,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            loss: torch.Tensor = outputs['loss']
+            
+            # Time the generate_report function
             if hasattr(self.model, 'module'):
                 generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_signal=ecg_signal, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
                 )
             else:
                 generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_signal=ecg_signal, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
-                )   
-        return generated_ids     
+                )  
+            
+            return {
+                "loss": loss,
+                "generated_ids": generated_ids
+            }
 
     def inference(self):
         if self.validation_dataloader is None:
             raise ValueError("Validation dataloader is not set")
             
-        self.model.eval()
+        self.model.train(False)
         
         predicted_reports: list[str] = []
         reference_reports: list[str] = []
-        waveform_names: list[str] = []
+        waveform_names: list[str] = []   
         tokenizer: GPT2Tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
         
-        for batch in tqdm(self.validation_dataloader, desc="Inference", total=len(self.validation_dataloader), disable=not self.config.is_ref_device):
+        # Create a progress bar
+        data_iter: tqdm = tqdm(
+            self.validation_dataloader, 
+            desc="Inference",
+            leave=True,
+            disable=not self.config.is_ref_device
+        )
+        
+        running_loss: float = 0.0
+        for batch_idx, batch in enumerate(data_iter):
             ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
-            labels: torch.Tensor = batch['input_ids'].to(self.config.device)
-            batch_waveform_names: list[str] = batch['waveform_name']
-            generated_ids: torch.Tensor = self._inference_step(
+            input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
+            attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
+            labels: torch.Tensor = input_ids.clone()
+            
+            outputs: dict[str, torch.Tensor] = self._inference_step(
                 ecg_signal=ecg_signal,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
             )
-                        
+            generated_ids: torch.Tensor = outputs['generated_ids']
+            loss = outputs['loss'].item()
+            
+            gathered_loss = DistributedUtils.gather_loss(
+                [loss], 
+                self.config.device
+            )
+            
+            running_loss += gathered_loss
+            
+            data_iter.set_postfix({
+                f"inference/mean_loss": f'{running_loss / (batch_idx + 1):.4f}'
+            })
+            batch_waveform_names: list[str] = batch['waveform_name']
             for gen, lab, filename in zip(generated_ids, labels, batch_waveform_names):
                 # Decode both predictions and references as strings.
                 decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
