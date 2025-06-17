@@ -478,6 +478,15 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         else:
             raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
 
+    def _load_state_dict(
+        self, 
+        state_dict: dict[str, torch.Tensor], 
+        strict: bool = False
+    ):
+        """Load state dict selectively based on configuration."""
+        print("Loading state dict...")        
+        self.load_state_dict(state_dict, strict=strict)
+
     def _load_pretrained_weights(
         self, 
         pretrained_state_dict: dict[str, torch.Tensor],
