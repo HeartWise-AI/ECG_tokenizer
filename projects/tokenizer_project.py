@@ -125,7 +125,7 @@ class ECGTokenizerTrainingProject(BaseProject):
             )
         
         # Initialize the tokenizer with the appropriate configuration
-        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
+        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
             encoder_name=self.config.encoder_name,
             quantizer_name=self.config.quantizer_name,
             decoder_name=self.config.decoder_name,

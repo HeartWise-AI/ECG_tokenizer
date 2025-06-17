@@ -8,6 +8,7 @@ from utils.config.heartwise_config import HeartWiseConfig
 @ConfigRegistry.register(ConfigName.ECG_TOKENIZER_TRAINING)
 class ECGTokenizerTrainingConfig(HeartWiseConfig):
     # Pipeline parameters
+    model_name: str
     runner_name: str
     num_epochs: int
     base_checkpoint_path: str
