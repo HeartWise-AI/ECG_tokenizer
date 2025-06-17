@@ -13,6 +13,7 @@ class ECGClinicalReportDataset(Dataset):
     def __init__(
         self, 
         dataset_path: str, 
+        signal_path_column: str,
         ecg_waveform_length: int,
         ecg_num_leads: int,
         tokenizer: GPT2Tokenizer, 
@@ -34,7 +35,8 @@ class ECGClinicalReportDataset(Dataset):
         self.ecg_num_leads: int = ecg_num_leads
         self.tokenizer: GPT2Tokenizer = tokenizer
         self.max_length: int = max_length
-
+        self.signal_path_column: str = signal_path_column
+        
     def __len__(self):
         return len(self.df)
 
@@ -59,14 +61,14 @@ class ECGClinicalReportDataset(Dataset):
             row = self.df.iloc[idx]
             
             # Check if the waveform path or report is missing
-            if pd.isnull(row['waveform_path_original']) or pd.isnull(row['report']):
+            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row['report']):
                 print(f"Missing waveform_path or report for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get('waveform_path_original')}, report: {row.get('report')}")
+                      f"waveform_path: {row.get(self.signal_path_column)}, report: {row.get('report')}")
                 return self.__getitem__((idx + 1) % len(self))
 
             # Load the waveform
             waveform: np.ndarray = self.load_ecg_signal(
-                waveform_path=row['waveform_path_original']
+                waveform_path=row[self.signal_path_column]
             )
             
             if np.isnan(waveform).any():
@@ -113,8 +115,10 @@ def get_clinical_report_dataloader(
     pin_memory: bool = True
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
-        embeddings_path=config.embeddings_path, 
-        reports_path=config.reports_path, 
+        dataset_path=config.train_dataset_path, 
+        signal_path_column=config.signal_path_column,
+        ecg_waveform_length=config.ecg_waveform_length,
+        ecg_num_leads=config.ecg_num_leads,
         tokenizer=config.tokenizer, 
         max_length=config.max_length
     )
@@ -129,6 +133,7 @@ def get_clinical_report_dataloader(
     
 def get_distributed_clinical_report_dataloader(
     dataset_path: str,
+    signal_path_column: str,
     ecg_waveform_length: int,
     ecg_num_leads: int,
     tokenizer: GPT2Tokenizer,
@@ -142,6 +147,7 @@ def get_distributed_clinical_report_dataloader(
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=dataset_path, 
+        signal_path_column=signal_path_column,
         ecg_waveform_length=ecg_waveform_length,
         ecg_num_leads=ecg_num_leads,
         tokenizer=tokenizer, 

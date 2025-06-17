@@ -44,6 +44,7 @@ class ECGTokenizerTrainingConfig(HeartWiseConfig):
     validation_dataset_path: str
     num_workers: int
     batch_size: int
+    signal_path_column: str
     
     # Waveform parameters
     num_leads: int
