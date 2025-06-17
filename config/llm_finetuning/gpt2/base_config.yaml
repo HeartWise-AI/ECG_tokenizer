@@ -6,6 +6,7 @@ num_epochs: !!int 10
 seed: !!int 42
 base_checkpoint_path: !!str "checkpoints"
 pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Classification/6l7oogin_20250608-111318/best_model_epoch_7.pt"
+# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_LLM_finetuning_MHI/1i4yuhql_20250615-172705/checkpoint_epoch_10.pt"
 # wandb parameters
 wandb_project: !!str "ECG_tokenizer_LLM_finetuning_MHI"
 wandb_entity: !!str "jacques-delfrate"
@@ -48,6 +49,3 @@ metrics:
   - !!str "rouge"
   - !!str "bleu"
   - !!str "meteor"
-# # Inference parameters
-# checkpoint_dir: !!str "checkpoints/gpt2/mimic_mhi/best_model.pt"
-# inference_dataset_path: !!str "parquets/mhi/test_trial_v1.1_with_report.parquet"
