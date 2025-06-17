@@ -13,7 +13,8 @@ class ECGDataset(Dataset):
         expected_waveform_length: int = 2500,
         num_leads: int = 12,
         normalize_waveforms: bool = True,
-        lead_stats: dict[str, dict[str, float]] | None = None
+        lead_stats: dict[str, dict[str, float]] | None = None,
+        signal_path_column: str = 'waveform_path_psa'
     ):
         try:
             self.data: pd.DataFrame = pd.read_parquet(parquet_file)
@@ -25,6 +26,7 @@ class ECGDataset(Dataset):
         self.num_leads: int = num_leads
         self.normalize_waveforms: bool = normalize_waveforms
         self.lead_stats: dict[str, dict[str, float]] | None = lead_stats
+        self.signal_path_column: str = signal_path_column
         
         if self.normalize_waveforms and self.lead_stats is None:
             raise ValueError("lead_stats must be provided if normalize_waveforms is True") 
@@ -56,11 +58,11 @@ class ECGDataset(Dataset):
 
     def __getitem__(self, idx):
         try:
-            if not os.path.exists(self.data.iloc[idx]['waveform_path_psa']):
+            if not os.path.exists(self.data.iloc[idx][self.signal_path_column]):
                 return self.__getitem__((idx + 1) % len(self))
 
             waveform: np.ndarray = self.load_ecg_signal(
-                waveform_path=self.data.iloc[idx]['waveform_path_psa']
+                waveform_path=self.data.iloc[idx][self.signal_path_column]
             )
             
             if np.isnan(waveform).any():
@@ -95,11 +97,11 @@ class ECGDataset(Dataset):
 
             return {
                 'signal': np.transpose(signal, (1, 0)), 
-                'waveform_path': self.data.iloc[idx]['waveform_path_psa']
+                'waveform_path': self.data.iloc[idx][self.signal_path_column]
             }
         
         except Exception as e:
-            print(f"Error processing index {self.data.iloc[idx]['waveform_path_psa']}: {str(e)}")
+            print(f"Error processing index {self.data.iloc[idx][self.signal_path_column]}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
 
 
@@ -109,6 +111,7 @@ def get_distributed_ecg_dataloader(
     num_leads: int = 12,
     normalize_waveforms: bool = True,
     lead_stats: dict[str, dict[str, float]] | None = None,
+    signal_path_column: str = 'waveform_path_psa',
     batch_size: int = 32,
     num_workers: int = 16,
     num_replicas: int = 1,
@@ -121,7 +124,8 @@ def get_distributed_ecg_dataloader(
         expected_waveform_length=expected_waveform_length,
         num_leads=num_leads,
         normalize_waveforms=normalize_waveforms,
-        lead_stats=lead_stats
+        lead_stats=lead_stats,
+        signal_path_column=signal_path_column
     )
     
     return DistributedUtils.get_distributed_dataloader(

@@ -33,6 +33,7 @@ train_dataset_path: !!str "parquets/merged_datasets/train/mimic_mhi_psa_train_up
 validation_dataset_path: !!str "parquets/merged_datasets/test/mimic_mhi_psa_test_updated_stratified_20%.parquet"
 num_workers: !!int 32
 batch_size: !!int 12
+signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original
 # waveform parameters
 waveform_length: !!int 2500
 num_leads: !!int 12

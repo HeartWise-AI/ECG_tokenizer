@@ -83,6 +83,7 @@ class LLMFinetuningProject(BaseProject):
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
+            signal_path_column=self.config.signal_path_column,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
@@ -97,6 +98,7 @@ class LLMFinetuningProject(BaseProject):
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
+            signal_path_column=self.config.signal_path_column,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
@@ -221,6 +223,7 @@ class LLMFinetuningProject(BaseProject):
         # Get the dataloaders
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
+            signal_path_column=self.config.signal_path_column,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
