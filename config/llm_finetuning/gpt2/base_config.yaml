@@ -1,5 +1,6 @@
 # pipeline project
 pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
+model_name: !!str "GPT2_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 run_mode: !!str "train"
 num_epochs: !!int 10
