@@ -1,5 +1,6 @@
 # pipeline project
 pipeline_project: !!str "ECG_Tokenizer_Linear_Probing"
+model_name: !!str "ECG_Tokenizer_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_Linear_Probing_Runner"
 run_mode: !!str "train"
 num_epochs: !!int 10

@@ -62,7 +62,7 @@ class ECGTokenizerLinearProbing(BaseProject):
         pretrained_config = state_dict['config']
         
         # Initialize the tokenizer with the appropriate configuration
-        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
+        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
             encoder_name=pretrained_config.encoder_name, 
             quantizer_name=pretrained_config.quantizer_name,
             decoder_name=self.config.decoder_name, # use the decoder from the current config

@@ -9,6 +9,7 @@ from utils.config.heartwise_config import HeartWiseConfig
 class ECGTokenizerLinearProbingConfig(HeartWiseConfig):
     # Pipeline parameters
     pretrained_tokenizer_path: str
+    model_name: str
     runner_name: str
     num_epochs: int
     base_checkpoint_path: str

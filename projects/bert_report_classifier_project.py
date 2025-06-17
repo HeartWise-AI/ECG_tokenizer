@@ -60,7 +60,7 @@ class BertReportClassifierProject(BaseProject):
         
         tokenizer: BertTokenizer = BertTokenizer.from_pretrained(model_path)
         
-        model: BertClassifier = ModelRegistry.get(self.config.pipeline_project)(
+        model: BertClassifier = ModelRegistry.get(self.config.model_name)(
             model_path=model_path,
             num_classes=self.config.num_classes,
         )

@@ -61,7 +61,7 @@ class ConfigName(str, Enum):
 class ModelName(str, Enum):
     """Enum for different model names."""
     # High-level tokenizers
-    ECG_TOKENIZER_WRAPPER = "ECG_Tokenizer_Wrapper" # TODO: Change to ECG_Tokenizer_Wrapper and create a new model variable in CONFIG
+    ECG_TOKENIZER_WRAPPER = "ECG_Tokenizer_Wrapper"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     
