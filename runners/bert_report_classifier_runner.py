@@ -4,8 +4,9 @@ import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from utils.ddp import DistributedUtils
+from typing import Callable
 
-from utils.enums import RunMode
+from utils.enums import RunMode, RunnerName
 from utils.registry import RunnerRegistry
 from utils.files_handler import (
     save_json, 
@@ -20,8 +21,12 @@ from runners.base_runner import BaseRunner
 from models.bert_classifier import BertClassifier
 
 
-@RunnerRegistry.register("BERT_Report_Classifier")
+@RunnerRegistry.register(RunnerName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierRunner(BaseRunner):
+    """
+    Runner for BERT report classifier.
+    """
+    
     def __init__(
         self, 
         model: BertClassifier, 
@@ -29,19 +34,45 @@ class BertReportClassifierRunner(BaseRunner):
         val_dataloader: DataLoader,
         wandb_wrapper: WandbWrapper | None = None,
     ):
+        """
+        Args:
+            model: BERT model
+            config: Configuration for the runner
+            val_dataloader: DataLoader for validation
+            wandb_wrapper: WandbWrapper for logging
+        """
+        super().__init__(config, wandb_wrapper)
+        self.config: BertReportClassifierConfig = config  # Override base class type
         self.model: BertClassifier = model
-        self.config: BertReportClassifierConfig = config
         self.val_dataloader: DataLoader = val_dataloader
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
         
     def execute(
         self, 
         mode: RunMode
     ):
+        """
+        Execute the runner in the specified mode.
+        
+        Args:
+            mode: The execution mode (TRAIN, INFERENCE, VALIDATE, EXTRACT_EMBEDDINGS)
+        """
         super().execute(mode)
         
     def train(self):
+        """
+        Train the BERT report classifier.
+        """
         raise NotImplementedError("train not implemented")
+    
+    def _run_epoch(
+        self,
+        mode: RunMode,
+        epoch: int,
+        dataloader: DataLoader,
+        step_fn: Callable,
+    ) -> dict[str, float]:
+        """Run an epoch of training or validation."""
+        raise NotImplementedError("_run_epoch not implemented")
     
     def _val_step(
         self, 
@@ -49,7 +80,15 @@ class BertReportClassifierRunner(BaseRunner):
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        
+        """
+        Args:
+            input_ids: Input IDs for the BERT model
+            attention_mask: Attention mask for the BERT model
+            token_type_ids: Token type IDs for the BERT model
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the BERT model
+        """
         return self.model(
             input_ids=input_ids.to(self.config.device),
             attention_mask=attention_mask.to(self.config.device),
@@ -57,6 +96,9 @@ class BertReportClassifierRunner(BaseRunner):
         )
     
     def inference(self):
+        """
+        Inference the BERT report classifier.
+        """
         self.model.eval()
         
         ground_truth_classes: list = []
@@ -113,8 +155,8 @@ class BertReportClassifierRunner(BaseRunner):
             combined_predicted_classes = []
             combined_ground_truth_classes = []
             for res in gathered_results:
-                combined_predicted_classes.extend(res["predicted_classes"])
-                combined_ground_truth_classes.extend(res["ground_truth_classes"])
+                combined_predicted_classes.extend(res["predicted_classes"] if res is not None else [])
+                combined_ground_truth_classes.extend(res["ground_truth_classes"] if res is not None else [])
             
             metrics = compute_metrics(
                 df_gt=pd.DataFrame(combined_ground_truth_classes, columns=ECG_PATTERNS), 
@@ -124,7 +166,7 @@ class BertReportClassifierRunner(BaseRunner):
             save_json(
                 data=metrics, 
                 path=os.path.join(
-                    self.config.output_folder, 
+                    self.config.output_dir, 
                     f'{self.config.pipeline_project}.json'
                 )
             )
@@ -132,12 +174,15 @@ class BertReportClassifierRunner(BaseRunner):
             save_to_csv(
                 metrics=metrics, 
                 path=os.path.join(
-                    self.config.output_folder, 
+                    self.config.output_dir, 
                     f'{self.config.pipeline_project}.csv'
                 )
             )
             
     def validate(self):
+        """
+        Validate the BERT report classifier.
+        """
         raise NotImplementedError("validate not implemented")
 
     

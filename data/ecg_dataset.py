@@ -9,17 +9,24 @@ from utils.constants import lead_to_idx
 class ECGDataset(Dataset):
     def __init__(
         self, 
-        parquet_file: str = None, 
+        parquet_file: str, 
         expected_waveform_length: int = 2500,
         num_leads: int = 12,
         normalize_waveforms: bool = True,
-        lead_stats: dict[str, dict[str, float]] = None
+        lead_stats: dict[str, dict[str, float]] | None = None,
+        signal_path_column: str = 'waveform_path_psa'
     ):
-        self.data: pd.DataFrame = pd.read_parquet(parquet_file)
+        try:
+            self.data: pd.DataFrame = pd.read_parquet(parquet_file)
+        except Exception as e:
+            print(f"Error reading parquet file: {e}")
+            raise Exception(f"Error reading parquet file: {e}")
+        
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
         self.normalize_waveforms: bool = normalize_waveforms
-        self.lead_stats: dict[str, dict[str, float]] = lead_stats
+        self.lead_stats: dict[str, dict[str, float]] | None = lead_stats
+        self.signal_path_column: str = signal_path_column
         
         if self.normalize_waveforms and self.lead_stats is None:
             raise ValueError("lead_stats must be provided if normalize_waveforms is True") 
@@ -34,64 +41,67 @@ class ECGDataset(Dataset):
     def __len__(self):
         return len(self.data)
         
-    def load_signal(self, waveform_path: str):
-        return np.load(waveform_path)
-    
-    def load_signal(self, waveform_path: str):
-        return np.load(waveform_path)
-    
-    def __getitem__(self, idx):
-        
+    def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
         try:
-            if not os.path.exists(self.data.iloc[idx]['waveform_path']):
+            waveform: np.ndarray = np.load(waveform_path)
+        except Exception as e:
+            print(f"Error loading ECG signal: {e}")
+            raise Exception(f"Error loading ECG signal: {e}")
+        
+        # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
+        if len(waveform.shape) == 3:
+            waveform = waveform.squeeze(-1)
+            
+        assert len(waveform.shape) == 2, f"Unnormalized signal has shape {waveform.shape}"
+        
+        return waveform
+
+    def __getitem__(self, idx):
+        try:
+            if not os.path.exists(self.data.iloc[idx][self.signal_path_column]):
+                return self.__getitem__((idx + 1) % len(self))
+
+            waveform: np.ndarray = self.load_ecg_signal(
+                waveform_path=self.data.iloc[idx][self.signal_path_column]
+            )
+            
+            if np.isnan(waveform).any():
                 return self.__getitem__((idx + 1) % len(self))
             
-            unnormalized_signal: np.ndarray = self.load_signal(waveform_path=self.data.iloc[idx]['waveform_path'])
-            
-            # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
-            if len(unnormalized_signal.shape) == 3:
-                unnormalized_signal = unnormalized_signal.squeeze(-1)
-            
-            assert len(unnormalized_signal.shape) == 2, f"Unnormalized signal has shape {unnormalized_signal.shape}"
-            
-            if np.isnan(unnormalized_signal).any():
-                return self.__getitem__((idx + 1) % len(self))
-            
-            current_length: int = unnormalized_signal.shape[0]
+            current_length: int = waveform.shape[0]
             if current_length > self.expected_waveform_length:
-                step: int = unnormalized_signal.shape[0] // self.expected_waveform_length
-                unnormalized_signal = unnormalized_signal[::step, :]
+                step: int = waveform.shape[0] // self.expected_waveform_length
+                waveform = waveform[::step, :]
             
-            if unnormalized_signal.shape[0] != self.expected_waveform_length:
+            if waveform.shape[0] != self.expected_waveform_length:
                 return self.__getitem__((idx + 1) % len(self))
             
-            if unnormalized_signal.shape[1] != self.num_leads:
+            if waveform.shape[1] != self.num_leads:
                 return self.__getitem__((idx + 1) % len(self))
-            
             
             # Only normalize if flag is set and we have lead statistics
             try:
                 if self.normalize_waveforms and self.lead_stats is not None:
-                    signal = np.zeros_like(unnormalized_signal)
+                    signal = np.zeros_like(waveform)
                     # Normalize each lead separately using its statistics
                     for lead_name, lead_idx in lead_to_idx.items():
                         mean = self.lead_stats[lead_name]["mean"]
                         std = self.lead_stats[lead_name]["std"]
-                        signal[:, lead_idx] = (unnormalized_signal[:, lead_idx] - mean) / std
+                        signal[:, lead_idx] = (waveform[:, lead_idx] - mean) / std
                         
                 else:
-                    signal = unnormalized_signal
+                    signal = waveform
             except Exception as e:
                 print(f"Error normalizing signal: {e}")
                 raise Exception(f"Error normalizing signal: {e}")
 
             return {
                 'signal': np.transpose(signal, (1, 0)), 
-                'waveform_path': self.data.iloc[idx]['waveform_path']
+                'waveform_path': self.data.iloc[idx][self.signal_path_column]
             }
         
         except Exception as e:
-            print(f"Error processing index {self.data.iloc[idx]['waveform_path']}: {str(e)}")
+            print(f"Error processing index {self.data.iloc[idx][self.signal_path_column]}: {str(e)}")
             return self.__getitem__((idx + 1) % len(self))
 
 
@@ -100,7 +110,8 @@ def get_distributed_ecg_dataloader(
     expected_waveform_length: int = 2500,
     num_leads: int = 12,
     normalize_waveforms: bool = True,
-    lead_stats: dict[str, dict[str, float]] = None,
+    lead_stats: dict[str, dict[str, float]] | None = None,
+    signal_path_column: str = 'waveform_path_psa',
     batch_size: int = 32,
     num_workers: int = 16,
     num_replicas: int = 1,
@@ -113,7 +124,8 @@ def get_distributed_ecg_dataloader(
         expected_waveform_length=expected_waveform_length,
         num_leads=num_leads,
         normalize_waveforms=normalize_waveforms,
-        lead_stats=lead_stats
+        lead_stats=lead_stats,
+        signal_path_column=signal_path_column
     )
     
     return DistributedUtils.get_distributed_dataloader(

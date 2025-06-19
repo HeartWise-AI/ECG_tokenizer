@@ -25,7 +25,6 @@ class HuggingFaceWrapper:
         cls,
         repo_id: str, 
         local_dir: str, 
-        commit_message: str = "Update model"
     )->None:
         """
         Upload a model to Hugging Face.
@@ -51,18 +50,11 @@ class HuggingFaceWrapper:
                         path_or_fileobj=file_path,
                         path_in_repo=repo_path,
                         repo_id=repo_id,
-                        token=cls.hugging_face_api_key
+                        token=cls.hugging_face_api_key,
+                        commit_message=f"Upload {file}"
                     )
                     print(f"Uploaded {file} to {repo_id}")
 
-            # Create a commit with all the uploaded files
-            cls.api.create_commit(
-                repo_id=repo_id,
-                operations="push",
-                commit_message=commit_message,
-                token=cls.hugging_face_api_key
-            )
-            
-            print(f"Successfully uploaded and committed model to {repo_id}")
+            print(f"Successfully uploaded model to {repo_id}")
         except Exception as e:
             print(f"An error occurred while uploading the model: {e}")

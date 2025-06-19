@@ -1,13 +1,15 @@
 # pipeline project
 pipeline_project: !!str "BERT_Report_Classifier"
-output_folder: !!str "checkpoints/gpt2/mhi"
+model_name: !!str "BERT_Report_Classifier"
+runner_name: !!str "Bert_Report_Classifier"
+base_checkpoint_path: !!str "checkpoints"
 # model parameters
 huggingface_model_name: !!str "heartwise/Bert_diagnosis2classification_En_Fr"
 store_model_path: !!str "checkpoints/bert/"
 num_classes: !!int 77
 api_keys_path: !!str "api_keys.json"
 # inference parameters
-predictions_reports_path: !!str "checkpoints/gpt2/mhi/best_model_inference.csv"
+predictions_reports_path: !!str "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_LLM_finetuning_MHI/20250617-013442_no_wandb/inference.csv"
 batch_size: !!int 32
 num_workers: !!int 12
 run_mode: !!str "inference"

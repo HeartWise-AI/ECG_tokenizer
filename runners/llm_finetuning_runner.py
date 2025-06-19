@@ -1,13 +1,14 @@
 import os
 import torch
 import pandas as pd
-from torch.optim import AdamW
-from torch.amp import GradScaler
-from transformers import GPT2Tokenizer
+from torch.optim.adamw import AdamW
 from torch.utils.data import DataLoader
+from torch.amp.autocast_mode import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
+from transformers import GPT2Tokenizer
 
-from utils.enums import RunMode
+from utils.enums import RunMode, RunnerName
 from utils.ddp import DistributedUtils
 from utils.registry import (
     RunnerRegistry,
@@ -25,48 +26,75 @@ from utils.metrics.llm_metrics import (
     update_random_batch_metric
 )
 from runners.base_runner import BaseRunner
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 
 import random
 from tqdm import tqdm
-from collections import defaultdict
 from typing import (
     Any, 
     Union, 
-    DefaultDict
+    Callable
 )
 
 
-@RunnerRegistry.register("LLM_finetuning_runner")
+@RunnerRegistry.register(RunnerName.LLM_FINETUNING)
 class LLMFinetuningRunner(BaseRunner):
+    """
+    Runner for LLM finetuning.
+    """
+    
     def __init__(
         self, 
-        model: GPT2WithEmbedding,
+        model: ECG_Tokenizer_Wrapper,
         config: LLMFinetuningConfig, 
-        val_dataloader: DataLoader,
+        validation_dataloader: DataLoader,
         wandb_wrapper: WandbWrapper | None = None,
         train_dataloader: DataLoader | None = None,
         optimizer: AdamW | None = None,
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
     ):
+        """
+        Args:
+            model: ECG tokenizer wrapper
+            config: Configuration for the runner
+            validation_dataloader: DataLoader for validation
+            wandb_wrapper: WandbWrapper for logging
+            train_dataloader: DataLoader for training
+            optimizer: Optimizer for the model
+            scheduler: Scheduler for the optimizer
+            scaler: Scaler for the optimizer
+        """
+        self.model: ECG_Tokenizer_Wrapper = model
         self.config: LLMFinetuningConfig = config
-        self.wandb_wrapper: WandbWrapper = wandb_wrapper
-        self.train_dataloader: DataLoader = train_dataloader
-        self.val_dataloader: DataLoader = val_dataloader
-        self.optimizer: AdamW = optimizer
-        self.scheduler: LRScheduler = scheduler
-        self.scaler: GradScaler = scaler
-        self.model: GPT2WithEmbedding = model
+        self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
+        self.train_dataloader: DataLoader | None = train_dataloader
+        self.validation_dataloader: DataLoader | None = validation_dataloader
+        self.optimizer: AdamW | None = optimizer
+        self.scheduler: LRScheduler | None = scheduler
+        self.scaler: GradScaler | None = scaler
         self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
-    
+        
     def execute(
         self, 
         mode: RunMode
     ):
+        """
+        Execute the runner in the specified mode.
+        
+        Args:
+            mode: The execution mode (TRAIN, INFERENCE, VALIDATE, EXTRACT_EMBEDDINGS)
+        """
         super().execute(mode)
         
     def train(self):
+        """
+        Train the LLM finetuning model.
+        """
+        if self.optimizer is None:
+            raise ValueError("Optimizer cannot be None")
+        # Note: Scaler is not required for bfloat16 training
+        
         best_val_loss: float = float('inf')
         
         for epoch in range(1, self.config.num_epochs + 1):
@@ -81,7 +109,7 @@ class LLMFinetuningRunner(BaseRunner):
                 epoch
             )
                         
-            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log(
                     epoch_metrics
                 )
@@ -119,7 +147,7 @@ class LLMFinetuningRunner(BaseRunner):
                 )
             
             # Sync after validation epoch, before next epoch            
-            if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 # Add learning rate metrics from training epoch metrics
                 lr_metrics = {}
                 for key, value in epoch_metrics.items():
@@ -143,14 +171,27 @@ class LLMFinetuningRunner(BaseRunner):
         mode: RunMode,
         epoch: int
     )->dict[str, float]:
+        """
+        Run an epoch of training or validation.
+        
+        Args:
+            mode: The execution mode (TRAIN, VALIDATE)
+            epoch: The current epoch
+            
+        Returns:
+            dict[str, float]: Dictionary containing the metrics for the epoch
+        """
         assert mode in [RunMode.TRAIN, RunMode.VALIDATE]
         
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
         
+        if self.train_dataloader is None or self.validation_dataloader is None:
+            raise ValueError("Train or validation dataloader is not set")
+        
         # Get the dataloader and step function
-        dataloader: DataLoader = self.train_dataloader if mode == RunMode.TRAIN else self.val_dataloader
-        step_fn: callable = self._train_step if mode == RunMode.TRAIN else self._val_step
+        dataloader: DataLoader = self.train_dataloader if mode == RunMode.TRAIN else self.validation_dataloader
+        step_fn: Callable | None = self._train_step if mode == RunMode.TRAIN else self._val_step
         
         # Create a progress bar for the epoch
         data_iter: tqdm = tqdm(
@@ -177,14 +218,14 @@ class LLMFinetuningRunner(BaseRunner):
         
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
-            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
+            ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = input_ids.clone()
             
             # Run the step function
-            outputs: dict[str, torch.Tensor] = step_fn(
-                embeddings=embeddings, 
+            outputs: dict[str, torch.Tensor] | torch.Tensor = step_fn(
+                ecg_signal=ecg_signal, 
                 input_ids=input_ids, 
                 attention_mask=attention_mask, 
                 labels=labels
@@ -197,7 +238,7 @@ class LLMFinetuningRunner(BaseRunner):
             # Extract learning rate metrics
             for key, value in outputs.items():
                 if key.startswith('lr_'):
-                    metrics[key] = value
+                    metrics[key] = float(value) if isinstance(value, torch.Tensor) else value
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
@@ -234,7 +275,7 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Log the loss to wandb
             if mode == RunMode.TRAIN:
-                if self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+                if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                     log_dict = {
                         f"{mode}/loss": gathered_metrics[f'{mode}/loss'],  # Log the gathered loss for current batch
                         f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
@@ -260,7 +301,7 @@ class LLMFinetuningRunner(BaseRunner):
             })
         
         # === New Block: Log best and worst metrics as HTML to wandb ===
-        if mode == RunMode.VALIDATE and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+        if mode == RunMode.VALIDATE and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
             # helper function to create an HTML table given the metrics dictionary
             def create_html_table(metrics_dict, table_title):
                 html = f"<h3>{table_title}</h3>"
@@ -301,29 +342,40 @@ class LLMFinetuningRunner(BaseRunner):
 
     def _train_step(
         self, 
-        embeddings: torch.Tensor,
+        ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
+        """
+        Train a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         # Clear gradients
+        assert self.optimizer is not None
+        
         self.optimizer.zero_grad()
         
-        # Forward pass with autocast for mixed precision
-        with torch.amp.autocast(
-            device_type='cuda',
-            dtype=torch.bfloat16
-        ):
+        # Forward pass with autocast for mixed precision using bfloat16
+        with autocast('cuda', dtype=torch.bfloat16):
             outputs: dict[str, torch.Tensor] = self.model(
-                ecg_embeddings=embeddings,
+                ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
             )
-            loss: torch.Tensor = outputs.loss
+            loss: torch.Tensor = outputs['loss']
 
-        # Backward pass with gradient scaling
-        self.scaler.scale(loss).backward()
+        # Backward pass - bfloat16 doesn't need gradient scaling
+        loss.backward()
         
         # Sync gradients across processes before optimizer step
         DistributedUtils.sync_process_group(
@@ -331,17 +383,14 @@ class LLMFinetuningRunner(BaseRunner):
             device_ids=self.config.device
         )
         
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        # Step optimizer directly without gradient scaling for bfloat16
+        self.optimizer.step()
                 
         # Get learning rate metrics
         lr_metrics = {}
-        for pg in self.optimizer.param_groups:
+        for pg in self.optimizer.param_groups if self.optimizer else []:
             if "name" in pg:
                 lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
-            else:
-                # Fallback for any unnamed groups
-                lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
         
         # Step the scheduler if it should be updated per-iteration
         if self.scheduler and self.scheduler_per_iteration:
@@ -354,78 +403,150 @@ class LLMFinetuningRunner(BaseRunner):
 
     def _val_step(
         self, 
-        embeddings: torch.Tensor,
+        ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
+        """
+        Validate a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         with torch.no_grad():
             outputs: dict[str, torch.Tensor] = self.model(
-                ecg_embeddings=embeddings,
+                ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels
             )
+            loss: torch.Tensor = outputs['loss']
             
+            # Time the generate_report function
             if hasattr(self.model, 'module'):
                 generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
                 )
             else:
                 generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
                 )
 
             # Get learning rate metrics
             lr_metrics = {}
-            for pg in self.optimizer.param_groups:
+            for pg in self.optimizer.param_groups if self.optimizer else []:
                 if "name" in pg:
                     lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
-                else:
-                    # Fallback for any unnamed groups
-                    lr_metrics[f"lr_group_{id(pg) % 1000}"] = pg["lr"]
 
             return {
-                "loss": outputs.loss,
+                "loss": loss,
                 "generated_ids": generated_ids,
                 **lr_metrics
             }
 
     def _inference_step(
         self,
-        embeddings: torch.Tensor,
-    ) -> torch.Tensor:
+        ecg_signal: torch.Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """
+        Inference a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         with torch.no_grad():
+            outputs: dict[str, torch.Tensor] = self.model(
+                ecg_signal=ecg_signal,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            loss: torch.Tensor = outputs['loss']
+            
+            # Time the generate_report function
             if hasattr(self.model, 'module'):
                 generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
                 )
             else:
                 generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_embeddings=embeddings, 
+                    ecg_signal, 
                     max_token_length=self.config.max_token_length
-                )   
-        return generated_ids     
+                )  
+            
+            return {
+                "loss": loss,
+                "generated_ids": generated_ids
+            }
 
     def inference(self):
-        self.model.eval()
+        """
+        Inference the model.
+        """
+        if self.validation_dataloader is None:
+            raise ValueError("Validation dataloader is not set")
+            
+        self.model.train(False)
         
         predicted_reports: list[str] = []
         reference_reports: list[str] = []
-        waveform_names: list[str] = []
-        tokenizer: GPT2Tokenizer = self.val_dataloader.dataset.tokenizer
+        waveform_names: list[str] = []   
+        tokenizer: GPT2Tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
         
-        for batch in tqdm(self.val_dataloader, desc="Inference", total=len(self.val_dataloader), disable=not self.config.is_ref_device):
-            embeddings: torch.Tensor = batch['embedding'].to(self.config.device)
-            labels: torch.Tensor = batch['input_ids'].to(self.config.device)
-            batch_waveform_names: list[str] = batch['waveform_name']
-            generated_ids: torch.Tensor = self._inference_step(
-                embeddings=embeddings,
+        # Create a progress bar
+        data_iter: tqdm = tqdm(
+            self.validation_dataloader, 
+            desc="Inference",
+            leave=True,
+            disable=not self.config.is_ref_device
+        )
+        
+        running_loss: float = 0.0
+        for batch_idx, batch in enumerate(data_iter):
+            ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
+            input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
+            attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
+            labels: torch.Tensor = input_ids.clone()
+            
+            outputs: dict[str, torch.Tensor] = self._inference_step(
+                ecg_signal=ecg_signal,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
             )
-                        
+            generated_ids: torch.Tensor = outputs['generated_ids']
+            loss = outputs['loss'].item()
+            
+            gathered_loss = DistributedUtils.gather_loss(
+                [loss], 
+                self.config.device
+            )
+            
+            running_loss += gathered_loss
+            
+            data_iter.set_postfix({
+                f"inference/mean_loss": f'{running_loss / (batch_idx + 1):.4f}'
+            })
+            batch_waveform_names: list[str] = batch['waveform_name']
             for gen, lab, filename in zip(generated_ids, labels, batch_waveform_names):
                 # Decode both predictions and references as strings.
                 decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
@@ -451,9 +572,9 @@ class LLMFinetuningRunner(BaseRunner):
             combined_predicted_reports = []
             combined_reference_reports = []
             for res in gathered_results:
-                combined_waveform_names.extend(res["waveform_names"])
-                combined_predicted_reports.extend(res["predicted_reports"])
-                combined_reference_reports.extend(res["reference_reports"])
+                combined_waveform_names.extend(res["waveform_names"] if res is not None else [])
+                combined_predicted_reports.extend(res["predicted_reports"] if res is not None else [])
+                combined_reference_reports.extend(res["reference_reports"] if res is not None else [])
                     
             df = pd.DataFrame({
                 'waveform_name': combined_waveform_names,
@@ -473,7 +594,17 @@ class LLMFinetuningRunner(BaseRunner):
         loss: float,
         is_best: bool = False
     ):
-        """Save model checkpoint and optionally mark as best model."""
+        """
+        Save model checkpoint and optionally mark as best model.
+        
+        Args:
+            epoch: The current epoch
+            loss: The loss of the model
+            is_best: Whether the model is the best model
+
+        Returns:
+            None
+        """
         save_dir: str = self.config.output_dir
         os.makedirs(save_dir, exist_ok=True)
         
@@ -481,9 +612,9 @@ class LLMFinetuningRunner(BaseRunner):
         checkpoint: dict[str, Any] = {
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict() if hasattr(self.model, 'module') else self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
-            'scaler_state_dict': self.scaler.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
             'loss': loss,
             'config': self.config
         }
@@ -504,12 +635,13 @@ class LLMFinetuningRunner(BaseRunner):
             best_model_path: str = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_model_path)
             
-        if self.wandb_wrapper.is_initialized():
+        if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
             # Get current learning rates
             lr_metrics = {}
-            for pg in self.optimizer.param_groups:
-                if "name" in pg:
-                    lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+            if self.optimizer is not None:
+                for pg in self.optimizer.param_groups:
+                    if "name" in pg:
+                        lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
                 else:
                     # Fallback for any unnamed groups
                     lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
@@ -525,12 +657,27 @@ class LLMFinetuningRunner(BaseRunner):
         outputs: dict[str, torch.Tensor],
         labels: torch.Tensor,
         dataloader: DataLoader,
-        best_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
-        worst_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
-        random_batch_metrics: DefaultDict[str, Union[list[str], list[float]]],
+        best_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
+        worst_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
+        random_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch: bool = False,
     ) -> dict[str, float]:
-        """Compute metrics for validation and update best/worst batch metrics."""
+        """
+        Compute metrics for validation and update best/worst batch metrics.
+        
+        Args:
+            outputs: Outputs from the model
+            labels: Labels for the model
+            dataloader: DataLoader for the model
+            best_batch_metrics: Dictionary containing the best batch metrics
+            worst_batch_metrics: Dictionary containing the worst batch metrics
+            random_batch_metrics: Dictionary containing the random batch metrics
+            random_batch: Whether the batch is random
+            
+        Returns:
+            dict[str, float]: Dictionary containing the metrics for the epoch
+        
+        """
         computed_metrics: dict[str, float] = {}
         for metric in self.config.metrics:
             registered_metrics: Union[
@@ -541,7 +688,7 @@ class LLMFinetuningRunner(BaseRunner):
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
                 labels,
-                dataloader.dataset.tokenizer
+                dataloader.dataset.tokenizer  # type: ignore
             )
             for metric_name, metric_value in LLM_metrics.items():
                 if metric_name not in ('predictions', 'references'):
@@ -569,22 +716,41 @@ class LLMFinetuningRunner(BaseRunner):
                             k=1  # TODO: k > 1 implemented but haven't been tested with k > 1
                         )
                     
-                    computed_metrics[metric_name] = metric_value
+                    metric_value = float(metric_value) if isinstance(metric_value, torch.Tensor) else metric_value
+                    if isinstance(metric_value, float):
+                        computed_metrics[metric_name] = float(metric_value)
+                    
         return computed_metrics
     
     def _init_validation_metrics(
             self,
             dataloader: DataLoader
         ) -> tuple[
-            DefaultDict[str, Union[list[str], list[float]]],
-            DefaultDict[str, Union[list[str], list[float]]],
-            DefaultDict[str, Union[list[str], list[float]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
+            dict[str, list[dict[str, Union[float, list[str]]]]],
             int
         ]:
+            """
+            Initialize dictionaries for best, worst, and random batch metrics.
+            
+            Args:
+                dataloader: DataLoader for the model
+                
+            Returns:
+                tuple[
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    int
+                ]:
+                    Dictionary containing the best, worst, and random batch metrics
+                    and the random batch index
+            """
             # Initialize dictionaries for best, worst, and random batch metrics.
-            worst_batch_metrics = defaultdict(list)
-            best_batch_metrics = defaultdict(list)
-            random_batch_metrics = defaultdict(list)
+            worst_batch_metrics = {}
+            best_batch_metrics = {}
+            random_batch_metrics = {}
             # Select a random batch index
             random_batch_idx = random.randint(0, len(dataloader) - 1)
             return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx    

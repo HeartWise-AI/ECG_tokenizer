@@ -1,13 +1,17 @@
 from typing import Any
 from dataclasses import dataclass
+
+from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
 from utils.config.heartwise_config import HeartWiseConfig
 
 @dataclass
-@ConfigRegistry.register("BERT_Report_Classifier")
+@ConfigRegistry.register(ConfigName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierConfig(HeartWiseConfig):
     # Pipeline parameters
-    output_folder: str
+    model_name: str
+    runner_name: str
+    base_checkpoint_path: str
     # Inference parameters
     predictions_reports_path: str
     batch_size: int

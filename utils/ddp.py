@@ -1,4 +1,3 @@
-import os
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as MP
@@ -9,7 +8,7 @@ from torch.distributed import (
     init_process_group, 
     destroy_process_group
 )
-from typing import Any, List
+from typing import Any, List, Callable
 
 
 class DistributedUtils:
@@ -36,7 +35,7 @@ class DistributedUtils:
         torch.cuda.set_device(gpu_id)
         
         # Initialize process group
-        torch.distributed.init_process_group(
+        dist.init_process_group(
             backend="nccl",
             init_method="env://",
             rank=gpu_id,
@@ -59,7 +58,7 @@ class DistributedUtils:
         Synchronize the process group across all devices.
         """
         if world_size > 1:
-            torch.distributed.barrier(device_ids=[device_ids])
+            dist.barrier(device_ids=[device_ids])
     
     @staticmethod
     def gather_loss(
@@ -99,7 +98,7 @@ class DistributedUtils:
         num_replicas: int,
         rank: int,
         shuffle: bool = True,
-        collate_fn: callable = None
+        collate_fn: Callable | None = None
     ) -> DataLoader:
         sampler: DS.DistributedSampler = DS.DistributedSampler(
             dataset,

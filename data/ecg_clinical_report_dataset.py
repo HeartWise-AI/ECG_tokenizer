@@ -4,78 +4,104 @@ import numpy as np
 import pandas as pd
 
 from utils.ddp import DistributedUtils
-from transformers import GPT2Tokenizer
-from torch.utils.data import Dataset, DataLoader
-from utils.config.heartwise_config import HeartWiseConfig
+from transformers import GPT2Tokenizer, BatchEncoding
+from torch.utils.data import Dataset, DataLoader, default_collate
+from utils.config.llm_finetuning_config import LLMFinetuningConfig
 
 
 class ECGClinicalReportDataset(Dataset):
     def __init__(
         self, 
-        embeddings_path: str, 
-        reports_path: str, 
+        dataset_path: str, 
+        signal_path_column: str,
+        ecg_waveform_length: int,
+        ecg_num_leads: int,
         tokenizer: GPT2Tokenizer, 
         max_length: int = 512
     ):
         """
         Args:
-            embeddings_path (str): Path to the ECG embeddings.
-            reports_path (str): Path to the clinical reports.
+            dataset_path (str): Path to the dataset.
             tokenizer (PreTrainedTokenizer): Tokenizer for the clinical reports.
             max_length (int): Maximum token length for the reports.
         """
-        self.embeddings_path: str = embeddings_path
-        self.df: pd.DataFrame = pd.read_parquet(reports_path)
+        try:
+            self.df: pd.DataFrame = pd.read_parquet(dataset_path)
+        except Exception as e:
+            print(f"Error reading parquet file: {e}")
+            raise Exception(f"Error reading parquet file: {e}")
+        
+        self.ecg_waveform_length: int = ecg_waveform_length
+        self.ecg_num_leads: int = ecg_num_leads
         self.tokenizer: GPT2Tokenizer = tokenizer
         self.max_length: int = max_length
-
+        self.signal_path_column: str = signal_path_column
+        
     def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx):
+    def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
         try:
-            row = self.df.iloc[idx]
-            if pd.isnull(row['waveform_path']) or pd.isnull(row['report']):
-                print(f"Missing waveform_path or report for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get('waveform_path')}, report: {row.get('report')}")
-                return None
+            waveform: np.ndarray = np.load(waveform_path)
+        except Exception as e:
+            print(f"Error loading ECG signal: {e}")
+            raise Exception(f"Error loading ECG signal: {e}")
+        
+        # Hack for MHI dataset stored as 3D array with shape (2500, 12, 1)
+        if len(waveform.shape) == 3:
+            waveform = waveform.squeeze(-1)
+            
+        assert len(waveform.shape) == 2, f"Unnormalized signal has shape {waveform.shape}"
+        
+        return waveform
 
-            # Get the embedding path
-            waveform_path = row['waveform_path']
-            waveform_path = waveform_path.split('/')[-1]
-            waveform_name = waveform_path.split('.')[0]
-            embedding_path = os.path.join(self.embeddings_path, waveform_name + '_embedding.npy')
+    def __getitem__(self, idx: int) -> dict | None:
+        try:
+            # Get the row
+            row = self.df.iloc[idx]
             
-            # Try to load the embedding
-            try:
-                embedding = torch.tensor(
-                    np.load(embedding_path),
-                    dtype=torch.float
-                )  # Shape: (8, 128, 160)
-            except (FileNotFoundError, OSError) as e:
-                print(f"Could not load embedding for index {idx}, skipping this item. "
-                      f"embedding_path: {embedding_path}")
-                return None
+            # Check if the waveform path or report is missing
+            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row['report']):
+                print(f"Missing waveform_path or report for index {idx}, skipping sample. "
+                      f"waveform_path: {row.get(self.signal_path_column)}, report: {row.get('report')}")
+                return self.__getitem__((idx + 1) % len(self))
+
+            # Load the waveform
+            waveform: np.ndarray = self.load_ecg_signal(
+                waveform_path=row[self.signal_path_column]
+            )
             
-            report = row['report']
+            if np.isnan(waveform).any():
+                return self.__getitem__((idx + 1) % len(self))
             
-            encoding = self.tokenizer.encode_plus(
-                report,
+            current_length: int = waveform.shape[0]
+            if current_length > self.ecg_waveform_length:
+                step: int = waveform.shape[0] // self.ecg_waveform_length
+                waveform = waveform[::step, :]
+            
+            if waveform.shape[0] != self.ecg_waveform_length:
+                return self.__getitem__((idx + 1) % len(self))
+            
+            if waveform.shape[1] != self.ecg_num_leads:
+                return self.__getitem__((idx + 1) % len(self))
+            
+            # Tokenize the report
+            encoding: BatchEncoding = self.tokenizer.encode_plus(
+                row['report'],
                 add_special_tokens=True,
                 max_length=self.max_length,
                 padding='max_length',
                 truncation=True,
                 return_tensors='pt'
-            )
-            
-            input_ids = encoding['input_ids'].squeeze()  # Shape: (max_length)
-            attention_mask = encoding['attention_mask'].squeeze()  # Shape: (max_length)
+            )          
+            input_ids: torch.Tensor = encoding['input_ids'].squeeze()  # Shape: (max_length)
+            attention_mask: torch.Tensor = encoding['attention_mask'].squeeze()  # Shape: (max_length)
             
             return {
-                'embedding': embedding,  # (8, 128, 160)
+                'signal': np.transpose(waveform, (1, 0)),  # (2500, 12)
                 'input_ids': input_ids,  # (max_length)
                 'attention_mask': attention_mask,  # (max_length)
-                'waveform_name': waveform_name
+                'waveform_name': row['waveform_name']
             }
             
         except Exception as e:
@@ -84,13 +110,15 @@ class ECGClinicalReportDataset(Dataset):
             
             
 def get_clinical_report_dataloader(
-    config: HeartWiseConfig,
+    config: LLMFinetuningConfig,
     shuffle: bool = True,
     pin_memory: bool = True
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
-        embeddings_path=config.embeddings_path, 
-        reports_path=config.reports_path, 
+        dataset_path=config.train_dataset_path, 
+        signal_path_column=config.signal_path_column,
+        ecg_waveform_length=config.ecg_waveform_length,
+        ecg_num_leads=config.ecg_num_leads,
         tokenizer=config.tokenizer, 
         max_length=config.max_length
     )
@@ -104,8 +132,10 @@ def get_clinical_report_dataloader(
     )
     
 def get_distributed_clinical_report_dataloader(
-    reports_path: str,
-    embeddings_path: str,
+    dataset_path: str,
+    signal_path_column: str,
+    ecg_waveform_length: int,
+    ecg_num_leads: int,
     tokenizer: GPT2Tokenizer,
     max_token_length: int = 512,
     batch_size: int = 32,
@@ -116,8 +146,10 @@ def get_distributed_clinical_report_dataloader(
     pin_memory: bool = True
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
-        embeddings_path=embeddings_path, 
-        reports_path=reports_path, 
+        dataset_path=dataset_path, 
+        signal_path_column=signal_path_column,
+        ecg_waveform_length=ecg_waveform_length,
+        ecg_num_leads=ecg_num_leads,
         tokenizer=tokenizer, 
         max_length=max_token_length
     )
@@ -140,4 +172,4 @@ def custom_collate_fn(batch):
     filtered_batch = [item for item in batch if item is not None]
     if len(filtered_batch) == 0:
         raise ValueError("All items in the batch were invalid. Check dataset integrity or file paths.")
-    return torch.utils.data.default_collate(filtered_batch)
+    return default_collate(filtered_batch)

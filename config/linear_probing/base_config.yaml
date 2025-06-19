@@ -1,49 +1,78 @@
 # pipeline project
-pipeline_project: !!str "ECG_tokenizer_linear_probing"
-
+pipeline_project: !!str "ECG_Tokenizer_Linear_Probing"
+model_name: !!str "ECG_Tokenizer_Wrapper"
+runner_name: !!str "ECG_Tokenizer_Linear_Probing_Runner"
+run_mode: !!str "train"
+num_epochs: !!int 10
+seed: !!int 42
+base_checkpoint_path: !!str "checkpoints"
+pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Classification/6l7oogin_20250608-111318/best_model_epoch_7.pt"
+# wandb parameters
+wandb_project: !!str "ECG_Tokenizer_Linear_Probing"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool true
+# training parameters
+lr: !!float 3e-4
+scheduler_type: !!str "cosine_warm_restart"
+lr_step_period: !!int 1
+factor: !!float 0.3
+optimizer: !!str "AdamW"
+weight_decay: !!float 1e-4
+step_size: !!int 1
+gamma: !!float 0.1
+num_warmup_percent: !!float 0.1
+num_hard_restarts_cycles: !!float 1.0
+warm_restart_tmult: !!int 2
+# VQVAE parameters
+decoder_mode: !!str "classification"
+decoder_name: !!str "CLS_Token_Classifier_Decoder"
+# Classification parameters
+num_classes: !!int 77
+criterion: !!str "bce_loss"
+# Dataset parameters
+train_dataset_path: !!str "parquets/merged_datasets/train/mimic_mhi_psa_train_updated_stratified_20%.parquet"
+validation_dataset_path: !!str "parquets/merged_datasets/test/mimic_mhi_psa_test_updated_stratified_20%.parquet"
+num_workers: !!int 32
+batch_size: !!int 12
+signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original
 # waveform parameters
 waveform_length: !!int 2500
 num_leads: !!int 12
-
-# training parameters
-learning_rate: !!float 3e-4
-train_iterations: !!int 20000
-seed: !!int 1234
-num_workers: !!int 4
-experiment_name: !!str "experiment_deeper_1024_rvq_QINCo_debug"
-num_epochs: !!int 1
-
-# VQVAE parameters
-num_quantizers: !!int 8
-num_codes: !!int 1024
-alpha: !!float 1.0 # used for loss function
-
-# classifier parameters
-classifier_experiment_name: !!str "sweep"
-num_classes: !!int 77
-num_layers: !!int 5
-hidden_dim: !!int 1024
-embedding_dim: !!int 160
-prev_embedding_dim: !!int 128
-lr: !!float 1e-6
-weight_decay: !!float 1e-4
-batch_size: !!int 16
-criterion: !!str "focal_loss"
-base_checkpoint_path: !!str "checkpoints"
-
-# data parameters
-csv_file: !!str "/home/rbanerjee/data/MIMIC-IV/mimic_index.corrected.csv"
-train_parquet_MIMIC_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
-train_parquet_MHI_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/mhi/train_trial_v1.1.parquet"
-test_parquet_MIMIC_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_test.parquet"
-test_parquet_MHI_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/mhi/test_trial_v1.1.parquet"
-code_15_dataset_path: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/code15/code_15_dataset.parquet"
-
-# evaluation parameters
-model_path: !!str "/home/rbanerjee/checkpoints/experiment_deeper_1024_rvq_QINCo/vqvae_iteration_20000.pth"
-embedding_dir: !!str "/home/rbanerjee/embeddings/experiment_deeper_1024_rvq_QINCo/"
-name: !!str "sweep"
-wandb_project: !!str "ECG_tokenizer_linear_probing"
-wandb_entity: !!str "mhi_ai"
-parquet_file: !!str "/media/data1/datasets/DeepECG/SSL_pretraining/split/MIMIC/mimic_v4_clean_train.parquet"
-use_wandb: !!bool true
+normalize_waveforms: !!bool False
+lead_stats:
+  I:
+    mean: !!float -0.982577
+    std: !!float 33.551235
+  II:
+    mean: !!float -0.683182
+    std: !!float 35.616466
+  III:
+    mean: !!float 0.299394
+    std: !!float 40.365378
+  aVR:
+    mean: !!float 0.832880
+    std: !!float 28.102812
+  aVL:
+    mean: !!float -0.640986
+    std: !!float 32.563651
+  aVF:
+    mean: !!float -0.191894
+    std: !!float 34.169092
+  V1:
+    mean: !!float -1.351383
+    std: !!float 54.328896
+  V2:
+    mean: !!float -1.366718
+    std: !!float 72.522918
+  V3:
+    mean: !!float -1.325758
+    std: !!float 66.522440
+  V4:
+    mean: !!float -1.091183
+    std: !!float 61.623552
+  V5:
+    mean: !!float -0.937534
+    std: !!float 57.341500
+  V6:
+    mean: !!float -0.882349
+    std: !!float 52.247728

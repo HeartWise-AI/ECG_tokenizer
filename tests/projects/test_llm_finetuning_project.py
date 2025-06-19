@@ -4,6 +4,7 @@ import os
 
 from projects.llm_finetuning_project import LLMFinetuningProject
 from utils.config import LLMFinetuningConfig
+from utils.enums import AdapterName
 
 class TestLLMFinetuningProject(unittest.TestCase):
     @patch('projects.llm_finetuning_project.GPT2Tokenizer')
@@ -34,16 +35,16 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
         mock_config.gpt2_embedding_size = 768
-        mock_config.embedding_reducer_name = "mlp_reducer"
-        mock_config.reducer_dropout = 0.1
+        mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
+        mock_config.adapter_dropout = 0.1
         mock_config.lr = 0.001
         mock_config.step_size = 10
         mock_config.gamma = 0.1
         mock_config.num_epochs = 100
         mock_config.llm_lr = 0.0001
         mock_config.llm_weight_decay = 0.01
-        mock_config.embedding_reducer_lr = 0.0001
-        mock_config.embedding_reducer_weight_decay = 0.01
+        mock_config.adapter_lr = 0.0001
+        mock_config.adapter_weight_decay = 0.01
         
         mock_wandb_wrapper = MagicMock()
         
@@ -141,7 +142,8 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
         mock_config.gpt2_embedding_size = 768
-        mock_config.embedding_reducer_name = "mlp_reducer"
+        mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
+        mock_config.adapter_dropout = 0.1
         mock_config.checkpoint_dir = "/path/to/checkpoint.pt"
         
         mock_wandb_wrapper = MagicMock()

@@ -14,27 +14,57 @@ from runners.llm_finetuning_runner import LLMFinetuningRunner
 from runners.bert_report_classifier_runner import BertReportClassifierRunner
 
 class BaseProject(ABC):
+    """Abstract base class for ML project execution with different run modes.
+    
+    Handles project setup, checkpoint loading, and runner orchestration for
+    training, inference, and embedding extraction workflows.
+    """    
     def __init__(
         self, 
-        config: HeartWiseConfig,
+        config: Any,
         wandb_wrapper: WandbWrapper
     ):
-        self.config: HeartWiseConfig = config
+        """Initialize project with configuration and logging.
+        
+        Args:
+            config: Project configuration object
+            wandb_wrapper: Weights & Biases logging wrapper
+        """        
+        self.config: Any = config
         self.wandb_wrapper: WandbWrapper = wandb_wrapper
         
     @abstractmethod
     def _setup_inference_objects(self)->dict[str, Any]:
+        """Setup objects required for inference mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for inference.
+        """
         pass
     
     @abstractmethod
     def _setup_training_objects(self)->dict[str, Any]:
+        """Setup objects required for training mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for training.
+        """
         pass
     
     @abstractmethod
     def _setup_extraction_objects(self)->dict[str, Any]:
+        """Setup objects required for extraction mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for extraction.
+        """
         pass
     
     def _setup_project(self):
+        """Initialize project directories and backup the base_config file.
+        
+        This method is called by the run method to initialize the project directories and backup the base_config file.
+        """
         # Generate the output directory name
         self.config.output_dir = generate_output_dir_name(
             config=self.config, 
@@ -54,6 +84,17 @@ class BaseProject(ABC):
         self, 
         checkpoint_path: str
     )->dict[str, Any]:
+        """Load model checkpoint from file.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file
+            
+        Returns:
+            Loaded checkpoint dictionary
+            
+        Raises:
+            ValueError: If checkpoint file doesn't exist
+        """
         if not os.path.exists(checkpoint_path):
             raise ValueError(f"Checkpoint file does not exist: {checkpoint_path}")
         
@@ -63,7 +104,12 @@ class BaseProject(ABC):
         
         return torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     
-    def run(self):    
+    def run(self): 
+        """Execute project workflow based on configured run mode.
+        
+        Sets up appropriate objects for the run mode (train/inference/extraction)
+        and executes the corresponding runner.
+        """          
         if self.config.is_ref_device:
             self._setup_project()    
         
@@ -84,5 +130,5 @@ class BaseProject(ABC):
             ECGTokenizerRunner, 
             LLMFinetuningRunner,
             BertReportClassifierRunner
-        ] = RunnerRegistry.get(self.config.pipeline_project)(**runner_args)
+        ] = RunnerRegistry.get(self.config.runner_name)(**runner_args)
         runner.execute(mode=self.config.run_mode)    

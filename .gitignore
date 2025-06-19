@@ -17,3 +17,4 @@ api_keys.json
 coverage.xml
 .coverage
 embeddings
+path/

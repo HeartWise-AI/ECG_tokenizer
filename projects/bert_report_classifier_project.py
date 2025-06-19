@@ -1,36 +1,55 @@
-from typing import Any, Dict, Union
+from typing import Any
 from transformers import BertTokenizer
-import torch
-from torch.utils.data import DataLoader
 
 from utils.registry import (
     ProjectRegistry, 
-    ModelRegistry,
-    RunnerRegistry
+    ModelRegistry
 )
-from projects.base_project import BaseProject
-from utils.files_handler import load_api_keys
+from utils.enums import ProjectName
 from utils.wandb_wrapper import WandbWrapper
+from utils.files_handler import load_api_keys
 from utils.config import BertReportClassifierConfig
 from utils.huggingface_wrapper import HuggingFaceWrapper
+from projects.base_project import BaseProject
 from models.bert_classifier import BertClassifier
-from runners.bert_report_classifier_runner import BertReportClassifierRunner
 from data.bert_clinical_report_dataset import get_distributed_clinical_report_dataloader
 
 
-@ProjectRegistry.register("BERT_Report_Classifier")
+@ProjectRegistry.register(ProjectName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierProject(BaseProject):
+    """BERT-based clinical report classification project.
+    
+    Implements inference pipeline for classifying clinical reports using
+    pretrained BERT models from HuggingFace. Supports distributed inference
+    across multiple devices.
+    """    
     def __init__(
         self, 
         config: BertReportClassifierConfig,
         wandb_wrapper: WandbWrapper
     ):
+        """Initialize BERT report classifier project.
+        
+        Args:
+            config: BERT classification configuration
+            wandb_wrapper: Weights & Biases logging wrapper
+        """        
         super().__init__(config, wandb_wrapper)
+        self.config: BertReportClassifierConfig = config # cast to BertReportClassifierConfig to avoid type errors
     
     def run(self):
+        """Execute the BERT classification workflow."""
         super().run()
         
     def _setup_inference_objects(self)->dict[str, Any]:
+        """Setup objects required for clinical report inference.
+        
+        Downloads pretrained BERT model from HuggingFace, initializes tokenizer
+        and classifier, and prepares data loader for inference on clinical reports.
+        
+        Returns:
+            Dictionary containing validation data loader and model for inference
+        """
         huggingface_token: str = load_api_keys(self.config.api_keys_path)["HUGGING_FACE_TOKEN"]
         
         model_path: str = HuggingFaceWrapper.get_model(
@@ -41,7 +60,7 @@ class BertReportClassifierProject(BaseProject):
         
         tokenizer: BertTokenizer = BertTokenizer.from_pretrained(model_path)
         
-        model: BertClassifier = ModelRegistry.get(self.config.pipeline_project)(
+        model: BertClassifier = ModelRegistry.get(self.config.model_name)(
             model_path=model_path,
             num_classes=self.config.num_classes,
         )
@@ -64,7 +83,17 @@ class BertReportClassifierProject(BaseProject):
         }
     
     def _setup_extraction_objects(self)->dict[str, Any]:
+        """Setup objects for extraction mode.
+        
+        Raises:
+            NotImplementedError: Extraction not implemented for BERT classifier
+        """        
         raise NotImplementedError("Extraction is not implemented for this project")
     
     def _setup_training_objects(self)->dict[str, Any]:
+        """Setup objects for training mode.
+        
+        Raises:
+            NotImplementedError: Training not implemented for BERT classifier
+        """        
         raise NotImplementedError("Training is not implemented for this project")

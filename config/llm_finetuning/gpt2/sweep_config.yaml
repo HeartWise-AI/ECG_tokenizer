@@ -22,12 +22,12 @@ parameters:
     min: 5e-5
     max: 1e-3
 
-  embedding_reducer_lr:
+  adapter_lr:
     distribution: log_uniform_values
     min: 5e-5
     max: 1e-3
 
-  reducer_dropout:
+  adapter_dropout:
     distribution: uniform
     min: 0.0
     max: 0.7
@@ -57,7 +57,7 @@ parameters:
   llm_weight_decay:
     values: [0.0, 0.0001,0.001, 0.01, 0.1]
 
-  embedding_reducer_weight_decay:
+  adapter_weight_decay:
     values: [0.0, 0.0001,0.001, 0.01, 0.1]
 
   gamma:
