@@ -79,6 +79,9 @@ class ModelName(str, Enum):
     RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"
     CLS_TOKEN_CLASSIFIER_DECODER = "CLS_Token_Classifier_Decoder"
     
+    # Report classifiers
+    BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"
+        
     def __str__(self):
         return self.value   
     
