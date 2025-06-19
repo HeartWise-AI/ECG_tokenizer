@@ -42,6 +42,7 @@ class ProjectName(str, Enum):
 class RunnerName(str, Enum):
     """Enum for different runner names."""
     LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    BERT_REPORT_CLASSIFIER = "Bert_Report_Classifier"
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing_Runner"
     
