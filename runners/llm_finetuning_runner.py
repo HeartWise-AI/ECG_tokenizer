@@ -39,6 +39,10 @@ from typing import (
 
 @RunnerRegistry.register(RunnerName.LLM_FINETUNING)
 class LLMFinetuningRunner(BaseRunner):
+    """
+    Runner for LLM finetuning.
+    """
+    
     def __init__(
         self, 
         model: ECG_Tokenizer_Wrapper,
@@ -50,6 +54,17 @@ class LLMFinetuningRunner(BaseRunner):
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
     ):
+        """
+        Args:
+            model: ECG tokenizer wrapper
+            config: Configuration for the runner
+            validation_dataloader: DataLoader for validation
+            wandb_wrapper: WandbWrapper for logging
+            train_dataloader: DataLoader for training
+            optimizer: Optimizer for the model
+            scheduler: Scheduler for the optimizer
+            scaler: Scaler for the optimizer
+        """
         self.model: ECG_Tokenizer_Wrapper = model
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
@@ -64,9 +79,18 @@ class LLMFinetuningRunner(BaseRunner):
         self, 
         mode: RunMode
     ):
+        """
+        Execute the runner in the specified mode.
+        
+        Args:
+            mode: The execution mode (TRAIN, INFERENCE, VALIDATE, EXTRACT_EMBEDDINGS)
+        """
         super().execute(mode)
         
     def train(self):
+        """
+        Train the LLM finetuning model.
+        """
         if self.optimizer is None:
             raise ValueError("Optimizer cannot be None")
         # Note: Scaler is not required for bfloat16 training
@@ -147,6 +171,16 @@ class LLMFinetuningRunner(BaseRunner):
         mode: RunMode,
         epoch: int
     )->dict[str, float]:
+        """
+        Run an epoch of training or validation.
+        
+        Args:
+            mode: The execution mode (TRAIN, VALIDATE)
+            epoch: The current epoch
+            
+        Returns:
+            dict[str, float]: Dictionary containing the metrics for the epoch
+        """
         assert mode in [RunMode.TRAIN, RunMode.VALIDATE]
         
         # Set the model to training or evaluation mode
@@ -313,6 +347,18 @@ class LLMFinetuningRunner(BaseRunner):
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
+        """
+        Train a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         # Clear gradients
         assert self.optimizer is not None
         
@@ -362,6 +408,18 @@ class LLMFinetuningRunner(BaseRunner):
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
+        """
+        Validate a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         with torch.no_grad():
             outputs: dict[str, torch.Tensor] = self.model(
                 ecg_signal=ecg_signal,
@@ -402,6 +460,18 @@ class LLMFinetuningRunner(BaseRunner):
         attention_mask: torch.Tensor,
         labels: torch.Tensor
     ) -> dict[str, torch.Tensor]:
+        """
+        Inference a single step of the model.
+        
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the model
+        """
         with torch.no_grad():
             outputs: dict[str, torch.Tensor] = self.model(
                 ecg_signal=ecg_signal,
@@ -429,6 +499,9 @@ class LLMFinetuningRunner(BaseRunner):
             }
 
     def inference(self):
+        """
+        Inference the model.
+        """
         if self.validation_dataloader is None:
             raise ValueError("Validation dataloader is not set")
             
@@ -521,7 +594,17 @@ class LLMFinetuningRunner(BaseRunner):
         loss: float,
         is_best: bool = False
     ):
-        """Save model checkpoint and optionally mark as best model."""
+        """
+        Save model checkpoint and optionally mark as best model.
+        
+        Args:
+            epoch: The current epoch
+            loss: The loss of the model
+            is_best: Whether the model is the best model
+
+        Returns:
+            None
+        """
         save_dir: str = self.config.output_dir
         os.makedirs(save_dir, exist_ok=True)
         
@@ -579,7 +662,22 @@ class LLMFinetuningRunner(BaseRunner):
         random_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch: bool = False,
     ) -> dict[str, float]:
-        """Compute metrics for validation and update best/worst batch metrics."""
+        """
+        Compute metrics for validation and update best/worst batch metrics.
+        
+        Args:
+            outputs: Outputs from the model
+            labels: Labels for the model
+            dataloader: DataLoader for the model
+            best_batch_metrics: Dictionary containing the best batch metrics
+            worst_batch_metrics: Dictionary containing the worst batch metrics
+            random_batch_metrics: Dictionary containing the random batch metrics
+            random_batch: Whether the batch is random
+            
+        Returns:
+            dict[str, float]: Dictionary containing the metrics for the epoch
+        
+        """
         computed_metrics: dict[str, float] = {}
         for metric in self.config.metrics:
             registered_metrics: Union[
@@ -633,6 +731,22 @@ class LLMFinetuningRunner(BaseRunner):
             dict[str, list[dict[str, Union[float, list[str]]]]],
             int
         ]:
+            """
+            Initialize dictionaries for best, worst, and random batch metrics.
+            
+            Args:
+                dataloader: DataLoader for the model
+                
+            Returns:
+                tuple[
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    dict[str, list[dict[str, Union[float, list[str]]]]],
+                    int
+                ]:
+                    Dictionary containing the best, worst, and random batch metrics
+                    and the random batch index
+            """
             # Initialize dictionaries for best, worst, and random batch metrics.
             worst_batch_metrics = {}
             best_batch_metrics = {}
