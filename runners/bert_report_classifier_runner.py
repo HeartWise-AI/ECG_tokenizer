@@ -4,8 +4,9 @@ import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from utils.ddp import DistributedUtils
+from typing import Callable
 
-from utils.enums import RunMode, ProjectName
+from utils.enums import RunMode, RunnerName
 from utils.registry import RunnerRegistry
 from utils.files_handler import (
     save_json, 
@@ -20,7 +21,7 @@ from runners.base_runner import BaseRunner
 from models.bert_classifier import BertClassifier
 
 
-@RunnerRegistry.register(ProjectName.BERT_REPORT_CLASSIFIER)
+@RunnerRegistry.register(RunnerName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierRunner(BaseRunner):
     """
     Runner for BERT report classifier.
@@ -40,10 +41,10 @@ class BertReportClassifierRunner(BaseRunner):
             val_dataloader: DataLoader for validation
             wandb_wrapper: WandbWrapper for logging
         """
+        super().__init__(config, wandb_wrapper)
+        self.config: BertReportClassifierConfig = config  # Override base class type
         self.model: BertClassifier = model
-        self.config: BertReportClassifierConfig = config
         self.val_dataloader: DataLoader = val_dataloader
-        self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
         
     def execute(
         self, 
@@ -62,6 +63,16 @@ class BertReportClassifierRunner(BaseRunner):
         Train the BERT report classifier.
         """
         raise NotImplementedError("train not implemented")
+    
+    def _run_epoch(
+        self,
+        mode: RunMode,
+        epoch: int,
+        dataloader: DataLoader,
+        step_fn: Callable,
+    ) -> dict[str, float]:
+        """Run an epoch of training or validation."""
+        raise NotImplementedError("_run_epoch not implemented")
     
     def _val_step(
         self, 
@@ -155,7 +166,7 @@ class BertReportClassifierRunner(BaseRunner):
             save_json(
                 data=metrics, 
                 path=os.path.join(
-                    self.config.output_folder, 
+                    self.config.output_dir, 
                     f'{self.config.pipeline_project}.json'
                 )
             )
@@ -163,7 +174,7 @@ class BertReportClassifierRunner(BaseRunner):
             save_to_csv(
                 metrics=metrics, 
                 path=os.path.join(
-                    self.config.output_folder, 
+                    self.config.output_dir, 
                     f'{self.config.pipeline_project}.csv'
                 )
             )
