@@ -14,6 +14,10 @@ class Conv_Encoder(nn.Module):
     Expected input shape: (batch_size, 12, length)
     """
     def __init__(self, input_channels=12):
+        """
+        Args:
+            input_channels: Number of input channels
+        """
         super(Conv_Encoder, self).__init__()
         self.encoder_layers = nn.ModuleList([
             # First convolutional block
@@ -28,7 +32,11 @@ class Conv_Encoder(nn.Module):
             nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2)
         ])
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         for layer in self.encoder_layers:
             x = layer(x)
         return x
@@ -41,6 +49,10 @@ class Residual_Conv_Encoder(nn.Module):
     Expected input shape: (batch_size, 12, length)
     """
     def __init__(self, input_channels=12):
+        """
+        Args:
+            input_channels: Number of input channels
+        """
         super(Residual_Conv_Encoder, self).__init__()
         
         # Match the original encoder's pattern more closely
@@ -58,7 +70,11 @@ class Residual_Conv_Encoder(nn.Module):
         self.conv3 = nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=2)
         self.block3 = ResidualBlock1D(128, 128, stride=1, downsample=False)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         # First conv + pool + residual refinement
         x = self.conv1(x)
         x = self.pool1(x)
@@ -81,7 +97,14 @@ class ResidualBlock1D(nn.Module):
     """
     1D Residual block for ECG signal processing.
     """
-    def __init__(self, in_channels, out_channels, stride=1, downsample=False):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1, downsample: bool = False):
+        """
+        Args:
+            in_channels: Number of input channels
+            out_channels: Number of output channels
+            stride: Stride for the convolution
+            downsample: Whether to downsample the input
+        """
         super(ResidualBlock1D, self).__init__()
         
         # Main path - use consistent padding
@@ -106,7 +129,11 @@ class ResidualBlock1D(nn.Module):
         
         self.gelu2 = nn.GELU()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         identity = x
         
         # Main path
@@ -142,6 +169,11 @@ class Linear_Classifier_Decoder(nn.Module):
         num_classes=77,
         dropout_rate=0.3
     ):
+        """
+        Args:
+            num_classes: Number of classes for classification
+            dropout_rate: Dropout rate for regularization
+        """
         super(Linear_Classifier_Decoder, self).__init__()
         self.num_classes = num_classes
         
@@ -160,7 +192,11 @@ class Linear_Classifier_Decoder(nn.Module):
             nn.Linear(128, num_classes) # Output layer for the 77 classes (no activation - will be applied in loss)
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         return self.classifier(x)
 
 @ModelRegistry.register(ModelName.CLS_TOKEN_CLASSIFIER_DECODER)
@@ -182,6 +218,13 @@ class CLS_Token_Classifier_Decoder(nn.Module):
         dropout: float = 0.1,
         num_heads: int = 8,
     ):
+        """
+        Args:
+            input_dim: Dimension of the input
+            num_classes: Number of classes for classification
+            dropout: Dropout rate for regularization
+            num_heads: Number of attention heads
+        """
         super().__init__()
         
         self.input_dim = input_dim
@@ -230,7 +273,7 @@ class CLS_Token_Classifier_Decoder(nn.Module):
         # Initialize cls_token with small random values
         nn.init.normal_(self.cls_token, std=0.02)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with cls_token aggregation.
         
@@ -278,6 +321,11 @@ class ResNet_Classifier_Decoder(nn.Module):
     Output shape: (batch_size, num_classes)
     """
     def __init__(self, num_classes=77, dropout_rate=0.3):
+        """
+        Args:
+            num_classes: Number of classes for classification
+            dropout_rate: Dropout rate for regularization
+        """
         super(ResNet_Classifier_Decoder, self).__init__()
         self.block1 = self._make_layer(128, 128, blocks=1, stride=1)
         self.block2 = self._make_layer(128, 256, blocks=1, stride=2)
@@ -293,7 +341,11 @@ class ResNet_Classifier_Decoder(nn.Module):
             layers.append(BasicBlock(out_channels, out_channels, stride=1))
         return nn.Sequential(*layers)
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         x = self.block1(x)
         x = self.block2(x)
         x = self.block3(x)
@@ -308,6 +360,12 @@ class BasicBlock(nn.Module):
     Basic residual block for 1D signals.
     """
     def __init__(self, in_channels, out_channels, stride=1):
+        """
+        Args:
+            in_channels: Number of input channels
+            out_channels: Number of output channels
+            stride: Stride for the convolution
+        """
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         self.bn1 = nn.BatchNorm1d(out_channels)
@@ -321,7 +379,11 @@ class BasicBlock(nn.Module):
                 nn.BatchNorm1d(out_channels)
             )
         
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         identity = x
         out = self.conv1(x)
         out = self.bn1(out)
@@ -347,6 +409,11 @@ class ECG_Tokenizer_Quantizer(nn.Module):
         num_quantizers: int, 
         codebook_size: int
     ):
+        """
+        Args:
+            num_quantizers: Number of quantizers
+            codebook_size: Size of the codebook
+        """
         super(ECG_Tokenizer_Quantizer, self).__init__()
         # Adjust the latent dimension based on input timesteps.
         latent_dim = 82
@@ -364,6 +431,11 @@ class ECG_Tokenizer_Quantizer(nn.Module):
         x: torch.Tensor, 
         return_all_codes: bool = False
     ):
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+            return_all_codes: Whether to return all codes
+        """
         # The ResidualVQ layer returns (quantized, indices, commit_loss)
         quantizer_outputs = self.quantizer(x, return_all_codes=return_all_codes)
         return quantizer_outputs
@@ -390,7 +462,11 @@ class Conv_Decoder(nn.Module):
             nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=final_padding)
         ])
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
         for layer in self.decoder_layers:
             x = layer(x)
         return x   
@@ -426,6 +502,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
     ):
+        """
+        Args:
+            encoder_name: Name of the encoder
+            quantizer_name: Name of the quantizer
+            decoder_name: Name of the decoder
+        """
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
         # Save the names for potential reference
@@ -483,6 +565,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         state_dict: dict[str, torch.Tensor], 
         strict: bool = False
     ):
+        """
+        Args:
+            state_dict: State dictionary to load
+            strict: Whether to strictly enforce that the keys in state_dict match the keys in the model
+        """
         """Load state dict selectively based on configuration."""
         print("Loading state dict...")        
         self.load_state_dict(state_dict, strict=strict)
@@ -492,6 +579,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         pretrained_state_dict: dict[str, torch.Tensor],
         freeze_pretrained_components: bool = True
     )->None:
+        """
+        Args:
+            pretrained_state_dict: State dictionary to load
+            freeze_pretrained_components: Whether to freeze the pretrained components
+        """
         """Load pretrained weights selectively based on configuration."""
         print("Loading pretrained weights...")
         
@@ -637,6 +729,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
+        """
+        Args:
+            ecg_signal: Input tensor of shape (batch_size, 12, length)
+            return_all_codes: Whether to return all codes
+            input_ids: Input IDs for the LLM
+            attention_mask: Attention mask for the LLM
+            labels: Labels for the LLM
+        """
         ecg_signal = ecg_signal.to(dtype=torch.float32)  # or torch.bfloat16 if you prefer
         features = self.encoder(ecg_signal)
         
@@ -721,6 +821,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
 @ModelRegistry.register("ECG_CodebookClassifier")
 class ECG_CodebookClassifier(nn.Module):
+    """
+    Codebook classifier for ECG signals.
+    """
     def __init__(
         self, 
         num_classes, 
@@ -730,6 +833,15 @@ class ECG_CodebookClassifier(nn.Module):
         num_layers=5, 
         hidden_dim=4096
     ):
+        """
+        Args:
+            num_classes: Number of classes for classification
+            num_quantizers: Number of quantizers
+            prev_embedding_dim: Dimension of the previous embedding
+            embedding_dim: Dimension of the embedding
+            num_layers: Number of layers for the classifier
+            hidden_dim: Dimension of the hidden layer
+        """
         super(ECG_CodebookClassifier, self).__init__()
         layers: List[nn.Module] = [nn.Flatten()]
         input_dim = num_quantizers * prev_embedding_dim * embedding_dim
@@ -756,5 +868,9 @@ class ECG_CodebookClassifier(nn.Module):
 
         self.classifier = nn.Sequential(*layers)
     
-    def forward(self, codebook_embeddings):
+    def forward(self, codebook_embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            codebook_embeddings: Input tensor of shape (batch_size, num_quantizers, prev_embedding_dim, embedding_dim)
+        """
         return self.classifier(codebook_embeddings)
