@@ -22,6 +22,10 @@ from models.bert_classifier import BertClassifier
 
 @RunnerRegistry.register(ProjectName.BERT_REPORT_CLASSIFIER)
 class BertReportClassifierRunner(BaseRunner):
+    """
+    Runner for BERT report classifier.
+    """
+    
     def __init__(
         self, 
         model: BertClassifier, 
@@ -29,6 +33,13 @@ class BertReportClassifierRunner(BaseRunner):
         val_dataloader: DataLoader,
         wandb_wrapper: WandbWrapper | None = None,
     ):
+        """
+        Args:
+            model: BERT model
+            config: Configuration for the runner
+            val_dataloader: DataLoader for validation
+            wandb_wrapper: WandbWrapper for logging
+        """
         self.model: BertClassifier = model
         self.config: BertReportClassifierConfig = config
         self.val_dataloader: DataLoader = val_dataloader
@@ -38,9 +49,18 @@ class BertReportClassifierRunner(BaseRunner):
         self, 
         mode: RunMode
     ):
+        """
+        Execute the runner in the specified mode.
+        
+        Args:
+            mode: The execution mode (TRAIN, INFERENCE, VALIDATE, EXTRACT_EMBEDDINGS)
+        """
         super().execute(mode)
         
     def train(self):
+        """
+        Train the BERT report classifier.
+        """
         raise NotImplementedError("train not implemented")
     
     def _val_step(
@@ -49,7 +69,15 @@ class BertReportClassifierRunner(BaseRunner):
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor
     ) -> dict[str, torch.Tensor]:
-        
+        """
+        Args:
+            input_ids: Input IDs for the BERT model
+            attention_mask: Attention mask for the BERT model
+            token_type_ids: Token type IDs for the BERT model
+            
+        Returns:
+            dict[str, torch.Tensor]: Output from the BERT model
+        """
         return self.model(
             input_ids=input_ids.to(self.config.device),
             attention_mask=attention_mask.to(self.config.device),
@@ -57,6 +85,9 @@ class BertReportClassifierRunner(BaseRunner):
         )
     
     def inference(self):
+        """
+        Inference the BERT report classifier.
+        """
         self.model.eval()
         
         ground_truth_classes: list = []
@@ -138,6 +169,9 @@ class BertReportClassifierRunner(BaseRunner):
             )
             
     def validate(self):
+        """
+        Validate the BERT report classifier.
+        """
         raise NotImplementedError("validate not implemented")
 
     
