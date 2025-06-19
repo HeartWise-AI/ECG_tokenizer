@@ -25,6 +25,8 @@ class BertClassifier(nn.Module):
             model_path: Path to the BERT model
             num_classes: Number of classes for classification
         """
+        super().__init__()
+        
         print(f"Loading model from {model_path}")
         self.model: PreTrainedModel = BertForSequenceClassification.from_pretrained(
             model_path,
