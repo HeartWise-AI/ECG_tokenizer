@@ -64,10 +64,11 @@ class HeartWiseConfig:
         data_parameters['base_config_path'] = yaml_path
         
         # Set the common attributes used by all projects (set dynamically) -> avoid type errors
+        data_parameters['seed'] = 42
+        data_parameters['output_dir'] = ""
         data_parameters['device'] = int(os.environ["LOCAL_RANK"])
         data_parameters['world_size'] = int(os.environ["WORLD_SIZE"])
         data_parameters['is_ref_device'] = (data_parameters['device'] == 0)
-        data_parameters['output_dir'] = ""
         
         return registered_config(**data_parameters)    
 
