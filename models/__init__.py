@@ -1,8 +1,8 @@
-from models.models import ResVQAutoEncoder
 from models.adapters import (
     LinearAdapter, 
     EmbeddingAdapter, 
-    SimpleEmbeddingAdapter
+    SequenceAdapter,
+    SimpleEmbeddingAdapter,
 )
 from models.bert_classifier import BertClassifier
 from models.gpt2_tokenizer_decoder import GPT2Decoder
@@ -15,9 +15,9 @@ from models.ecg_tokenizer_wrapper import (
 )
 
 __all__ = [
-    "ResVQAutoEncoder", 
     "LinearAdapter", 
     "EmbeddingAdapter", 
+    "SequenceAdapter",
     "GPT2Decoder",
     "SimpleEmbeddingAdapter",
     "BertClassifier",
