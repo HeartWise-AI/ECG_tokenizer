@@ -1,14 +1,14 @@
 # pipeline project
 pipeline_project: !!str "ECG_Tokenizer_Training"
 model_name: !!str "ECG_Tokenizer_Wrapper"
-runner_name: !!str "ECG_Tokenizer_Training"
+runner_name: !!str "ECG_Tokenizer_Training_Runner"
 run_mode: !!str "train"
-num_epochs: !!int 5
+num_epochs: !!int 10
 seed: !!int 42
 base_checkpoint_path: !!str "checkpoints"
 # wandb parameters
-wandb_project: !!str "ECG_Tokenizer_Training"
-wandb_entity: !!str "jacques-delfrate"
+wandb_project: !!str "ECG_Tokenizer_Reconstruction"
+wandb_entity: !!str "mhi_ai"
 use_wandb: !!bool true
 # training parameters
 lr: !!float 3e-4
@@ -24,10 +24,10 @@ num_hard_restarts_cycles: !!float 1.0
 warm_restart_tmult: !!int 2
 # VQVAE parameters
 decoder_mode: !!str "reconstruction"
-encoder_name: !!str "Conv_Encoder"
+encoder_name: !!str "Residual_Conv_Encoder"
 quantizer_name: !!str "ECG_Tokenizer_Quantizer"
 decoder_name: !!str "Conv_Decoder"
-num_quantizers: !!int 12
+num_quantizers: !!int 8
 codebook_size: !!int 512
 # Classification parameters
 num_classes: !!int -1
@@ -35,8 +35,8 @@ criterion: !!str "mae_loss"
 # Dataset parameters
 train_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_code15_train_updated.parquet"
 validation_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet"
-num_workers: !!int 12
-batch_size: !!int 16
+num_workers: !!int 32
+batch_size: !!int 32
 signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original
 # waveform parameters
 waveform_length: !!int 2500
