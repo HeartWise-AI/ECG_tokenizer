@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
-from typing import List, Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union
 from models.local_residual_vq import ResidualVQ
 
 from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
+from models.types import ModelT, ModelClassT
 
 @ModelRegistry.register(ModelName.CONV_ENCODER)
 class Conv_Encoder(nn.Module):
@@ -225,7 +226,7 @@ class CLS_Token_Classifier_Decoder(nn.Module):
             dropout: Dropout rate for regularization
             num_heads: Number of attention heads
         """
-        super().__init__()
+        super(CLS_Token_Classifier_Decoder, self).__init__()
         
         self.input_dim = input_dim
         self.num_classes = num_classes
@@ -418,7 +419,7 @@ class ECG_Tokenizer_Quantizer(nn.Module):
         # Adjust the latent dimension based on input timesteps.
         latent_dim = 82
 
-        self.quantizer = ResidualVQ(
+        self.quantizer: ModelT = ResidualVQ(
             dim=latent_dim,
             num_quantizers=num_quantizers,
             codebook_size=codebook_size,
@@ -520,21 +521,21 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
 
         # Retrieve the components from the registry using the provided names
-        encoder_class = ModelRegistry.get(encoder_name)
+        encoder_class: ModelClassT = ModelRegistry.get(encoder_name)
         if encoder_class is None:
             raise ValueError(f"Encoder '{encoder_name}' not found in ModelRegistry")
-        self.encoder = encoder_class()
+        self.encoder: ModelT = encoder_class()
         
-        quantizer_class = ModelRegistry.get(quantizer_name)
+        quantizer_class: ModelClassT = ModelRegistry.get(quantizer_name)
         if quantizer_class is None:
             raise ValueError(f"Quantizer '{quantizer_name}' not found in ModelRegistry")
-        self.quantizer = quantizer_class(
+        self.quantizer: nn.Module = quantizer_class(
             num_quantizers=num_quantizers,
             codebook_size=codebook_size
         )
         
         # Initialize appropriate decoder based on mode
-        decoder_class = ModelRegistry.get(decoder_name)
+        decoder_class: ModelClassT = ModelRegistry.get(decoder_name)
         if decoder_class is None:
             raise ValueError(f"Decoder '{decoder_name}' not found in ModelRegistry")
             
@@ -543,7 +544,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 ModelName.CLS_TOKEN_CLASSIFIER_DECODER,
                 ModelName.RESNET_CLASSIFIER_DECODER
             ]:
-            self.decoder = decoder_class(num_classes=num_classes)
+            self.decoder: nn.Module = decoder_class(num_classes=num_classes)
         elif self.decoder_mode == DecoderMode.LLM and decoder_name == ModelName.GPT2_DECODER:
             # For LLM mode, we need the quantized feature shape from the quantizer
             # Assuming the quantizer outputs (batch, 128, sequence_length)
@@ -556,7 +557,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 adapter_dropout=adapter_dropout
             )
         elif self.decoder_mode == DecoderMode.RECONSTRUCTION:
-            self.decoder = decoder_class()
+            self.decoder: nn.Module = decoder_class()
         else:
             raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
 
@@ -638,27 +639,27 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             # if 'mlps.' not in name:  # Freeze everything except MLPs
             param.requires_grad = False
         
-    def get_training_info(self) -> dict:
+    def get_training_info(self) -> dict[str, Any]:
         """Get information about trainable vs frozen parameters."""
-        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params: int = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total_params: int = sum(p.numel() for p in self.parameters())
         
         # Component-wise breakdown
-        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
-        encoder_total = sum(p.numel() for p in self.encoder.parameters())
+        encoder_trainable: int = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        encoder_total: int = sum(p.numel() for p in self.encoder.parameters())
         
-        quantizer_trainable = sum(p.numel() for p in self.quantizer.parameters() if p.requires_grad)
-        quantizer_total = sum(p.numel() for p in self.quantizer.parameters())
+        quantizer_trainable: int = sum(p.numel() for p in self.quantizer.parameters() if p.requires_grad)
+        quantizer_total: int = sum(p.numel() for p in self.quantizer.parameters())
         
-        decoder_trainable = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
-        decoder_total = sum(p.numel() for p in self.decoder.parameters())
+        decoder_trainable: int = sum(p.numel() for p in self.decoder.parameters() if p.requires_grad)
+        decoder_total: int = sum(p.numel() for p in self.decoder.parameters())
         
         # MLPs specific info
-        mlp_trainable = 0
-        mlp_total = 0
+        mlp_trainable: int = 0
+        mlp_total: int = 0
         if hasattr(self.quantizer, 'quantizer') and hasattr(self.quantizer.quantizer, 'mlps'):
-            mlp_trainable = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters() if p.requires_grad)
-            mlp_total = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters())
+            mlp_trainable: int = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters() if p.requires_grad)
+            mlp_total: int = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters())
         
         return {
             "total_params": total_params,
@@ -688,17 +689,17 @@ class ECG_Tokenizer_Wrapper(nn.Module):
     def _set_frozen_components_to_eval(self):
         """Set frozen components to eval mode to prevent BatchNorm updates."""
         # Check if encoder is frozen and set to eval mode
-        encoder_frozen = all(not p.requires_grad for p in self.encoder.parameters())
+        encoder_frozen: bool = all(not p.requires_grad for p in self.encoder.parameters())
         if encoder_frozen:
             self.encoder.eval()
             
         # For quantizer, check if base layers are frozen
         if hasattr(self.quantizer, 'quantizer'):
             # Check if VQ layers (non-MLP parts) are frozen
-            vq_params_frozen = True
+            vq_params_frozen: bool = True
             for name, param in self.quantizer.named_parameters():
                 if 'mlps.' not in name and param.requires_grad:
-                    vq_params_frozen = False
+                    vq_params_frozen: bool = False
                     break
             
             if vq_params_frozen:
@@ -818,59 +819,3 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             max_token_length=max_token_length,
             **generate_kwargs
         )
-
-@ModelRegistry.register("ECG_CodebookClassifier")
-class ECG_CodebookClassifier(nn.Module):
-    """
-    Codebook classifier for ECG signals.
-    """
-    def __init__(
-        self, 
-        num_classes, 
-        num_quantizers, 
-        prev_embedding_dim, 
-        embedding_dim, 
-        num_layers=5, 
-        hidden_dim=4096
-    ):
-        """
-        Args:
-            num_classes: Number of classes for classification
-            num_quantizers: Number of quantizers
-            prev_embedding_dim: Dimension of the previous embedding
-            embedding_dim: Dimension of the embedding
-            num_layers: Number of layers for the classifier
-            hidden_dim: Dimension of the hidden layer
-        """
-        super(ECG_CodebookClassifier, self).__init__()
-        layers: List[nn.Module] = [nn.Flatten()]
-        input_dim = num_quantizers * prev_embedding_dim * embedding_dim
-
-        if num_layers == 0:
-            # Directly connect input to output.
-            layers.append(nn.Linear(input_dim, num_classes))
-        else:
-            # First hidden layer.
-            layers.append(nn.Linear(input_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            
-            current_dim = hidden_dim
-            # Create additional hidden layers with a reduction strategy.
-            for _ in range(num_layers - 1):
-                # For instance, reduce dimension by half each time (with a lower bound of 256).
-                next_dim = current_dim // 2
-                layers.append(nn.Linear(current_dim, next_dim))
-                layers.append(nn.ReLU())
-                current_dim = next_dim
-
-            # Final classification layer.
-            layers.append(nn.Linear(current_dim, num_classes))
-
-        self.classifier = nn.Sequential(*layers)
-    
-    def forward(self, codebook_embeddings: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            codebook_embeddings: Input tensor of shape (batch_size, num_quantizers, prev_embedding_dim, embedding_dim)
-        """
-        return self.classifier(codebook_embeddings)

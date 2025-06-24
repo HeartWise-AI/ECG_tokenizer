@@ -7,19 +7,11 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-
-from typing import Union
-
 from utils.seed import set_seed
 from utils.ddp import DistributedUtils
 from utils.parser import HeartWiseParser
 from utils.registry import ProjectRegistry
-from projects import (
-    LLMFinetuningProject,
-    ECGTokenizerLinearProbing,
-    BertReportClassifierProject,
-    ECGTokenizerTrainingProject
-)
+from projects.types import ProjectT
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 
@@ -52,12 +44,7 @@ def main(config: HeartWiseConfig):
         )
         
         # Initialize the project
-        project: Union[
-            LLMFinetuningProject, 
-            ECGTokenizerLinearProbing,
-            BertReportClassifierProject,
-            ECGTokenizerTrainingProject
-        ] = ProjectRegistry.get(
+        project: ProjectT = ProjectRegistry.get(
             name=config.pipeline_project # The project to run
         )(
             config=config, # The config object

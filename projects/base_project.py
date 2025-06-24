@@ -5,13 +5,11 @@ from typing import Any, Union
 from abc import ABC, abstractmethod
 
 from utils.enums import RunMode
+from runners.types import RunnerT, RunnerClassT
 from utils.registry import RunnerRegistry
 from utils.wandb_wrapper import WandbWrapper
 from utils.config.heartwise_config import HeartWiseConfig
 from utils.files_handler import generate_output_dir_name, backup_config
-from runners.tokenizer_runner import ECGTokenizerRunner
-from runners.llm_finetuning_runner import LLMFinetuningRunner
-from runners.bert_report_classifier_runner import BertReportClassifierRunner
 
 class BaseProject(ABC):
     """Abstract base class for ML project execution with different run modes.
@@ -126,9 +124,6 @@ class BaseProject(ABC):
         elif self.config.run_mode == RunMode.INFERENCE:
             runner_args.update(self._setup_inference_objects())
         
-        runner: Union[
-            ECGTokenizerRunner, 
-            LLMFinetuningRunner,
-            BertReportClassifierRunner
-        ] = RunnerRegistry.get(self.config.runner_name)(**runner_args)
+        runner_class: RunnerClassT = RunnerRegistry.get(self.config.runner_name)
+        runner: RunnerT = runner_class(**runner_args)
         runner.execute(mode=self.config.run_mode)    

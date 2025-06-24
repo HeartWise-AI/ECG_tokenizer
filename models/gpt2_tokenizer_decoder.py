@@ -5,14 +5,12 @@ from typing import Union, Optional, Dict, Any, Tuple
 from transformers.generation.utils import GenerateOutput
 from transformers import GPT2LMHeadModel, PreTrainedModel
 
-from models.adapters import (
-    LinearAdapter, 
-    EmbeddingAdapter, 
-    SimpleEmbeddingAdapter,
-    SequenceAdapter
+from utils.enums import (
+    ModelName, 
+    AdapterName
 )
-from utils.enums import ModelName
 from utils.registry import ModelRegistry
+from models.types import ModelT, ModelClassT
 
 
 @ModelRegistry.register(ModelName.GPT2_DECODER)
@@ -28,7 +26,7 @@ class GPT2Decoder(nn.Module):
         gpt2_model_name: str = 'gpt2', 
         gpt2_embedding_size: int = 768, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: str = "GPT2_SequenceAdapter",
+        adapter_name: AdapterName = AdapterName.GPT2_SEQUENCE_ADAPTER,
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # Default generation parameters
@@ -64,12 +62,7 @@ class GPT2Decoder(nn.Module):
         }
         
         # Load the adapter class
-        self.adapter_class: Union[
-            EmbeddingAdapter, 
-            LinearAdapter, 
-            SimpleEmbeddingAdapter,
-            SequenceAdapter
-        ] = ModelRegistry.get(adapter_name)
+        self.adapter_class: ModelClassT = ModelRegistry.get(adapter_name)
         if self.adapter_class is None:
             raise ValueError(f"Adapter {adapter_name} not found in ModelRegistry")       
         
@@ -77,7 +70,7 @@ class GPT2Decoder(nn.Module):
         
         # Initialize the adapter to transform quantized features to GPT-2 embedding space
         # Input shape: (batch, channels, sequence_length)
-        self.adapter = self.adapter_class(
+        self.adapter: ModelT = self.adapter_class(
             input_shape=quantized_feature_shape,
             output_size=gpt2_embedding_size, 
             dropout=adapter_dropout
@@ -214,11 +207,11 @@ class GPT2Decoder(nn.Module):
         else:
             adapter_input = quantized_features
             
-        ecg_embedding = self.adapter(adapter_input)
+        ecg_embedding: torch.Tensor = self.adapter(adapter_input)
         
         # Prepare input
-        batch_size = ecg_embedding.size(0)
-        ecg_token = torch.full(
+        batch_size: int = ecg_embedding.size(0)
+        ecg_token: torch.Tensor = torch.full(
             (batch_size, 1),
             self.ecg_token_id,
             dtype=torch.long,
@@ -226,29 +219,29 @@ class GPT2Decoder(nn.Module):
         )
         
         # Create attention mask
-        attention_mask = torch.ones((batch_size, 1), device=ecg_embedding.device)
+        attention_mask: torch.Tensor = torch.ones((batch_size, 1), device=ecg_embedding.device)
         
         # Get input embeddings
-        input_embedding = self.gpt2.get_input_embeddings()(ecg_token)
+        input_embedding: torch.Tensor = self.gpt2.get_input_embeddings()(ecg_token)
         input_embedding[:, 0, :] = ecg_embedding
 
         # Set generation parameters
-        generate_kwargs = generate_kwargs.copy()
-        generate_kwargs.setdefault("attention_mask", attention_mask)
-        generate_kwargs.setdefault("pad_token_id", self.eos_token_id)
-        generate_kwargs.setdefault("eos_token_id", self.eos_token_id)
-        generate_kwargs.setdefault("use_cache", True)
+        generation_params = generate_kwargs.copy()
+        generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("pad_token_id", self.eos_token_id)
+        generation_params.setdefault("eos_token_id", self.eos_token_id)
+        generation_params.setdefault("use_cache", True)
         
         # Apply default parameters
         for key, value in self.default_generation_params.items():
-            generate_kwargs.setdefault(key, value)
+            generation_params.setdefault(key, value)
         
         # Generate
         with torch.inference_mode():
             result = self.gpt2.generate(
                 inputs_embeds=input_embedding,
                 max_length=max_token_length,
-                **generate_kwargs
+                **generation_params
             )
         
         return result
