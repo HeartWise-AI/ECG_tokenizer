@@ -236,12 +236,11 @@ class LLMFinetuningProject(BaseProject):
         # Initialize the tokenizer with the appropriate configuration
         # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
-            # encoder_name=pretrained_config.encoder_name,
-            encoder_name='Residual_Conv_Encoder', # TODO: change this
-            quantizer_name='ECG_Tokenizer_Quantizer', # TODO: change this
+            encoder_name=pretrained_config.encoder_name,
+            quantizer_name=pretrained_config.quantizer_name,
             decoder_name=pretrained_config.decoder_name, 
-            num_quantizers=8, # TODO: change this
-            codebook_size=512, # TODO: change this
+            num_quantizers=pretrained_config.num_quantizers,
+            codebook_size=pretrained_config.codebook_size,
             decoder_mode=pretrained_config.decoder_mode,
             adapter_name=pretrained_config.adapter_name,
         ).to(self.config.device)
