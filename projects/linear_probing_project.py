@@ -12,8 +12,8 @@ from utils.registry import (
     ModelRegistry,
     ProjectRegistry
 )
-from utils.wandb_wrapper import WandbWrapper
 from utils.enums import ProjectName
+from utils.wandb_wrapper import WandbWrapper
 from utils.config import ECGTokenizerLinearProbingConfig
 from projects.base_project import BaseProject
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper

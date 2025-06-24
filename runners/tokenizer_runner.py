@@ -25,11 +25,12 @@ from utils.schedulers import scheduler_is_per_iteration
 from utils.enums import RunMode, DecoderMode, RunnerName
 from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper, ResidualVQ
+from runners.base_runner import BaseRunner
 
 
 @RunnerRegistry.register(RunnerName.ECG_TOKENIZER_TRAINING)
 @RunnerRegistry.register(RunnerName.ECG_TOKENIZER_LINEAR_PROBING)
-class ECGTokenizerRunner:
+class ECGTokenizerRunner(BaseRunner):
     def __init__(
         self, 
         ecg_tokenizer: ECG_Tokenizer_Wrapper, 
@@ -64,26 +65,18 @@ class ECGTokenizerRunner:
         self.decoder_mode: DecoderMode = getattr(self.config, 'decoder_mode', DecoderMode.RECONSTRUCTION)
         self.embedding_extraction_dataloader: DataLoader | None = embedding_extraction_dataloader
         
-    def execute(self, mode: RunMode):
+    def execute(
+        self, 
+        mode: RunMode
+    ):
         """
-        Execute the pipeline in the desired mode.
+        Execute the runner in the specified mode.
         
-        Modes:
-            RunMode.TRAIN: Run the tokenization training (i.e., processing and logging metrics).
-            RunMode.INFERENCE: Tokenize the input texts and output the results.
-            RunMode.VALIDATE: Not implemented.
+        Args:
+            mode: The execution mode (TRAIN, INFERENCE, VALIDATE)
         """
-        if mode == RunMode.TRAIN:
-            self.train()
-        elif mode == RunMode.INFERENCE:
-            self.inference()
-        elif mode == RunMode.VALIDATE:
-            self.validate()
-        elif mode == RunMode.EXTRACT_EMBEDDINGS:
-            self.extract_embeddings()
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
-
+        super().execute(mode)
+        
     def train(self):
         """
         In "TRAIN" mode, iterate over the dataloader, tokenize texts, compute the average token length,
