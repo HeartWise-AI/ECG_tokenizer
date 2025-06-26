@@ -23,14 +23,14 @@ class ECGConfig(PreTrainedConfig):
 			  hidden_size = 256, 
 			  **kwargs):
 	   
-	   super().__init__(pad_token_id=pad_token_id, **kwargs)
-
-	   self.ecg_token_id = ecg_token_id
-	   self.embedding_dim = embedding_dim
-	   self.num_quantizers = num_quantizers
-	   self.codebook_size = codebook_size
-	   self.hidden_size = hidden_size
-	   self.layer_norm_eps = layer_norm_eps
+		super().__init__(pad_token_id=pad_token_id, **kwargs)
+		self.ecg_token_id = ecg_token_id
+		self.embedding_dim = embedding_dim
+		self.num_quantizers = num_quantizers
+		self.codebook_size = codebook_size
+		self.hidden_size = hidden_size
+		self.layer_norm_eps = layer_norm_eps
+		self.pad_token_id = pad_token_id
 
 class ECG_Gemma_config(Gemma3Config):
 
@@ -53,7 +53,7 @@ class ECG_Gemma_model(Gemma3Model):
 
     _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
 
-    def __init__(self, config: ECG_Gemma_config, ecg_codebook):
+    def __init__(self, config: ECG_Gemma_config):
 
 	   super().__init__(config)
 
@@ -127,6 +127,9 @@ class ECG_Gemma_model(Gemma3Model):
 	   output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
 	   output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
 	   return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+	   
+	   ecg_features = None
+
 	   # Replace image id with PAD if the image token if OOV, to avoid index-errors
 	   if input_ids is not None and self.config.ecg_token_id >= self.vocab_size:
 		  special_ecg_mask = input_ids == self.config.ecg_token_id
@@ -233,10 +236,10 @@ class ECG_Gemma3MultiModalProjector(Gemma3MultiModalProjector):
 		#Transpose to (batch_size, seq_length, leads) so that 'leads' is the feature dimension
 	   
 		ecg_outputs = ecg_outputs.transpose(1, 2).contiguous()
-    
-		normed_ecg_outputs = self.mm_soft_emb_norm(ecg_outputs)
+   
+		normed_ecg_outputs = self.ecg_soft_emb_norm(ecg_outputs)
 
-		projected_ecg_outputs = torch.matmul(normed_ecg_outputs, self.mm_input_projection_weight)
+		projected_ecg_outputs = torch.matmul(normed_ecg_outputs, self.ecg_input_projection_weight)
 
 		return projected_ecg_outputs.type_as(ecg_outputs)
 
@@ -258,52 +261,56 @@ class ECG_Gemma3ForConditionalGeneration(Gemma3ForConditionalGeneration):
 		self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 		self.post_init()
 
-    def get_input_embeddings(self):
-	   return self.model.get_input_embeddings()
-
-    def set_input_embeddings(self, value):
-	   self.model.set_input_embeddings(value)
-
-    def get_output_embeddings(self):
-	   return self.lm_head
-
-    def set_output_embeddings(self, new_embeddings):
-	   self.lm_head = new_embeddings
-
-    def set_decoder(self, decoder):
-	   self.model = decoder
-
-    def get_decoder(self):
-	   return self.model
-
-    def get_image_features(self, pixel_values):
-	   return self.model.get_image_features(pixel_values)
-
     def get_ecg_features(self, ecg_signals):
 	   return self.model.get_ecg_features(ecg_signals)
 
     @property
-    def language_model(self):
-	   return self.model.language_model
-
-    @property
-    def vision_tower(self):
-	   return self.model.vision_tower
-   
-    @property
     def ecg_tokenizer(self):
 	   return self.model.ecg_tokenizer
 
-    @property
-    def multi_modal_projector(self):
-	   return self.model.multi_modal_projector
-    
     @auto_docstring
+	def forward_vision(
+	   self,
+	   input_ids: torch.LongTensor = None,
+	   pixel_values: torch.FloatTensor = None,
+	   attention_mask: Optional[torch.Tensor] = None,
+	   position_ids: Optional[torch.LongTensor] = None,
+	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
+	   token_type_ids: Optional[torch.LongTensor] = None,
+	   cache_position: Optional[torch.LongTensor] = None,
+	   inputs_embeds: Optional[torch.FloatTensor] = None,
+	   labels: Optional[torch.LongTensor] = None,
+	   use_cache: Optional[bool] = None,
+	   output_attentions: Optional[bool] = None,
+	   output_hidden_states: Optional[bool] = None,
+	   return_dict: Optional[bool] = None,
+	   logits_to_keep: Union[int, torch.Tensor] = 0,
+	   **lm_kwargs,
+    ) -> Union[Tuple, Gemma3CausalLMOutputWithPast]:
+
+		return super().forward(
+        input_ids=input_ids,
+        pixel_values=pixel_values,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_values=past_key_values,
+        token_type_ids=token_type_ids,
+        cache_position=cache_position,
+        inputs_embeds=inputs_embeds,
+        labels=labels,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        logits_to_keep=logits_to_keep,
+        **lm_kwargs,
+    )
+
+	@auto_docstring
     def forward_ecg(
 	   self,
 	   input_ids: torch.LongTensor = None,
 	   ecg_signals: torch.FloatTensor = None,
-	   pixel_values: torch.FloatTensor = None,
 	   attention_mask: Optional[torch.Tensor] = None,
 	   position_ids: Optional[torch.LongTensor] = None,
 	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
@@ -329,7 +336,6 @@ class ECG_Gemma3ForConditionalGeneration(Gemma3ForConditionalGeneration):
 	   outputs = self.model(
 		  input_ids=input_ids,
 		  ecg_signals = ecg_signals,
-		  pixel_values=pixel_values,
 		  token_type_ids=token_type_ids,
 		  attention_mask=attention_mask,
 		  position_ids=position_ids,
@@ -412,10 +418,12 @@ class ECG_Gemma3ForConditionalGeneration(Gemma3ForConditionalGeneration):
 		  token_type_ids=token_type_ids,
 		  **kwargs,
 	   )
-	   if cache_position[0] == 0:
-    
-		  model_inputs[“ecg_signals”] = ecg_signals 
-		  model_inputs["pixel_values"] = pixel_values
+		if cache_position is not None and cache_position[0] == 0:
+			if ecg_signals is not None:
+    			model_inputs["ecg_signals"] = ecg_signals
+    		if pixel_values is not None:
+        		model_inputs["pixel_values"] = pixel_values
+
 
 	   return model_inputs
 
