@@ -12,19 +12,12 @@ def model_4bit(model):
 
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-
-            quantized_layer = bnb.nn.Linear4bit(
-                in_features = module.in_features,
-                out_features = module.out_features,
-                bias = module.bias is not None,
-                quant_type='nf4',
-                compute_dtype=torch.float16
-            )
-
-            quantized_layer.weight.data = module.weight.data.clone()
-            if module.bias is not None:
-                quantized_layer.bias.data = module.bias.data.clone()
             
+            quantized_layer = bnb.nn.Linear4bit.from_linear(
+                module,
+                quant_type='nf4',
+                compute_dtype=torch.float16)            
+
             parent = model
 
             parts = name.split(".")
@@ -66,7 +59,7 @@ class Training:
             self.model = get_peft_model(self.model, LoraConfig(**lora_config))
         
         if learning_rate == None:            
-            learning_rate = 0.001
+            learning_rate = 2e-4
         
         self.learning_rate = learning_rate
 
