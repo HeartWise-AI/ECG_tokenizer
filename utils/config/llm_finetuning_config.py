@@ -41,6 +41,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Model parameters
     huggingface_model_name: str
+    gpt2_model_name: str
     trainable_model_name: str
     adapter_name: str
     gpt2_embedding_size: int
