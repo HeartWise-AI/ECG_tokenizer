@@ -5,11 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bitsandbytes>=0.46.0",
     "evaluate>=0.4.3",
     "fastparquet>=2024.11.0",
     "iterative-stratification>=0.1.9",
+    "kagglehub>=0.3.12",
     "matplotlib>=3.9.2",
     "pandas>=2.2.3",
+    "peft>=0.15.2",
     "pyarrow>=19.0.0",
     "pytest>=8.3.5",
     "pytest-cov>=6.1.1",
