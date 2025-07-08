@@ -26,7 +26,8 @@ def parse_final_answer(text):
 
     final_answer = raw_parts[-1]
 
-    return final_answer
+    final_answer = final_answer.strip().replace(",", "")
+    return float(final_answer)
 
 df["final_answers"] = df["answer"].apply(parse_final_answer)
 #print(df["final_answers"])
@@ -102,7 +103,7 @@ def full_text(df):
 
   for index, row in df.iterrows():
     #needs to generate the final answer
-    prompt = "Answer the following question with only the final answer, no explanation or additional text. Q: " + str(row["question"]).strip() + "\n A: " + str(row["final_answers"]).strip()
+    prompt = "Q: " + str(row["question"]).strip() + "\n A: " + str(row["final_answers"]).strip()
     inputs.append(prompt)
 
   return inputs
@@ -113,9 +114,20 @@ def prompt_only(df):
 
   for index, row in df.iterrows():
     #needs to generate the final answer
-    prompt = "Answer the following question with only the final answer, no explanation or additional text. Q: " + str(row["question"]).strip() + "\n A: " 
+    prompt = "Q: " + str(row["question"]).strip() + "\n A: " 
     inputs.append(prompt)
 
+  return inputs
+
+def prompt_engineering(df):
+  inputs = []
+    
+  for index, row in df.iterrows():
+     
+    prompt = f"Solve this problem and provide ONLY the final numeric answer. Do not show calculation steps or follow up questions. No explanations. Q: {row['question'].strip()}\nAnswer: The answer is"
+      
+    inputs.append(prompt)
+    
   return inputs
 
 
@@ -150,7 +162,6 @@ def calculate_prompt_length(prompts, tokenizer, max_length):
         prompt_lengths.append(actual_length)
   
   return prompt_lengths
-
 
 #prepare inputs for batching
 #each item in the batch should include input ids, labels, attention_mask
@@ -207,9 +218,34 @@ class TextDataset(Dataset):
         
         return item
 
+class RLDataset(Dataset):
+
+  def __init__(self, encoded_prompts, final_answers):
+
+    self.encoded_prompts = encoded_prompts
+    self.final_answers = final_answers
+    self.input_ids = self.encoded_prompts["input_ids"]
+    self.attention_mask = self.encoded_prompts["attention_mask"]
+
+
+  def __len__(self):
+    return len(self.input_ids)
+  
+  def __getitem__(self, index):
+
+    item = {
+
+      "input_ids": self.input_ids[index],
+      "attention_mask": self.attention_mask[index],
+      "true_answer": self.final_answers[index]
+    }
+
+    return item
+
+
 
 #rewards function gives the output a score of 1.0 if the final answer matches the actual final answer else 0.0 score
-def rewards_function(generated_answer_list, final_answer_list):
+def rewards_functionX(generated_answer_list, final_answer_list):
     
     list_of_scores = []
 
@@ -230,10 +266,23 @@ def rewards_function(generated_answer_list, final_answer_list):
 
     return list_of_scores
 
-#split_index = int(len(df)*0.8)
+def rewards_function(generated_answer_list, final_answer_list):
+    
+    list_of_scores = []
 
-#df_sft = df[:split_index]
-#df_rl = df[split_index:]
+    for i, text in enumerate(generated_answer_list):
+
+      answer = final_answer_list[i]
+      if answer == generated_answer_list[i]:
+        list_of_scores.append(1.0)
+        
+      else:
+        list_of_scores.append(0.0)
+
+    return list_of_scores
+
+
+df["tight_prompt"] = prompt_engineering(df)
 
 df_sft, df_rl = train_test_split(df, test_size=0.2, random_state=42)
 
@@ -241,24 +290,19 @@ df_sft = df_sft.sample(frac=0.1, random_state=42).reset_index(drop=True)
 
 df_rl = df_rl.sample(frac=0.1, random_state=42).reset_index(drop=True)
 
-final_answers_rl = df_rl["final_answers"].tolist()
-
-
 full_text_sft = full_text(df_sft)
 #print(full_text)
-
-full_text_rl = full_text(df_rl)
 
 prompt_sft = prompt_only(df_sft)
 #print(prompt)
 
-prompt_rl = prompt_only(df_rl)
+model_name = "TinyLlama/TinyLlama-1.1B-Chat-v0.3"
 
 #loading the model
-model = AutoModelForCausalLM.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v0.3")
+model = AutoModelForCausalLM.from_pretrained(model_name)
 
 #loading the tokenizer 
-tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v0.3")
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 #make the padding token the end of sequence token
 tokenizer.pad_token = tokenizer.eos_token
@@ -267,7 +311,7 @@ MAX_LENGTH = 512
 
 #tokenizing the full text
 #max length so all of the sequences are the same length (pad to the max length, truncate to max length)
-tokenized_text = tokenizer(
+tokenized_text_sft = tokenizer(
     full_text_sft,
    padding=True,
     truncation=True,
@@ -288,29 +332,21 @@ tokenized_prompt_sft = tokenizer(
 #full_ids = tokenized_text["input_ids"][0]
 #print(len(full_ids))
 
-tokenized_text_rl = tokenizer(
-    full_text_rl,
-   padding=True,
-    truncation=True,
-    max_length = MAX_LENGTH,
-    return_tensors="pt")
-
 tokenized_prompt_rl = tokenizer(
-    prompt_rl,
+    df_rl["tight_prompt"].tolist(),
    padding=True,
     truncation=True,
     max_length = MAX_LENGTH,
     return_tensors="pt")
-
 
 prompt_lengths_sft = calculate_prompt_length(prompt_sft, tokenizer, MAX_LENGTH)
 
-prompt_lengths_rl = calculate_prompt_length(prompt_rl, tokenizer, MAX_LENGTH)
-
 #turn the tokenized inputs into batches
-dataset_sft = TextDataset(tokenized_text, prompt_lengths_sft)
+dataset_sft = TextDataset(tokenized_text_sft, prompt_lengths_sft)
 
-dataset_rl = TextDataset(tokenized_text_rl, prompt_lengths_rl)
+dataset_rl = RLDataset(tokenized_prompt_rl, df_rl["final_answers"].tolist())
+
+
 
 length = dataset_sft.__len__()
 #print(length)
@@ -325,6 +361,8 @@ batch_size = 8
 dataloader_sft = DataLoader(dataset_sft, batch_size=batch_size, shuffle=True)
 
 dataloader_rl = DataLoader(dataset_rl, batch_size=batch_size, shuffle=True)
+
+#dataset_grpo = RLDataset(tokenized_tight_prompt_rl, final_answers_rl)
 
 #print(dataloader.__len__())
 
@@ -352,7 +390,7 @@ pipeline_model = Training(reward_model = rewards_function, model = quant_model, 
 #        print(name, param.data.mean().item())
 
 #
-pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
+#pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
 
 #making the path (does not exist yet)
 adapter_path = "/home/sirfan/ECG_tokenizer/models/adapter_weights"
@@ -363,10 +401,12 @@ adapter_path = "/home/sirfan/ECG_tokenizer/models/adapter_weights"
 #generate reports
 #reports = pipeline_model.generate_initial_reports(dataloader_sft, adapter_path, max_new_tokens=128)
 #print(reports)
-print(len(dataloader_rl))
 
 #train the model
-#pipeline_model.grpo(final_answers_rl, dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=4)
+
+
+pipeline_model.grpo(dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=2)
+
 
 
 

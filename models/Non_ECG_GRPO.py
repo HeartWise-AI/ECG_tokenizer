@@ -55,24 +55,29 @@ def expand_final_answers(final_answers_list, num_candidates):
     
     return expanded_final_answers
 
+def extract_numeric_answer(text):
+    """Extract the first reasonable numeric answer from model output"""
+    
+    # Remove the input question part if it's being repeated
+    if "Q:" in text and "A:" in text:
+        text = text.split("A:")[-1]  # Get everything after the last "A:"
+    
+    # Look for dollar amounts first
+    dollar_matches = re.findall(r'\$(\d+(?:\.\d{2})?)', text)
+    
+    if dollar_matches:
+        return f"{float(dollar_matches[0])}"
+   
+    # Look for standalone numbers
+    number_matches = re.findall(r'\b(\d+(?:\.\d+)?)\b', text)
+    
+    if number_matches:
+        return float(number_matches[-1])
+        
+    return 0.0 
 
 #from the outputted generated text extract the final answer
 #needed to compare with the actual final answer in the rewards function
-import re
-
-def extract_final_answer(text_list):
-    final_answers = []
-    for block in text_list:
-        # Find the first occurrence of A: number (e.g., A: 36 or A: 36s)
-        match = re.search(r"A:\s*([$€]?[0-9]+(?:\.[0-9]+)?)(s)?", block)
-        if match:
-            final_answers.append(match.group(1))
-        else:
-            # fallback: first number in the block
-            fallback = re.search(r"[$€]?[0-9]+(?:\.[0-9]+)?", block)
-            final_answers.append(fallback.group(0) if fallback else "NO_ANSWER")
-    return final_answers
-
 
 class Training:
 
@@ -129,7 +134,6 @@ class Training:
             text_tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v0.3")
         
         self.text_tokenizer = text_tokenizer
-      
 
     
     def train_adapters(self, dataloader, num_epochs = 2, gradient_accumulation_steps = 8):
@@ -268,13 +272,25 @@ class Training:
         return all_reports
 
 
-    def grpo(self, final_answer_list, dataloader, adapter_path, epochs = 4, max_new_tokens = 10, num_candidates = 2):
+    def grpo(self, dataloader, adapter_path, epochs = 4, max_new_tokens = 10, num_candidates = 1):
 
         self.model.load_adapter(adapter_path, adapter_name="lora_adapter")
 
         self.model.to(self.device)
 
         self.model.train()
+
+        stop_tokens = ["A:", "Answer:", "Total:", "Explanation:", "$", "Hence", "Therefore"]
+        stop_token_ids = []
+        
+        for token in stop_tokens:
+
+            encoded = self.text_tokenizer.encode(token, add_special_tokens=False)
+
+            if encoded:
+
+                stop_token_ids.append(encoded[0])
+
 
         for epoch in range(epochs):
 
@@ -288,6 +304,11 @@ class Training:
 
                 input_ids = batch["input_ids"].to(self.device)
 
+                true_answer = batch["true_answer"].to(self.device)
+
+                #print(true_answer)
+                #print(len(true_answer))
+
                 attention_mask = batch.get("attention_mask", None)
             
                 if attention_mask is not None:
@@ -299,43 +320,62 @@ class Training:
                         input_ids = input_ids,
                         attention_mask = attention_mask,
                         max_new_tokens = max_new_tokens,
-                        do_sample = False,
-                        num_beams=4,
-                        num_return_sequences = num_candidates #generate num candidates output sequence per input 
+                        do_sample = True,
+                        temperature = 1.0,
+                        num_return_sequences = num_candidates, #generate num candidates output sequence per input 
+                        pad_token_id=self.text_tokenizer.pad_token_id,
+                        eos_token_id= stop_token_ids + [self.text_tokenizer.eos_token_id],
+                        repetition_penalty = 1.2
+
                     ) #batch_size * num_return_sequences, sequence_length + max_new_tokens
                 
+               
                 #decode the outputs for the batch
-                #list of stringss
-                outputs_for_batch = self.text_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-                print(outputs_for_batch[0])
+                #list of strings
 
+                outputs_for_batch = self.text_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                #print(outputs_for_batch[0])
+
+                cleaned_outputs = []
+                for output in outputs_for_batch:
+                    
+                    cleaned_answer = extract_numeric_answer(output)
+                    
+                    cleaned_outputs.append(float(cleaned_answer))
+
+                #print(cleaned_outputs)
+                #print(len(cleaned_outputs))
+                
                 input_batch_size = input_ids.shape[0] #batch size, seq length
                 #print(input_batch_size)
 
-                #generated final answers
-                final_answers = extract_final_answer(outputs_for_batch)
-                #print(final_answers)
-                #print(len(final_answers))
+                true_answer_list = true_answer.cuda().tolist()
+                #print(true_answer_list)
 
-                expanded_final_answers_list = expand_final_answers(final_answer_list, num_candidates)
+                expanded_final_answers_list = expand_final_answers(true_answer_list, num_candidates)
                 #print(expanded_final_answers_list)
+                #print(len(expanded_final_answers_list))
 
                 #return list of scores
-                scores = self.reward_model(final_answers, final_answer_list)
+                scores = self.reward_model(cleaned_outputs, expanded_final_answers_list)
                 #print(scores)
+                #print(len(scores))
 
                 scores_tensor = torch.tensor(scores, device = self.device)
                 #print(scores_tensor)
 
                 #each row in each batch is an input, each column is output generated for that input
                 scores_tensor = scores_tensor.view(input_batch_size, num_candidates)
+                #print(scores_tensor)
 
                 #shape batch size, 1 
                 #dim = 1 takes the average across second dim num_candidates
                 avg_scores = scores_tensor.mean(dim=1, keepdim=True)
+                #print(avg_scores)
 
                 #batch size, num_candidates
                 advantage_tensor = scores_tensor - avg_scores
+                #print(advantage_tensor)
 
                 for candidate in outputs_for_batch:
 
