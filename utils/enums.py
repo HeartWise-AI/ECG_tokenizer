@@ -75,6 +75,7 @@ class ModelName(str, Enum):
     
     # Decoders
     GPT2_DECODER = "GPT2_Decoder"
+    MEDGEMMA3N_DECODER = "MedGemma3N_Decoder"
     CONV_DECODER = "Conv_Decoder"
     LINEAR_CLASSIFIER_DECODER = "Linear_Classifier_Decoder"
     RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"

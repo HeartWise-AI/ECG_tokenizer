@@ -45,6 +45,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     adapter_name: str
     gpt2_embedding_size: int
     
+    # MedGemma3N parameters
+    medgemma3n_embedding_size: int = 3072
+    
     # Metrics
     metrics: list[str]
     

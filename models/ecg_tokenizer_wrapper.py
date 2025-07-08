@@ -500,6 +500,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         # Additional parameters for GPT2 decoder
         gpt2_model_name: str = 'gpt2',
         gpt2_embedding_size: int = 768,
+        # Additional parameters for MedGemma3N decoder
+        medgemma3n_model_name: str = 'google/medgemma-3n-8b',
+        medgemma3n_embedding_size: int = 3072,
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
     ):
@@ -552,6 +555,17 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             self.decoder = decoder_class(
                 gpt2_model_name=gpt2_model_name,
                 gpt2_embedding_size=gpt2_embedding_size,
+                quantized_feature_shape=quantized_feature_shape,
+                adapter_name=adapter_name,
+                adapter_dropout=adapter_dropout
+            )
+        elif self.decoder_mode == DecoderMode.LLM and decoder_name == ModelName.MEDGEMMA3N_DECODER:
+            # For LLM mode with MedGemma3N, we need the quantized feature shape from the quantizer
+            # Assuming the quantizer outputs (batch, 128, sequence_length)
+            quantized_feature_shape = (128, 82)  # This should match your quantizer output
+            self.decoder = decoder_class(
+                medgemma3n_model_name=medgemma3n_model_name,
+                medgemma3n_embedding_size=medgemma3n_embedding_size,
                 quantized_feature_shape=quantized_feature_shape,
                 adapter_name=adapter_name,
                 adapter_dropout=adapter_dropout
@@ -772,6 +786,21 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 reconstructed_output = decoder_output
                 # Create a dict for consistency
                 return {"logits": reconstructed_output, "indices": indices, "commit_loss": commit_loss}
+        elif self.decoder_mode == DecoderMode.LLM and self.decoder_name == ModelName.MEDGEMMA3N_DECODER:
+            # For MedGemma3N decoder, pass the quantized features and optional LLM parameters
+            decoder_output = self.decoder(
+                quantized_features=quantized,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            # MedGemma3N decoder returns a dict - return it directly for LLM mode
+            if isinstance(decoder_output, dict):
+                return decoder_output  # Return the dict directly instead of extracting tensor
+            else:
+                reconstructed_output = decoder_output
+                # Create a dict for consistency
+                return {"logits": reconstructed_output, "indices": indices, "commit_loss": commit_loss}
         else:
             # Standard decoder (classification or reconstruction)
             reconstructed_output = self.decoder(quantized)
@@ -789,8 +818,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         **generate_kwargs
     ) -> torch.Tensor:
         """
-        Generate a clinical report from ECG signal using the GPT2 decoder.
-        Only available when decoder_mode is LLM and decoder is GPT2_DECODER.
+        Generate a clinical report from ECG signal using the LLM decoder.
+        Only available when decoder_mode is LLM and decoder is GPT2_DECODER or MEDGEMMA3N_DECODER.
         
         Args:
             x: ECG signal tensor
@@ -800,8 +829,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         Returns:
             Generated token IDs
         """
-        if self.decoder_mode != DecoderMode.LLM or self.decoder_name != ModelName.GPT2_DECODER:
-            raise ValueError("generate_report() is only available with GPT2_DECODER in LLM mode")
+        if self.decoder_mode != DecoderMode.LLM or self.decoder_name not in [ModelName.GPT2_DECODER, ModelName.MEDGEMMA3N_DECODER]:
+            raise ValueError("generate_report() is only available with GPT2_DECODER or MEDGEMMA3N_DECODER in LLM mode")
         
         if self.decoder is None:
             raise ValueError("No decoder available for generation")
@@ -813,7 +842,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         features = self.encoder(x)
         quantized, _, _ = self.quantizer(features)
         
-        # Generate report using the GPT2 decoder
+        # Generate report using the LLM decoder
         return self.decoder.generate_report(
             quantized_features=quantized,
             max_token_length=max_token_length,
