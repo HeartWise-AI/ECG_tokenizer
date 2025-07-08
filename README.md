@@ -87,6 +87,25 @@ Multi-GPU Inference - no results logged on wandb (see scripts/runner.sh)
 source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/gpt2/base_config.yaml --selected_gpus 0,1,2,3
 ```
 
+#### MedGemma3N
+##### Run Training
+```base
+# Single GPU training without logging results to wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/llm_finetuning/medgemma3n/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode train
+
+# Multi-GPU training with results logging on wandb (see scripts/runner.sh)
+bash scripts/runner.sh --base_config config/llm_finetuning/medgemma3n/base_config.yaml --selected_gpus 0,1 --use_wandb true --run_mode train
+
+# Multi-GPU hyperparameters fine-tuning - RunMode and UseWandb are forced to train and true respectively (see scripts/run_sweep.sh)
+bash scripts/run_sweep.sh --base_config config/llm_finetuning/medgemma3n/base_config.yaml --sweep_config config/llm_finetuning/medgemma3n/sweep_config.yaml --selected_gpus 0,1 --count 5
+```
+
+##### Generate Inference Results
+Multi-GPU Inference - no results logged on wandb (see scripts/runner.sh)
+```base
+source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/llm_finetuning/medgemma3n/base_config.yaml --selected_gpus 0,1,2,3
+```
+
 ### LLMs evaluation with Bert
 ```base
 # Inference on Multi-GPU without logging results to wandb
