@@ -87,7 +87,7 @@ class LLMFinetuningProject(BaseProject):
             codebook_size=pretrained_config.codebook_size,
             decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
             adapter_name=self.config.adapter_name,
-            gpt2_model_name=self.config.gpt2_model_name,
+            huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
@@ -245,7 +245,7 @@ class LLMFinetuningProject(BaseProject):
             codebook_size=pretrained_config.codebook_size,
             decoder_mode=pretrained_config.decoder_mode,
             adapter_name=pretrained_config.adapter_name,
-            gpt2_model_name=pretrained_config.gpt2_model_name if hasattr(pretrained_config, 'gpt2_model_name') else self.config.gpt2_model_name,
+            huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
             llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size

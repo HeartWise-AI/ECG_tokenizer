@@ -31,7 +31,6 @@ decoder_name: !!str "GPT2_Decoder"
 tokenizer_name: !!str "gpt2-medium"
 max_token_length: !!int 256
 huggingface_model_name: !!str "gpt2-medium"
-gpt2_model_name: !!str "gpt2-medium"
 adapter_name: !!str "GPT2_SequenceAdapter"
 llm_input_embedding_size: !!int 1024
 # Dataset parameters

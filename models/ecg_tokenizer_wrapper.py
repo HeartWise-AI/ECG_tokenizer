@@ -498,7 +498,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         decoder_mode: DecoderMode = DecoderMode.LLM,
         num_classes: int = 77,
         # Additional parameters for GPT2 decoder
-        gpt2_model_name: str = 'gpt2',
+        huggingface_model_name: str = 'gpt2',
         llm_input_embedding_size: int = 768,
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
@@ -550,7 +550,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             # Assuming the quantizer outputs (batch, 128, sequence_length)
             quantized_feature_shape = (128, 82)  # This should match your quantizer output
             self.decoder = decoder_class(
-                gpt2_model_name=gpt2_model_name,
+                huggingface_model_name=huggingface_model_name,
                 llm_input_embedding_size=llm_input_embedding_size,
                 quantized_feature_shape=quantized_feature_shape,
                 adapter_name=adapter_name,

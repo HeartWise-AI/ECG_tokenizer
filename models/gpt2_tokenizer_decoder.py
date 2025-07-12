@@ -23,7 +23,7 @@ class GPT2Decoder(nn.Module):
     """
     def __init__(
         self, 
-        gpt2_model_name: str = 'gpt2', 
+        huggingface_model_name: str = 'gpt2', 
         llm_input_embedding_size: int = 768, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
         adapter_name: AdapterName = AdapterName.GPT2_SEQUENCE_ADAPTER,
@@ -39,7 +39,7 @@ class GPT2Decoder(nn.Module):
         Initialize the GPT-2 decoder.
         
         Args:
-            gpt2_model_name: Pre-trained GPT-2 model name from HuggingFace.
+            huggingface_model_name: Pre-trained GPT-2 model name from HuggingFace.
             llm_input_embedding_size: GPT-2 embedding dimension (must match model).
             quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
             adapter_name: Name of adapter to transform ECG features to GPT-2 space.
@@ -77,7 +77,7 @@ class GPT2Decoder(nn.Module):
         )
         
         # Load the GPT-2 model
-        self.gpt2: PreTrainedModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
+        self.gpt2: PreTrainedModel = GPT2LMHeadModel.from_pretrained(huggingface_model_name)
         
         # Check if embedding size matches GPT-2's hidden size
         if llm_input_embedding_size != self.gpt2.config.n_embd:

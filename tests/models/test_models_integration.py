@@ -2,7 +2,7 @@ import unittest
 import torch
 from unittest.mock import patch, MagicMock
 
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.gpt2_tokenizer_decoder import GPT2Decoder
 from models.adapters import (
     EmbeddingAdapter, 
     LinearAdapter, 
@@ -13,7 +13,7 @@ from utils.enums import AdapterName
 
 class TestModelsIntegration(unittest.TestCase):
     
-    @patch('models.gpt2_with_embeddings.GPT2LMHeadModel')
+    @patch('models.gpt2_tokenizer_decoder.GPT2LMHeadModel')
     def setUp(self, mock_gpt2):
         # Mock GPT2 model to avoid loading from HuggingFace
         self.mock_gpt2_instance = mock_gpt2.from_pretrained.return_value
@@ -37,8 +37,8 @@ class TestModelsIntegration(unittest.TestCase):
         
         # Create GPT2WithEmbedding model with EmbeddingAdapter
         with patch.object(ModelRegistry, 'get', return_value=EmbeddingAdapter):
-            model = GPT2WithEmbedding(
-                gpt2_model_name='gpt2',
+            model = GPT2Decoder(
+                huggingface_model_name='gpt2',
                 llm_input_embedding_size=768,
                 ecg_embedding_size=(8, 128, 82),
                 adapter_name=adapter_name,
@@ -65,8 +65,8 @@ class TestModelsIntegration(unittest.TestCase):
         
         # Create GPT2WithEmbedding model with LinearAdapter
         with patch.object(ModelRegistry, 'get', return_value=LinearAdapter):
-            model = GPT2WithEmbedding(
-                gpt2_model_name='gpt2',
+            model = GPT2Decoder(
+                huggingface_model_name='gpt2',
                 llm_input_embedding_size=768,
                 ecg_embedding_size=(8, 128, 82),
                 adapter_name=adapter_name,
@@ -93,8 +93,8 @@ class TestModelsIntegration(unittest.TestCase):
         
         # Create GPT2WithEmbedding model with SimpleEmbeddingAdapter
         with patch.object(ModelRegistry, 'get', return_value=SimpleEmbeddingAdapter):
-            model = GPT2WithEmbedding(
-                gpt2_model_name='gpt2',
+            model = GPT2Decoder(
+                huggingface_model_name='gpt2',
                 llm_input_embedding_size=768,
                 ecg_embedding_size=(8, 128, 82),
                 adapter_name=adapter_name,
@@ -127,8 +127,8 @@ class TestModelsIntegration(unittest.TestCase):
         for adapter_cls, adapter_name in zip(adapters, adapter_names):
             with self.subTest(adapter=adapter_name):
                 with patch.object(ModelRegistry, 'get', return_value=adapter_cls):
-                    model = GPT2WithEmbedding(
-                        gpt2_model_name='gpt2',
+                    model = GPT2Decoder(
+                        huggingface_model_name='gpt2',
                         llm_input_embedding_size=768,
                         ecg_embedding_size=(8, 128, 82),
                         adapter_name=adapter_name,

@@ -1,23 +1,24 @@
 # pipeline project
 pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
-model_name: !!str "GPT2_Tokenizer_Wrapper"
+model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 run_mode: !!str "train"
 num_epochs: !!int 10
 seed: !!int 42
 base_checkpoint_path: !!str "checkpoints"
-pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Classification/6l7oogin_20250608-111318/best_model_epoch_7.pt"
-# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_LLM_finetuning_MHI/1i4yuhql_20250615-172705/checkpoint_epoch_10.pt"
+# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Classification/6l7oogin_20250608-111318/best_model_epoch_7.pt"
+# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Reconstruction/0hopfbqj_20250624-154105/best_model_epoch_7.pt"
 # wandb parameters
-wandb_project: !!str "ECG_tokenizer_LLM_finetuning_MHI"
-wandb_entity: !!str "jacques-delfrate"
+wandb_project: !!str "ECG_Tokenizer_LLM_Finetuning"
+wandb_entity: !!str "mhi_ai"
 use_wandb: !!bool true
 # training parameters
 llm_lr: !!float 5e-5
 adapter_lr: !!float 5e-4
 llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
-scheduler_type: !!str "cosine_warm_restart"
+scheduler_type: !!str "cosine"
 lr_step_period: !!int 1
 factor: !!float 0.3
 optimizer: !!str "AdamW"
@@ -34,15 +35,14 @@ tokenizer_name: !!str "gpt2"
 max_token_length: !!int 256
 # LLM model parameters
 huggingface_model_name: !!str "gpt2"
-trainable_model_name: !!str "GPT2_Tokenizer_Wrapper"
 adapter_name: !!str "GPT2_SequenceAdapter"
-gpt2_embedding_size: !!int 768
+llm_input_embedding_size: !!int 768
 # Dataset parameters
-train_dataset_path: !!str "parquets/merged_datasets/train/mimic_mhi_psa_train_updated_stratified_20%.parquet"
+train_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_psa_train_updated.parquet"
 validation_dataset_path: !!str "parquets/merged_datasets/test/mimic_mhi_psa_test_updated_stratified_20%.parquet"
 num_workers: !!int 12
 batch_size: !!int 16
-signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original
+signal_path_column: !!str "waveform_path_original" # waveform_path_psa or waveform_path_original
 # ECG parameters
 ecg_waveform_length: !!int 2500
 ecg_num_leads: !!int 12
