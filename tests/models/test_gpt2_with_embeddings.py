@@ -25,7 +25,7 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         # Create model instance
         self.model = GPT2WithEmbedding(
             gpt2_model_name='gpt2',
-            gpt2_embedding_size=768,
+            llm_input_embedding_size=768,
             ecg_embedding_size=(8, 128, 82),
             adapter_name=AdapterName.GPT2_EMBEDDING_ADAPTER,
             adapter_dropout=0.2

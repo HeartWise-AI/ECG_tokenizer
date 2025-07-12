@@ -24,7 +24,7 @@ class GPT2Decoder(nn.Module):
     def __init__(
         self, 
         gpt2_model_name: str = 'gpt2', 
-        gpt2_embedding_size: int = 768, 
+        llm_input_embedding_size: int = 768, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
         adapter_name: AdapterName = AdapterName.GPT2_SEQUENCE_ADAPTER,
         adapter_dropout: float = 0.2,
@@ -40,7 +40,7 @@ class GPT2Decoder(nn.Module):
         
         Args:
             gpt2_model_name: Pre-trained GPT-2 model name from HuggingFace.
-            gpt2_embedding_size: GPT-2 embedding dimension (must match model).
+            llm_input_embedding_size: GPT-2 embedding dimension (must match model).
             quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
             adapter_name: Name of adapter to transform ECG features to GPT-2 space.
             adapter_dropout: Dropout rate for the adapter.
@@ -72,7 +72,7 @@ class GPT2Decoder(nn.Module):
         # Input shape: (batch, channels, sequence_length)
         self.adapter: ModelT = self.adapter_class(
             input_shape=quantized_feature_shape,
-            output_size=gpt2_embedding_size, 
+            output_size=llm_input_embedding_size, 
             dropout=adapter_dropout
         )
         
@@ -80,8 +80,8 @@ class GPT2Decoder(nn.Module):
         self.gpt2: PreTrainedModel = GPT2LMHeadModel.from_pretrained(gpt2_model_name)
         
         # Check if embedding size matches GPT-2's hidden size
-        if gpt2_embedding_size != self.gpt2.config.n_embd:
-            raise ValueError(f"Embedding size {gpt2_embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
+        if llm_input_embedding_size != self.gpt2.config.n_embd:
+            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
         
         # Add special ECG token
         self.gpt2.resize_token_embeddings(len(self.gpt2.get_input_embeddings().weight) + 1)

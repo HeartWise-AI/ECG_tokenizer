@@ -32,9 +32,8 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.num_workers = 4
         mock_config.world_size = 1
         mock_config.device = 0
-        mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
-        mock_config.gpt2_embedding_size = 768
+        mock_config.llm_input_embedding_size = 768
         mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
         mock_config.adapter_dropout = 0.1
         mock_config.lr = 0.001
@@ -139,9 +138,8 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.num_workers = 4
         mock_config.world_size = 1
         mock_config.device = 0
-        mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
-        mock_config.gpt2_embedding_size = 768
+        mock_config.llm_input_embedding_size = 768
         mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
         mock_config.adapter_dropout = 0.1
         mock_config.checkpoint_dir = "/path/to/checkpoint.pt"
