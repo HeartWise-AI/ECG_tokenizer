@@ -130,17 +130,6 @@ def prompt_engineering(df):
     
   return inputs
 
-
-def extract_final_answer(generated_text_list):
-
-    final_answer_list = []
-
-    for text in generated_text_list:
-        final_answer = text.split("A:")[-1].strip()
-        final_answer_list.append(final_answer)
-
-    return final_answer_list
-
 #calculate prompt lengths
 #not all prompts have the same length
 def calculate_prompt_length(prompts, tokenizer, max_length):
@@ -242,30 +231,6 @@ class RLDataset(Dataset):
 
     return item
 
-
-
-#rewards function gives the output a score of 1.0 if the final answer matches the actual final answer else 0.0 score
-def rewards_functionX(generated_answer_list, final_answer_list):
-    
-    list_of_scores = []
-
-    for i, text in enumerate(generated_answer_list):
-        outputted_answer = None
-        answer = final_answer_list[i]
-
-        for word in text.split():
-            if word.isdigit():
-                outputted_answer = word
-                break
-
-        if outputted_answer is not None and str(outputted_answer) == str(answer):
-            list_of_scores.append(1.0)
-        
-        else:
-            list_of_scores.append(0.0)
-
-    return list_of_scores
-
 def rewards_function(generated_answer_list, final_answer_list):
     
     list_of_scores = []
@@ -362,14 +327,8 @@ dataloader_sft = DataLoader(dataset_sft, batch_size=batch_size, shuffle=True)
 
 dataloader_rl = DataLoader(dataset_rl, batch_size=batch_size, shuffle=True)
 
-#dataset_grpo = RLDataset(tokenized_tight_prompt_rl, final_answers_rl)
-
 #print(dataloader.__len__())
 
-#make model 4 bit
-quant_model = model_4bit(model)
-#for name, module in quant_model.named_parameters():
-#  print(name)
 
 #r and lora_alpha same value
 
@@ -383,23 +342,23 @@ lora_config = {
 #text tokenizer default defined in training class
 #weight decay default defined in training class
 
-pipeline_model = Training(reward_model = rewards_function, model = quant_model, lora_config = lora_config)
+pipeline_model = Training(reward_model = rewards_function, model = model, lora_config = lora_config)
 
 #for name, param in pipeline_model.model.named_parameters():
 #    if "lora" in name:
 #        print(name, param.data.mean().item())
 
 #
-#pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
+pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
 
 #making the path (does not exist yet)
 adapter_path = "/home/sirfan/ECG_tokenizer/models/adapter_weights"
 
 #save the weights at the path
-#pipeline_model.save_adapter_checkpoint(adapter_path)
+pipeline_model.save_adapter_checkpoint(adapter_path)
 
 #generate reports
-#reports = pipeline_model.generate_initial_reports(dataloader_sft, adapter_path, max_new_tokens=128)
+reports = pipeline_model.generate_initial_reports(dataloader_sft, adapter_path, max_new_tokens=128)
 #print(reports)
 
 #train the model

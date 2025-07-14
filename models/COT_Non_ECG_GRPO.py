@@ -158,8 +158,10 @@ class Training:
             for step, batch in enumerate(dataloader):
                 #token IDs that represent the input text
                 input_ids = batch["input_ids"].to(self.device)
+                print(input_ids.shape)
 
                 labels = batch["labels"].to(self.device)
+                print(labels.shape)
 
                 attention_mask = batch.get('attention_mask', None)
 
@@ -224,7 +226,7 @@ class Training:
         print(f"Adapter saved at path {path}")
 
 
-    def generate_initial_reports(self, dataloader, adapter_path, max_new_tokens = 10):
+    def generate_initial_reports(self, dataloader, adapter_path, max_new_tokens = 100):
 
         #input saved adapters in the file into base model
         self.model.load_adapter(adapter_path, adapter_name="lora_adapter")
@@ -251,13 +253,14 @@ class Training:
                 #beams are deterministic 
                 #generates token ID sequences
                 generated_ids = self.model.generate(
-                    input_ids = input_ids,
-                    attention_mask = attention_mask,
-                    max_new_tokens = max_new_tokens, #number of tokens that can be generated after input seq length
-                    do_sample = False,
-                    num_beams = 4,
-                    num_return_sequences = 1,
-                    temperature=0
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,      # allow randomness
+                num_beams=1,         # no beam search
+                num_return_sequences=1,
+                temperature=0.7      # softer sampling
+
                 )
                
             #converts each sequence of tokens into string
@@ -305,6 +308,9 @@ class Training:
                 input_ids = batch["input_ids"].to(self.device)
 
                 true_answer = batch["true_answer"].to(self.device)
+
+                follow_up_answers = batch["numeric_follow_up_answers"].to(self.device)
+                print(follow_up_answers)
 
                 #print(true_answer)
                 #print(len(true_answer))
