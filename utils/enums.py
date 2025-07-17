@@ -54,7 +54,8 @@ class ConfigName(str, Enum):
     BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
-    ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"    
+    ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    ECG_TOKENIZER_INSTRUCT_TUNING = "ECG_Tokenizer_Instruct_Tuning"
     
     def __str__(self):
         return self.value
