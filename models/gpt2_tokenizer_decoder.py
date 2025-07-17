@@ -20,6 +20,7 @@ class GPT2Decoder(nn.Module):
     
     Transforms ECG quantized features into GPT-2's embedding space via an adapter,
     then generates text reports using either teacher forcing or ECG-only training.
+    Now supports question-answering about ECG data.
     """
     def __init__(
         self, 
@@ -83,17 +84,24 @@ class GPT2Decoder(nn.Module):
         if llm_input_embedding_size != self.llm_model.config.n_embd:
             raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.llm_model.config.n_embd}")
         
-        # Add special ECG token
-        self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
-        self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
-        self.eos_token_id = self.llm_model.config.eos_token_id
+        # Add special tokens: ECG, Question Start, Question End
+        original_vocab_size = len(self.gpt2.get_input_embeddings().weight)
+        self.gpt2.resize_token_embeddings(original_vocab_size + 3)
+        
+        # Define special token IDs
+        self.ecg_token_id = original_vocab_size
+        self.question_start_token_id = original_vocab_size + 1
+        self.question_end_token_id = original_vocab_size + 2
+        self.eos_token_id = self.gpt2.config.eos_token_id
         
     def forward(
         self, 
         quantized_features: torch.Tensor,
         input_ids: torch.Tensor, 
         labels: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None, 
+        attention_mask: Optional[torch.Tensor] = None,
+        question_ids: Optional[torch.Tensor] = None,
+        question_attention_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """
         Forward pass for training or generation setup.
@@ -103,6 +111,8 @@ class GPT2Decoder(nn.Module):
             input_ids: Text token IDs (batch, seq_len). Required for training.
             attention_mask: Attention mask for padding tokens (batch, seq_len).
             labels: Target labels for loss computation (batch, seq_len).
+            question_ids: Question token IDs (batch, question_seq_len). Optional.
+            question_attention_mask: Attention mask for question padding (batch, question_seq_len).
             
         Returns:
             Dictionary with loss, logits, and other GPT-2 outputs.
@@ -114,7 +124,119 @@ class GPT2Decoder(nn.Module):
         quantized_features = quantized_features.to(dtype=torch.float32)
         ecg_embedding = self.adapter(quantized_features)  # (batch, embedding_size)       
 
-        return self._forward_teacher_forcing(ecg_embedding, input_ids, labels, attention_mask)
+        if question_ids is not None:
+            return self._forward_with_questions(
+                ecg_embedding, input_ids, labels, question_ids, 
+                attention_mask, question_attention_mask
+            )
+        else:
+            return self._forward_teacher_forcing(ecg_embedding, input_ids, labels, attention_mask)
+
+    def _forward_with_questions(
+        self,
+        ecg_embedding: torch.Tensor,
+        input_ids: torch.Tensor,
+        labels: torch.Tensor,
+        question_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        question_attention_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Any]:
+        """
+        Forward pass with questions about ECG data.
+        
+        Sequence structure: [ECG_TOKEN] [QUESTION_START] question tokens [QUESTION_END] response tokens
+        
+        Args:
+            ecg_embedding: Processed ECG features (batch, embedding_dim).
+            input_ids: Response token IDs (batch, seq_len).
+            attention_mask: Attention mask for response padding (batch, seq_len).
+            labels: Target labels for loss computation (batch, seq_len).
+            question_ids: Question token IDs (batch, question_seq_len).
+            question_attention_mask: Attention mask for question padding (batch, question_seq_len).
+            
+        Returns:
+            GPT-2 model outputs with loss and logits.
+        """
+        batch_size = input_ids.size(0)
+        
+        # Create ECG token
+        ecg_token = torch.full(
+            (batch_size, 1),
+            self.ecg_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device
+        )
+        
+        # Create question start and end tokens
+        question_start_token = torch.full(
+            (batch_size, 1),
+            self.question_start_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device
+        )
+        question_end_token = torch.full(
+            (batch_size, 1),
+            self.question_end_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device
+        )
+        
+        # Concatenate: [ECG] [Q_START] question [Q_END] response
+        full_input_ids = torch.cat([
+            ecg_token,
+            question_start_token,
+            question_ids,
+            question_end_token,
+            input_ids
+        ], dim=1)
+        
+        # Create full attention mask
+        ecg_mask = torch.ones((batch_size, 1), device=input_ids.device, dtype=torch.long)
+        question_start_mask = torch.ones((batch_size, 1), device=input_ids.device, dtype=torch.long)
+        question_end_mask = torch.ones((batch_size, 1), device=input_ids.device, dtype=torch.long)
+        
+        # Handle optional masks
+        if question_attention_mask is None:
+            question_attention_mask = torch.ones_like(question_ids)
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+            
+        full_attention_mask = torch.cat([
+            ecg_mask,
+            question_start_mask,
+            question_attention_mask,
+            question_end_mask,
+            attention_mask
+        ], dim=1)
+        
+        # Create full labels (ignore loss for ECG, question tokens, and question delimiters)
+        if labels is not None:
+            ecg_label = torch.full((batch_size, 1), self.label_ignore_index, dtype=labels.dtype, device=labels.device)
+            question_start_label = torch.full((batch_size, 1), self.label_ignore_index, dtype=labels.dtype, device=labels.device)
+            question_labels = torch.full(question_ids.shape, self.label_ignore_index, dtype=labels.dtype, device=labels.device)
+            question_end_label = torch.full((batch_size, 1), self.label_ignore_index, dtype=labels.dtype, device=labels.device)
+            
+            full_labels = torch.cat([
+                ecg_label,
+                question_start_label,
+                question_labels,
+                question_end_label,
+                labels
+            ], dim=1)
+        else:
+            full_labels = None
+        
+        # Get input embeddings and replace the ECG token's embedding
+        input_embedding = self.gpt2.get_input_embeddings()(full_input_ids)
+        input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
+        
+        # Forward pass through GPT-2
+        outputs = self.gpt2(
+            inputs_embeds=input_embedding,
+            attention_mask=full_attention_mask,
+            labels=full_labels
+        )
+        return outputs
 
     def _forward_teacher_forcing(
         self, 
@@ -239,6 +361,111 @@ class GPT2Decoder(nn.Module):
         # Generate
         with torch.inference_mode():
             result = self.llm_model.generate(
+                inputs_embeds=input_embedding,
+                max_length=max_token_length,
+                **generation_params
+            )
+        
+        return result
+
+    @torch.no_grad()
+    def answer_question(
+        self,
+        quantized_features: torch.Tensor,
+        question_ids: torch.Tensor,
+        question_attention_mask: Optional[torch.Tensor] = None,
+        max_token_length: int = 512,
+        **generate_kwargs
+    ) -> Union[GenerateOutput, torch.Tensor]:
+        """
+        Answer a question about the ECG data.
+        
+        Args:
+            quantized_features: ECG features from tokenizer (batch, seq_len, features).
+            question_ids: Question token IDs (batch, question_seq_len).
+            question_attention_mask: Attention mask for question padding (batch, question_seq_len).
+            max_token_length: Maximum number of tokens to generate.
+            **generate_kwargs: Additional parameters for GPT-2 generation.
+            
+        Returns:
+            Generated answer token IDs (batch, generated_length).
+            
+        Example:
+            >>> features = tokenizer.encode(ecg_signal)  # (1, 128, 82)
+            >>> question = tokenizer.encode("What is the heart rate?")  # (1, question_len)
+            >>> answer_tokens = decoder.answer_question(features, question, max_token_length=50)
+            >>> answer = tokenizer.decode(answer_tokens[0])
+        """
+        # Transform features to embedding space
+        if len(quantized_features.shape) == 3:
+            adapter_input = quantized_features.unsqueeze(1)
+        else:
+            adapter_input = quantized_features
+            
+        ecg_embedding: torch.Tensor = self.adapter(adapter_input)
+        batch_size = ecg_embedding.size(0)
+        
+        # Create special tokens
+        ecg_token = torch.full(
+            (batch_size, 1),
+            self.ecg_token_id,
+            dtype=torch.long,
+            device=ecg_embedding.device
+        )
+        question_start_token = torch.full(
+            (batch_size, 1),
+            self.question_start_token_id,
+            dtype=torch.long,
+            device=ecg_embedding.device
+        )
+        question_end_token = torch.full(
+            (batch_size, 1),
+            self.question_end_token_id,
+            dtype=torch.long,
+            device=ecg_embedding.device
+        )
+        
+        # Build input sequence: [ECG] [Q_START] question [Q_END]
+        input_ids = torch.cat([
+            ecg_token,
+            question_start_token,
+            question_ids,
+            question_end_token
+        ], dim=1)
+        
+        # Create attention mask
+        ecg_mask = torch.ones((batch_size, 1), device=ecg_embedding.device, dtype=torch.long)
+        question_start_mask = torch.ones((batch_size, 1), device=ecg_embedding.device, dtype=torch.long)
+        question_end_mask = torch.ones((batch_size, 1), device=ecg_embedding.device, dtype=torch.long)
+        
+        if question_attention_mask is None:
+            question_attention_mask = torch.ones_like(question_ids)
+            
+        attention_mask = torch.cat([
+            ecg_mask,
+            question_start_mask,
+            question_attention_mask,
+            question_end_mask
+        ], dim=1)
+        
+        # Get input embeddings and replace ECG token embedding
+        input_embedding = self.gpt2.get_input_embeddings()(input_ids)
+        input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
+        
+        # Set generation parameters
+        generation_params = generate_kwargs.copy()
+        generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("pad_token_id", self.eos_token_id)
+        generation_params.setdefault("eos_token_id", self.eos_token_id)
+        generation_params.setdefault("use_cache", True)
+        
+        # Apply default parameters
+        for key, value in self.default_generation_params.items():
+            generation_params.setdefault(key, value)
+        
+        # Generate
+        with torch.inference_mode():
+            result = self.gpt2.generate(
                 inputs_embeds=input_embedding,
                 max_length=max_token_length,
                 **generation_params
