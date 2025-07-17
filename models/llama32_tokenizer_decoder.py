@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from typing import Union, Optional, Dict, Any, Tuple
 from transformers.generation.utils import GenerateOutput
-from transformers import GPT2LMHeadModel, PreTrainedModel
+from transformers import LlamaForCausalLM, LlamaTokenizer, PreTrainedModel
 
 from utils.enums import (
     ModelName, 
@@ -13,20 +13,20 @@ from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
 
 
-@ModelRegistry.register(ModelName.GPT2_DECODER)
-class GPT2Decoder(nn.Module):
+@ModelRegistry.register(ModelName.LLAMA32_DECODER)
+class Llama32Decoder(nn.Module):
     """
-    GPT-2 decoder that generates clinical reports from quantized ECG features.
+    Llama 3.2 decoder that generates clinical reports from quantized ECG features.
     
-    Transforms ECG quantized features into GPT-2's embedding space via an adapter,
+    Transforms ECG quantized features into Llama 3.2's embedding space via an adapter,
     then generates text reports using either teacher forcing or ECG-only training.
     """
     def __init__(
         self, 
-        huggingface_model_name: str = 'gpt2', 
-        llm_input_embedding_size: int = 768, 
+        huggingface_model_name: str = 'meta-llama/Llama-3.2-3B', 
+        llm_input_embedding_size: int = 2048, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: AdapterName = AdapterName.GPT2_SEQUENCE_ADAPTER,
+        adapter_name: AdapterName = AdapterName.LLAMA32_SEQUENCE_ADAPTER,
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # Default generation parameters
@@ -36,13 +36,13 @@ class GPT2Decoder(nn.Module):
         default_num_beams: int = 4,
     ):
         """
-        Initialize the GPT-2 decoder.
+        Initialize Llama 3.2 decoder.
         
         Args:
-            huggingface_model_name: Pre-trained GPT-2 model name from HuggingFace.
-            llm_input_embedding_size: GPT-2 embedding dimension (must match model).
+            huggingface_model_name: Name/path of the Llama 3.2 model.
+            llm_input_embedding_size: Embedding dimension of the Llama 3.2 model.
             quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
-            adapter_name: Name of adapter to transform ECG features to GPT-2 space.
+            adapter_name: Name of adapter to transform ECG features to Llama 3.2 space.
             adapter_dropout: Dropout rate for the adapter.
             label_ignore_index: Index to ignore in loss computation.
             default_do_sample: Default sampling strategy for generation.
@@ -50,7 +50,7 @@ class GPT2Decoder(nn.Module):
             default_temperature: Default temperature for generation.
             default_num_beams: Default number of beams for beam search.
         """
-        super(GPT2Decoder, self).__init__()
+        super(Llama32Decoder, self).__init__()
         
         # Store configuration
         self.label_ignore_index = label_ignore_index
@@ -68,7 +68,7 @@ class GPT2Decoder(nn.Module):
         
         self.adapter_name = adapter_name
         
-        # Initialize the adapter to transform quantized features to GPT-2 embedding space
+        # Initialize the adapter to transform quantized features to Llama 3.2 embedding space
         # Input shape: (batch, channels, sequence_length)
         self.adapter: ModelT = self.adapter_class(
             input_shape=quantized_feature_shape,
@@ -76,18 +76,18 @@ class GPT2Decoder(nn.Module):
             dropout=adapter_dropout
         )
         
-        # Load the GPT-2 model
-        self.llm_model: PreTrainedModel = GPT2LMHeadModel.from_pretrained(huggingface_model_name)
+        # Load the Llama 3.2 model
+        self.llm_model: PreTrainedModel = LlamaForCausalLM.from_pretrained(huggingface_model_name)
         
-        # Check if embedding size matches GPT-2's hidden size
-        if llm_input_embedding_size != self.llm_model.config.n_embd:
-            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.llm_model.config.n_embd}")
+        # Check if embedding size matches Llama 3.2's hidden size
+        if llm_input_embedding_size != self.llm_model.config.hidden_size:
+            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match Llama 3.2 hidden size {self.llm_model.config.hidden_size}")
         
         # Add special ECG token
         self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
         self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
         self.eos_token_id = self.llm_model.config.eos_token_id
-        
+
     def forward(
         self, 
         quantized_features: torch.Tensor,
@@ -96,21 +96,18 @@ class GPT2Decoder(nn.Module):
         attention_mask: Optional[torch.Tensor] = None, 
     ) -> Dict[str, Any]:
         """
-        Forward pass for training or generation setup.
+        Forward pass for training with teacher forcing.
         
         Args:
-            quantized_features: ECG features from tokenizer (batch, seq_len, features).
-            input_ids: Text token IDs (batch, seq_len). Required for training.
-            attention_mask: Attention mask for padding tokens (batch, seq_len).
+            quantized_features: Quantized ECG features (batch, channels, seq_len).
+            input_ids: Text token IDs (batch, seq_len).
             labels: Target labels for loss computation (batch, seq_len).
+            attention_mask: Attention mask for padding (batch, seq_len).
             
         Returns:
-            Dictionary with loss, logits, and other GPT-2 outputs.
-            
-        Raises:
-            ValueError: If input_ids is None during training.
+            Llama 3.2 model outputs with loss and logits.
         """
-        # Transform quantized features to GPT-2 embedding space
+        # Transform quantized features to embedding space
         quantized_features = quantized_features.to(dtype=torch.float32)
         ecg_embedding = self.adapter(quantized_features)  # (batch, embedding_size)       
 
@@ -136,7 +133,7 @@ class GPT2Decoder(nn.Module):
             labels: Target labels for loss computation (batch, seq_len).
             
         Returns:
-            GPT-2 model outputs with loss and logits.
+            Llama 3.2 model outputs with loss and logits.
         """
         batch_size = input_ids.size(0)
         
@@ -170,7 +167,7 @@ class GPT2Decoder(nn.Module):
         input_embedding = self.llm_model.get_input_embeddings()(input_ids)
         input_embedding[:, 0, :] = ecg_embedding
         
-        # Forward pass through GPT-2
+        # Forward pass through Llama 3.2
         outputs = self.llm_model(
             inputs_embeds=input_embedding,
             attention_mask=attention_mask,
@@ -182,27 +179,23 @@ class GPT2Decoder(nn.Module):
     def generate_report(
         self, 
         quantized_features: torch.Tensor,
-        max_token_length: int = 512, 
+        max_token_length: int = 256, 
         **generate_kwargs
     ) -> Union[GenerateOutput, torch.Tensor]:
         """
         Generate clinical report from quantized ECG features.
         
         Args:
-            quantized_features: ECG features from tokenizer (batch, seq_len, features).
-            max_token_length: Maximum number of tokens to generate.
-            **generate_kwargs: Additional parameters for GPT-2 generation.
+            quantized_features: Quantized ECG features (batch, channels, seq_len).
+            max_token_length: Maximum length of generated tokens.
+            **generate_kwargs: Additional generation parameters.
             
         Returns:
-            Generated token IDs (batch, generated_length).
-            
-        Example:
-            >>> features = tokenizer.encode(ecg_signal)  # (1, 128, 82)
-            >>> tokens = decoder.generate_report(features, max_token_length=100)
-            >>> report = tokenizer.decode(tokens[0])
+            Generated token IDs or GenerateOutput object.
         """
-        # Transform features to embedding space
-        if len(quantized_features.shape) == 3:
+        # Handle both 2D and 3D inputs
+        if quantized_features.dim() == 2:
+            # Add sequence dimension for 2D inputs: (batch, features) -> (batch, 1, features)
             adapter_input = quantized_features.unsqueeze(1)
         else:
             adapter_input = quantized_features
@@ -223,6 +216,8 @@ class GPT2Decoder(nn.Module):
         
         # Get input embeddings
         input_embedding: torch.Tensor = self.llm_model.get_input_embeddings()(ecg_token)
+        
+        # Replace ECG token embedding with processed ECG embedding
         input_embedding[:, 0, :] = ecg_embedding
 
         # Set generation parameters

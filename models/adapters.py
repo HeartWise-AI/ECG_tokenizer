@@ -213,3 +213,58 @@ class SequenceAdapter(nn.Module):
         x = self.final_projection(x)  # (batch, output_size)
 
         return x 
+
+# Register Llama3.2 adapters (reusing existing implementations with different names)
+@ModelRegistry.register(AdapterName.LLAMA32_SEQUENCE_ADAPTER)
+class Llama32SequenceAdapter(SequenceAdapter):
+    """Llama3.2 sequence adapter - same as SequenceAdapter but registered for Llama3.2."""
+    
+    def __init__(
+        self, 
+        input_shape: tuple[int, int] = (128, 82), 
+        output_size: int = 2048,  # Llama3.2-1B hidden size
+        dropout: float = 0.2, 
+    ):
+        """
+        Args:
+            input_shape: 2D input dimensions (sequence length, feature dimension)
+            output_size: Target embedding dimension for Llama3.2 (default 2048 for 1B model)
+            dropout: Dropout probability for regularization
+        """
+        super().__init__(input_shape, output_size, dropout)
+
+@ModelRegistry.register(AdapterName.LLAMA32_EMBEDDING_ADAPTER)
+class Llama32EmbeddingAdapter(EmbeddingAdapter):
+    """Llama3.2 embedding adapter - same as EmbeddingAdapter but registered for Llama3.2."""
+    
+    def __init__(
+        self, 
+        input_shape: tuple[int, int, int] = (8, 128, 160), 
+        output_size: int = 2048,  # Llama3.2-1B hidden size
+        dropout: float = 0.2
+    ):
+        """
+        Args:
+            input_shape: 3D input dimensions (channels, height, width)
+            output_size: Target embedding dimension for Llama3.2 (default 2048 for 1B model)
+            dropout: Dropout probability for regularization
+        """
+        super().__init__(input_shape, output_size, dropout)
+
+@ModelRegistry.register(AdapterName.LLAMA32_SIMPLE_EMBEDDING_ADAPTER)
+class Llama32SimpleEmbeddingAdapter(SimpleEmbeddingAdapter):
+    """Llama3.2 simple embedding adapter - same as SimpleEmbeddingAdapter but registered for Llama3.2."""
+    
+    def __init__(
+        self,
+        input_shape: tuple[int, int, int] = (8, 128, 160),
+        output_size: int = 2048,  # Llama3.2-1B hidden size
+        dropout: float = 0.2
+    ):
+        """
+        Args:
+            input_shape: 3D input dimensions (channels, height, width)
+            output_size: Target embedding dimension for Llama3.2 (default 2048 for 1B model)
+            dropout: Dropout probability for regularization
+        """
+        super().__init__(input_shape, output_size, dropout)
