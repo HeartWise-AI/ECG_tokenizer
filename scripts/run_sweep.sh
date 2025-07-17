@@ -139,16 +139,10 @@ else
     exit 1
 fi
 
-# Extract configuration fields using yq
-if [ -z "${NAME}" ]; then
-  NAME=$(yq e '.name' "${SWEEP_CONFIG_PATH}" | tr -d '"')
-fi
-if [ -z "${PROJECT}" ]; then
-  PROJECT=$(yq e '.project' "${SWEEP_CONFIG_PATH}" | tr -d '"')
-fi
-if [ -z "${ENTITY}" ]; then
-  ENTITY=$(yq e '.entity' "${SWEEP_CONFIG_PATH}" | tr -d '"')
-fi
+mapfile -t COMMANDS < <(yq e '.command[]' "${SWEEP_CONFIG_PATH}")
+NAME=$(yq e '.name' "${SWEEP_CONFIG_PATH}" | tr -d "'")
+PROJECT=$(yq e '.project' "${SWEEP_CONFIG_PATH}" | tr -d "'")
+ENTITY=$(yq e '.entity' "${SWEEP_CONFIG_PATH}" | tr -d "'")
 
 # Validate extracted values
 if [ -z "${NAME}" ] || [ -z "${PROJECT}" ] || [ -z "${ENTITY}" ]; then
@@ -183,7 +177,7 @@ echo ""
 # Environment variables for better DDP performance
 export NCCL_DEBUG=WARNING
 export CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}"
-export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS=8
 
 # Run the sweep and extract the SWEEP_ID while displaying logs
 echo -e "${BLUE}Initializing W&B Sweep...${NC}"
