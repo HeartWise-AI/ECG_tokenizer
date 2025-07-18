@@ -5,7 +5,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
-from Non_ECG_GRPO import Training, model_4bit
+from COT_GRPO import Training, model_4bit
 from peft import LoraConfig, get_peft_model, TaskType
 import bitsandbytes as bnb 
 from sklearn.model_selection import train_test_split
@@ -243,13 +243,11 @@ def prompt_only(df):
 
         length = len(row["follow_up_questions"])
 
-        chain_of_thought = f"Question: " + str(row["question"]).strip() + " \n T: " + str(row["thinking"]).strip() + " "
-
-        thoughts.append(chain_of_thought)
+        chain_of_thought = f"Provide a concise but complete answer for each step. If the answer requires calculation, show it briefly. Question: " + str(row["question"]).strip() + " \n T: " + str(row["thinking"]).strip() + " "
     
         for x in range(length):
 
-            thought = "Q" + str(x) + ": " + str(row["follow_up_questions"][x]) + " A" + str(x) + ": "
+            thought = "\n Q" + str(x) + ": " + str(row["follow_up_questions"][x]) + " A" + str(x) + ": "
 
             chain_of_thought = chain_of_thought + thought
 
@@ -265,7 +263,62 @@ def prompt_only(df):
     
     return inputs
 
+df["tight_prompt"] = prompt_only(df) 
 
+def get_step_answers(row):
+    answers = []
+    q_len = len(row["follow_up_questions"])
+    a_len = len(row["numeric_follow_up_answers"])
+    steps = min(q_len, a_len)
+    for i in range(steps):
+        answers.append(row["numeric_follow_up_answers"][i])
+
+    if len(answers) == 0 or answers[-1] != row["final_answers"]:
+        answers.append(row["final_answers"])
+
+
+    return answers
+
+df["step_answer"] = df.apply(get_step_answers, axis=1)
+
+df = df.groupby("question", as_index=False).agg({
+    "tight_prompt": "first",
+    "step_answer": "first",
+    "answer": "first",
+    "follow_up_questions": "first",
+    "follow_up_answers": "first",
+    "final_answers": "first",
+    "thinking": "first"
+})
+
+def pair_together(df):
+
+  pairs = []
+
+  for index, row in df.iterrows():
+
+    minimum = min(len(row["step_answer"]), len(row["tight_prompt"]))
+
+    row_pairs = []
+
+    for x in range(minimum):
+
+      pair = (row["tight_prompt"][x], row["step_answer"][x])
+
+      #print(pair, type(pair))
+
+      row_pairs.append(pair)
+    
+    pairs.append(row_pairs)
+  
+  return pairs
+
+df["prompt_answer_pair"] = pair_together(df)
+
+df = df.explode("prompt_answer_pair").reset_index(drop=True)
+
+df[["prompt", "step_answer"]] = pd.DataFrame(df["prompt_answer_pair"].tolist(), index=df.index)
+#print(df["step_answer"].tolist()) 
 
 #prepare inputs for batching
 #each item in the batch should include input ids, labels, attention_mask
@@ -331,36 +384,6 @@ class RLDataset(Dataset):
     }
 
     return item
-
-def rl_collate_fn(batch):
-
-  input_ids = torch.stack([item["input_ids"] for item in batch])
-    
-  attention_mask = torch.stack([item["attention_mask"] for item in batch])
-  
-  step_answers = torch.tensor([item["step_answers"] for item in batch], dtype=torch.float)
-
-  return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "step_answer": step_answers,
-    }
-
-df["tight_prompt"] = prompt_only(df) 
-
-df = df.explode("tight_prompt").reset_index(drop=True)
-
-df["step"] = df.groupby("question").cumcount() 
-
-def get_step_answer(row):
-    if row["step"] < len(row["numeric_follow_up_answers"]):
-        return row["numeric_follow_up_answers"][row["step"]]
-    else:
-        return row["final_answers"]
-
-df["step_answer"] = df.apply(get_step_answer, axis=1)
-
-#print(df.head())
 
 df_sft, df_rl = train_test_split(df, test_size=0.2, random_state=42)
 
@@ -515,17 +538,25 @@ padded_labels = pad_sequence(labels, batch_first=True, padding_value=-100)
 #tokenizing the full text
 #max length so all of the sequences are the same length (pad to the max length, truncate to max length)
 
+#chains = prompt_only(df_rl)
+#flattened_prompts = [step for row in chains for step in row]
+
+prompts = df_rl["prompt"].tolist()
+
 tokenized_prompt_rl = tokenizer(
-    df_rl["tight_prompt"].tolist(),
+    prompts,
    padding=True,
     truncation=True,
     max_length = MAX_LENGTH,
     return_tensors="pt")
 
+answers = df_rl["step_answer"].tolist()
+
+
 #turn the tokenized inputs into batches
 dataset_sft = TextDataset(padded_inputs, padded_labels, padded_attention_mask)
 
-dataset_rl = RLDataset(tokenized_prompt_rl, df_rl["step_answer"].tolist())
+dataset_rl = RLDataset(tokenized_prompt_rl, answers)
 
 length = dataset_sft.__len__()
 #print(length)
@@ -537,8 +568,17 @@ batch_size = 8
 #make into batches
 dataloader_sft = DataLoader(dataset_sft, batch_size=batch_size, shuffle=True)
 
+for batch in dataloader_sft:
+    print("Batch input_ids:", batch["input_ids"].shape)
+    print("Batch labels:", batch["labels"].shape)
+    print("Batch mask:", batch["attention_mask"].shape)
+    break
 
-dataloader_rl = DataLoader(dataset_rl, batch_size=batch_size, shuffle=True, collate_fn=rl_collate_fn)
+#print("dataset_sft length:", len(dataset_sft))
+#print("First item:", dataset_sft[0])
+
+dataloader_rl = DataLoader(dataset_rl, batch_size=batch_size, shuffle=True)
+
 
 #make model 4 bit
 #quant_model = model_4bit(model)
@@ -556,6 +596,11 @@ lora_config = {
 
 pipeline_model = Training(reward_model = rewards_function, model = model, lora_config = lora_config)
 
+#print(df.columns.tolist())
+#print(df_rl["prompt"][0])
+#print(df_rl["step_answer"][0])
+#print(df_rl["final_answers"][0])
+
 #train adapters
 #pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
 
@@ -566,10 +611,10 @@ adapter_path = "/home/sirfan/ECG_tokenizer/models/cot_adapter_weights"
 #pipeline_model.save_adapter_checkpoint(adapter_path)
 
 #generate reports
-reports = pipeline_model.generate_initial_reports(dataloader_rl, adapter_path, max_new_tokens=10)
+#reports = pipeline_model.generate_initial_reports(dataloader_rl, adapter_path, max_new_tokens=10)
 #print(reports)
 
 #train the model
-#pipeline_model.grpo(dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=2)
+pipeline_model.grpo(dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=1)
 
 

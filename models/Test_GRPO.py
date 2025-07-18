@@ -349,7 +349,7 @@ pipeline_model = Training(reward_model = rewards_function, model = model, lora_c
 #        print(name, param.data.mean().item())
 
 #
-pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
+#pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
 
 #making the path (does not exist yet)
 adapter_path = "/home/sirfan/ECG_tokenizer/models/adapter_weights"
@@ -358,13 +358,13 @@ adapter_path = "/home/sirfan/ECG_tokenizer/models/adapter_weights"
 pipeline_model.save_adapter_checkpoint(adapter_path)
 
 #generate reports
-reports = pipeline_model.generate_initial_reports(dataloader_sft, adapter_path, max_new_tokens=128)
+#reports = pipeline_model.generate_initial_reports(dataloader_sft, adapter_path, max_new_tokens=128)
 #print(reports)
 
 #train the model
 
 
-pipeline_model.grpo(dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=2)
+#pipeline_model.grpo(dataloader_rl, adapter_path, epochs=4, max_new_tokens = 128, num_candidates=2)
 
 
 

@@ -51,30 +51,80 @@ def expand_final_answers(final_answers_list, num_candidates):
 
         for y in range(num_candidates):
 
-            expanded_final_answers.append(x)
+            expanded_final_answers.extend([x])
     
     return expanded_final_answers
 
 # Extract the first reasonable numeric answer from model output
-def extract_numeric_answer(text):
+def extract_aligned_answers(text, expected_count):
     
-    # Remove the input question part if it's being repeated
-    if "Q:" in text and "A:" in text:
-        text = text.split("A:")[-1]  # Get everything after the last "A:"
+    results = []
     
-    # Look for dollar amounts first
-    dollar_matches = re.findall(r'\$(\d+(?:\.\d{2})?)', text)
+    num_step = expected_count - 1
     
-    if dollar_matches:
-        return f"{float(dollar_matches[0])}"
-   
-    # Look for standalone numbers
-    number_matches = re.findall(r'\b(\d+(?:\.\d+)?)\b', text)
-    
-    if number_matches:
-        return float(number_matches[-1])
+    for i in range(num_step):
         
-    return 0.0 
+        match = re.search(rf"A{i}:\s*([^QF]+)", text)
+        
+        if match:
+            results.append(match.group(1).strip())
+        else:
+            results.append("")
+    
+    # Now final answer:
+    final_match = re.search(r"Final Answer:\s*(.+)", text)
+    
+    if final_match:
+        results.append(final_match.group(1).strip())
+    else:
+        results.append("")
+    
+    return results 
+
+def clean(answer_list):
+    
+    end_characters = ["$", "=", "of"]
+
+    new_list = []
+    
+    for x in answer_list:
+
+        for y in end_characters:
+        
+            if y in x:
+            
+                x = x.split(y)[-1]
+          
+        if x == " " or x == "" or x == "\n" or "\xad" in x:
+    
+            x = 0.0
+
+        new_list.append(x)
+
+    return new_list
+
+def extract_numeric_answer(text_list):
+
+    new_list = []
+
+    for x in text_list:
+
+        # Look for standalone numbers
+
+        if type(x) != float:
+            number_matches = re.findall(r'[-+]?\d+(?:\.\d+)?', x)
+    
+            if number_matches:
+                new_list.append(float(number_matches[0]))
+            
+            else: 
+                new_list.append(0.0)
+            
+        else:
+            new_list.append(x)  
+
+    return new_list 
+
 
 #from the outputted generated text extract the final answer
 #needed to compare with the actual final answer in the rewards function
@@ -143,7 +193,7 @@ class Training:
         #{"input_ids": torch.LongTensor of shape (batch_size, seq_len),
         #"labels": torch.LongTensor of shape (batch_size, seq_len),
         #"attention_mask": (optional) torch.LongTensor of shape (batch_size, seq_len)}
-
+        print("Starting train_adapters...")
         self.model.train()
         self.model.to(self.device)
 
@@ -158,10 +208,10 @@ class Training:
             for step, batch in enumerate(dataloader):
                 #token IDs that represent the input text
                 input_ids = batch["input_ids"].to(self.device)
-                print(input_ids.shape)
+                #print(input_ids.shape)
 
                 labels = batch["labels"].to(self.device)
-                print(labels.shape)
+                #print(labels.shape)
 
                 attention_mask = batch.get('attention_mask', None)
 
@@ -301,19 +351,17 @@ class Training:
 
             for batch in dataloader:
 
+                #print("Batch keys:", batch.keys())
+
                 outputs_for_batch = []
 
                 log_probs_list = []
 
                 input_ids = batch["input_ids"].to(self.device)
+                #print(len(input_ids))
 
-                true_answer = batch["true_answer"].to(self.device)
-
-                follow_up_answers = batch["numeric_follow_up_answers"].to(self.device)
-                print(follow_up_answers)
-
-                #print(true_answer)
-                #print(len(true_answer))
+                step_answers = batch["step_answers"].to(self.device)
+                #print(len(step_answers))
 
                 attention_mask = batch.get("attention_mask", None)
             
@@ -343,23 +391,37 @@ class Training:
                 #print(outputs_for_batch[0])
 
                 cleaned_outputs = []
-                for output in outputs_for_batch:
-                    
-                    cleaned_answer = extract_numeric_answer(output)
-                    
-                    cleaned_outputs.append(float(cleaned_answer))
+                for output, sa in zip(outputs_for_batch, step_answers):
 
-                #print(cleaned_outputs)
-                #print(len(cleaned_outputs))
+                    if isinstance(sa, torch.Tensor) and sa.dim() == 0:
+                        expected_count = 1
+                    else:
+                        expected_count = len(sa)
+                    
+                    cleaned_answer = extract_aligned_answers(output, expected_count)
+                    #print(cleaned_answer)
+                    #print(len(cleaned_answer))
+
+                    cleaned_outputs.extend(cleaned_answer)
+
+                print(len(cleaned_outputs))
+                cleaner = clean(cleaned_outputs)
+                #print(cleaner)
+                #print(len(cleaner))
+
+                new_list = extract_numeric_answer(cleaner)
+                print(new_list)
+                #print(len(new_list))
                 
                 input_batch_size = input_ids.shape[0] #batch size, seq length
                 #print(input_batch_size)
 
-                true_answer_list = true_answer.cuda().tolist()
-                #print(true_answer_list)
+                step_answers_list = step_answers.cuda().tolist()
+                print(step_answers_list)
+                #print(len(step_answers_list))
 
-                expanded_final_answers_list = expand_final_answers(true_answer_list, num_candidates)
-                #print(expanded_final_answers_list)
+                expanded_final_answers_list = expand_final_answers(step_answers, num_candidates)
+                print(expanded_final_answers_list)
                 #print(len(expanded_final_answers_list))
 
                 #return list of scores
