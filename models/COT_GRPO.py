@@ -55,6 +55,35 @@ def expand_final_answers(final_answers_list, num_candidates):
     
     return expanded_final_answers
 
+def thinking_presence(answer_list):
+
+  new_list = []
+
+  thinking_tokens = ["thinking", "step", "calculations", "calculate", "furthermore", "in addition", "therefore", "as a result", "explain"]
+
+  for answer in answer_list:
+
+    found = False
+    
+    answer = answer.lower()
+    
+    for token in thinking_tokens:
+
+      if token in answer:
+
+        new_list.append(1.0)
+
+        found = True
+        
+        break
+      
+    if not found:
+
+      new_list.append(0.0)
+
+
+  return new_list
+
 # Extract the first reasonable numeric answer from model output
 def extract_aligned_answers(text, expected_count):
     
@@ -404,28 +433,34 @@ class Training:
 
                     cleaned_outputs.extend(cleaned_answer)
 
-                print(len(cleaned_outputs))
+                #print(len(cleaned_outputs))
+                #print(cleaned_outputs)
+
+                thinking_list = thinking_presence(cleaned_outputs)
+                #print(thinking_list)
+                #print(len(thinking_list))
+                
                 cleaner = clean(cleaned_outputs)
                 #print(cleaner)
                 #print(len(cleaner))
 
                 new_list = extract_numeric_answer(cleaner)
-                print(new_list)
+                #print(new_list)
                 #print(len(new_list))
                 
                 input_batch_size = input_ids.shape[0] #batch size, seq length
                 #print(input_batch_size)
 
                 step_answers_list = step_answers.cuda().tolist()
-                print(step_answers_list)
+                #print(step_answers_list)
                 #print(len(step_answers_list))
 
                 expanded_final_answers_list = expand_final_answers(step_answers, num_candidates)
-                print(expanded_final_answers_list)
+                #print(expanded_final_answers_list)
                 #print(len(expanded_final_answers_list))
 
                 #return list of scores
-                scores = self.reward_model(cleaned_outputs, expanded_final_answers_list)
+                scores = self.reward_model(cleaned_outputs, expanded_final_answers_list, thinking_list)
                 #print(scores)
                 #print(len(scores))
 

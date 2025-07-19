@@ -21,20 +21,48 @@ path = kagglehub.dataset_download("thedevastator/grade-school-math-8k-q-a")
 data_path = os.path.join(path, "socratic_train.csv")
 df = pd.read_csv(data_path)
 
-def rewards_function(generated_answer_list, final_answer_list):
+def rewards_function(generated_answer_list, final_answer_list, thinking_list):
     
     list_of_scores = []
 
     for i, text in enumerate(generated_answer_list):
 
       answer = final_answer_list[i]
-      if answer == generated_answer_list[i]:
-        list_of_scores.append(1.0)
-        
-      else:
-        list_of_scores.append(0.0)
 
+      thinking = thinking_list[i]
+
+      if answer == generated_answer_list[i]:
+        final_output = 0.9*1.0
+      else:
+        final_output = 0.9*0.0
+      
+      score = final_output + 0.1*thinking
+    
+      list_of_scores.append(score)
+        
     return list_of_scores
+
+def thinking_presence(answer_list):
+
+  new_list = []
+
+  thinking_tokens = ["thinking", "step", "calculations", "furthermore", "in addition", "therefore", "as a result"]
+
+  for answer in answer_list:
+    answer = answer.lower()
+    
+    for token in thinking_tokens:
+
+      if token in answer:
+        new_list.append(1.0)
+        break
+      
+      else:
+        new_list.append(0.0)
+        break
+  
+  return new_list
+
 
 def parse_final_answer(text):
 
