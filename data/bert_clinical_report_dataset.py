@@ -7,14 +7,15 @@ from torch.utils.data import (
 from transformers import BertTokenizer
 
 from utils.ddp import DistributedUtils
-from utils.config.bert_classifier_config import BertReportClassifierConfig    
+from utils.config.bert_classifier_config import BertReportClassifierConfig
+from models.types import AutoTokenizerT
 
     
 class BertClinicalReportDataset(Dataset):
     def __init__(
         self, 
         df_path: str,
-        tokenizer: BertTokenizer
+        tokenizer: AutoTokenizerT
     ):
         df = pd.read_csv(df_path)
         self.predicted_report = df['predicted_report']
@@ -51,7 +52,7 @@ class BertClinicalReportDataset(Dataset):
 
 def get_clinical_report_dataloader(
     config: BertReportClassifierConfig,
-    tokenizer: BertTokenizer,
+    tokenizer: AutoTokenizerT,
     shuffle: bool = True,
     pin_memory: bool = True
 ):
@@ -67,7 +68,7 @@ def get_clinical_report_dataloader(
     
 def get_distributed_clinical_report_dataloader(
     predicted_reports_path: str,
-    tokenizer: BertTokenizer,
+    tokenizer: AutoTokenizerT,
     batch_size: int = 32,
     num_workers: int = 16,
     num_replicas: int = 1,
