@@ -14,10 +14,10 @@ wandb_entity: !!str "mhi_ai"
 use_wandb: !!bool true
 # training parameters
 llm_lr: !!float 6e-6
-adapter_lr: !!float 4e-5
+adapter_lr: !!float 5e-4
 llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
-scheduler_type: !!str "cosine_warm_restart"
+scheduler_type: !!str "linear_warmup"
 lr_step_period: !!int 1
 factor: !!float 0.3
 optimizer: !!str "AdamW"
@@ -34,7 +34,6 @@ tokenizer_name: !!str "meta-llama/Llama-3.2-1B"
 max_token_length: !!int 256
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-1B"
-trainable_model_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 adapter_name: !!str "Llama32_SequenceAdapter"
 llm_input_embedding_size: !!int 2048
 # Dataset parameters
