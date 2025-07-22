@@ -40,7 +40,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Model parameters
     huggingface_model_name: str
-    trainable_model_name: str
     adapter_name: str
     llm_input_embedding_size: int
     
