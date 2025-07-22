@@ -1,94 +1,65 @@
 command:
   - torchrun
-  - "--nproc_per_node=4"
+  - "--nproc_per_node=2"
   - "--master_port=29500"
   - "scripts/main.py"
   - "--base_config"
-  - "config/gpt2/base_config.yaml"
+  - "config/llm_finetuning/gpt2/base_config.yaml"
   - ${args}
-
-name: "gpt2_mhi"
-project: "ECG_tokenizer_LLM_finetuning_MHI"
-entity: "mhi_ai"
-
+name: "gpt2_mhi_sweep"
+project: "ECG_tokenizer_LLM_finetuning_GPT2"
+entity: "jacques-delfrate"
 method: bayes
 metric:
   name: validate/loss
   goal: minimize
-
 parameters:
   llm_lr:
     distribution: log_uniform_values
-    min: 5e-5
-    max: 1e-3
-
+    min: 0.00005
+    max: 0.001
   adapter_lr:
     distribution: log_uniform_values
-    min: 5e-5
-    max: 1e-3
-
+    min: 0.00005
+    max: 0.001
   adapter_dropout:
     distribution: uniform
     min: 0.0
     max: 0.7
-
   batch_size:
     values: [8, 16, 32, 64]
-
   optimizer:
     values: ["RAdam", "AdamW"]
-
   scheduler_type:
-    values: [
-      "step", 
-      "cosine", 
-      "linear_warmup", 
-      "cosine_with_warmup", 
-      "cosine_warm_restart", 
-      "cosine_with_hard_restarts_with_warmup"
-    ]   
-
+    values: ["step", "cosine", "linear_warmup", "cosine_with_warmup", "cosine_warm_restart", "cosine_with_hard_restarts_with_warmup"]
   step_size:
     values: [1, 5, 10, 15, 20]
-
   num_warmup_percent:
     values: [0.05, 0.1, 0.2]
-
   llm_weight_decay:
-    values: [0.0, 0.0001,0.001, 0.01, 0.1]
-
+    values: [0.0, 0.0001, 0.001, 0.01, 0.1]
   adapter_weight_decay:
-    values: [0.0, 0.0001,0.001, 0.01, 0.1]
-
+    values: [0.0, 0.0001, 0.001, 0.01, 0.1]
   gamma:
     distribution: uniform
     min: 0.1
     max: 0.5
-
   num_restarts:
     values: [1, 3, 5, 10]
-
   num_hard_restarts_cycles:
     values: [1.0, 2.0, 3.0]
-
   warm_restart_tmult:
     values: [1, 2, 4]
-
   project:
-    values: ["ECG_tokenizer_LLM_finetuning_MHI"]
-
+    values: ["ECG_tokenizer_LLM_finetuning_GPT2"]
   entity:
-    values: ["mhi_ai"]
-
+    values: ["jacques-delfrate"]
   name:
-    values: ["gpt2_mhi"]
-
+    values: ["gpt2_mhi_sweep"]
 early_terminate:
   type: hyperband
   min_iter: 3
   eta: 2
   s: 2
-
-
-
-  
+run_mode: train
+use_wandb: true
