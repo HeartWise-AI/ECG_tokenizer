@@ -13,7 +13,7 @@ from utils.enums import AdapterName
 
 class TestModelsIntegration(unittest.TestCase):
     
-    @patch('models.gpt2_with_embeddings.GPT2LMHeadModel')
+    @patch('models.gpt2_tokenizer_decoder.GPT2LMHeadModel')
     def setUp(self, mock_gpt2):
         # Mock GPT2 model to avoid loading from HuggingFace
         self.mock_gpt2_instance = mock_gpt2.from_pretrained.return_value

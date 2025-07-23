@@ -32,7 +32,6 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.num_workers = 4
         mock_config.world_size = 1
         mock_config.device = 0
-        mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
         mock_config.gpt2_embedding_size = 768
         mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
@@ -139,7 +138,6 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.num_workers = 4
         mock_config.world_size = 1
         mock_config.device = 0
-        mock_config.trainable_model_name = "GPT2_with_embeddings"
         mock_config.huggingface_model_name = "gpt2"
         mock_config.gpt2_embedding_size = 768
         mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER

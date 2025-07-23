@@ -14,7 +14,7 @@ class BertClinicalReportDataset(Dataset):
     def __init__(
         self, 
         df_path: str,
-        tokenizer: BertTokenizer
+        tokenizer: AutoTokenizerT
     ):
         df = pd.read_csv(df_path)
         self.predicted_report = df['predicted_report']
@@ -67,7 +67,7 @@ def get_clinical_report_dataloader(
     
 def get_distributed_clinical_report_dataloader(
     predicted_reports_path: str,
-    tokenizer: BertTokenizer,
+    tokenizer: AutoTokenizerT,
     batch_size: int = 32,
     num_workers: int = 16,
     num_replicas: int = 1,

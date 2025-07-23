@@ -2,14 +2,14 @@ import unittest
 import torch
 from unittest.mock import patch, MagicMock
 
-from models.gpt2_with_embeddings import GPT2WithEmbedding
+from models.gpt2_tokenizer_decoder import GPT2Decoder
 from utils.registry import ModelRegistry
 from utils.enums import AdapterName
 
 class TestGPT2WithEmbedding(unittest.TestCase):
     
-    @patch('models.gpt2_with_embeddings.GPT2LMHeadModel')
-    @patch('models.gpt2_with_embeddings.ModelRegistry')
+    @patch('models.gpt2_tokenizer_decoder.GPT2LMHeadModel')
+    @patch('models.gpt2_tokenizer_decoder.ModelRegistry')
     def setUp(self, mock_registry, mock_gpt2):
         # Mock the GPT2 model and embedding adapter
         self.mock_gpt2_instance = MagicMock()
@@ -23,9 +23,9 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         mock_registry.get.return_value.return_value = self.mock_adapter
         
         # Create model instance
-        self.model = GPT2WithEmbedding(
-            gpt2_model_name='gpt2',
-            gpt2_embedding_size=768,
+        self.model = GPT2Decoder(
+            huggingface_model_name='gpt2',
+            llm_input_embedding_size=768,
             ecg_embedding_size=(8, 128, 82),
             adapter_name=AdapterName.GPT2_EMBEDDING_ADAPTER,
             adapter_dropout=0.2

@@ -101,11 +101,9 @@ class LLMFinetuningProject(BaseProject):
         # Load the tokenizer
         tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
         tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
                
         # Get the dataloaders
-        train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.train_dataset_path,
-            signal_path_column=self.config.signal_path_column,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
