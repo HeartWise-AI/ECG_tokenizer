@@ -1,5 +1,4 @@
-    
-from typing import Tuple
+from typing import Tuple, Optional
 from dataclasses import dataclass
 
 from utils.enums import ConfigName

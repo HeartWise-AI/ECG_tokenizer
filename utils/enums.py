@@ -65,6 +65,7 @@ class ModelName(str, Enum):
     ECG_TOKENIZER_WRAPPER = "ECG_Tokenizer_Wrapper"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    LLAMA32_TOKENIZER_WRAPPER = "Llama32_Tokenizer_Wrapper"
     
     # Encoders
     CONV_ENCODER = "Conv_Encoder"
@@ -75,6 +76,7 @@ class ModelName(str, Enum):
     
     # Decoders
     GPT2_DECODER = "GPT2_Decoder"
+    LLAMA32_DECODER = "Llama32_Decoder"
     CONV_DECODER = "Conv_Decoder"
     LINEAR_CLASSIFIER_DECODER = "Linear_Classifier_Decoder"
     RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"
@@ -92,6 +94,9 @@ class AdapterName(str, Enum):
     GPT2_SEQUENCE_ADAPTER = "GPT2_SequenceAdapter"
     GPT2_EMBEDDING_ADAPTER = "GPT2_EmbeddingAdapter"
     GPT2_SIMPLE_EMBEDDING_ADAPTER = "GPT2_SimpleEmbeddingAdapter"
+    LLAMA32_SEQUENCE_ADAPTER = "Llama32_SequenceAdapter"
+    LLAMA32_EMBEDDING_ADAPTER = "Llama32_EmbeddingAdapter"
+    LLAMA32_SIMPLE_EMBEDDING_ADAPTER = "Llama32_SimpleEmbeddingAdapter"
     
     def __str__(self):
         return self.value

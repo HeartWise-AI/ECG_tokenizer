@@ -1,6 +1,7 @@
 import torch.nn as nn
 from typing import Union, Type, Protocol, Any, Iterator, TYPE_CHECKING
 from abc import abstractmethod
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 if TYPE_CHECKING:
     from models import (
@@ -85,3 +86,6 @@ ModelUnionT = Union[
     "ECG_Tokenizer_Quantizer"
 ]
 ModelClassUnionT = Type[ModelUnionT]
+
+# Tokenizer types for type safety across different LLM tokenizers
+AutoTokenizerT = Union[AutoTokenizer, PreTrainedTokenizerBase]

@@ -78,21 +78,16 @@ class GPT2Decoder(nn.Module):
         )
         
         # Load the GPT-2 model
-        self.gpt2: PreTrainedModel = GPT2LMHeadModel.from_pretrained(huggingface_model_name)
+        self.llm_model: PreTrainedModel = GPT2LMHeadModel.from_pretrained(huggingface_model_name)
         
         # Check if embedding size matches GPT-2's hidden size
-        if llm_input_embedding_size != self.gpt2.config.n_embd:
-            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.gpt2.config.n_embd}")
+        if llm_input_embedding_size != self.llm_model.config.n_embd:
+            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.llm_model.config.n_embd}")
         
-        # Add special tokens: ECG, Question Start, Question End
-        original_vocab_size = len(self.gpt2.get_input_embeddings().weight)
-        self.gpt2.resize_token_embeddings(original_vocab_size + 3)
-        
-        # Define special token IDs
-        self.ecg_token_id = original_vocab_size
-        self.question_start_token_id = original_vocab_size + 1
-        self.question_end_token_id = original_vocab_size + 2
-        self.eos_token_id = self.gpt2.config.eos_token_id
+        # Add special ECG token in llm embedding
+        self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
+        self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
+        self.eos_token_id = self.llm_model.config.eos_token_id
         
     def forward(
         self, 
@@ -289,11 +284,11 @@ class GPT2Decoder(nn.Module):
             labels = torch.cat([label_ignore, labels], dim=1)
         
         # Get input embeddings and replace the first token's embedding with ECG embedding
-        input_embedding = self.gpt2.get_input_embeddings()(input_ids)
+        input_embedding = self.llm_model.get_input_embeddings()(input_ids)
         input_embedding[:, 0, :] = ecg_embedding
         
         # Forward pass through GPT-2
-        outputs = self.gpt2(
+        outputs = self.llm_model(
             inputs_embeds=input_embedding,
             attention_mask=attention_mask,
             labels=labels
@@ -344,7 +339,7 @@ class GPT2Decoder(nn.Module):
         attention_mask: torch.Tensor = torch.ones((batch_size, 1), device=ecg_embedding.device)
         
         # Get input embeddings
-        input_embedding: torch.Tensor = self.gpt2.get_input_embeddings()(ecg_token)
+        input_embedding: torch.Tensor = self.llm_model.get_input_embeddings()(ecg_token)
         input_embedding[:, 0, :] = ecg_embedding
 
         # Set generation parameters
@@ -360,7 +355,7 @@ class GPT2Decoder(nn.Module):
         
         # Generate
         with torch.inference_mode():
-            result = self.gpt2.generate(
+            result = self.llm_model.generate(
                 inputs_embeds=input_embedding,
                 max_length=max_token_length,
                 **generation_params

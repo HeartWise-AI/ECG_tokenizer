@@ -7,6 +7,7 @@ from utils.ddp import DistributedUtils
 from transformers import GPT2Tokenizer, BatchEncoding
 from torch.utils.data import Dataset, DataLoader, default_collate
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+from models.types import AutoTokenizerT
 
 
 class ECGClinicalReportDataset(Dataset):
@@ -16,7 +17,7 @@ class ECGClinicalReportDataset(Dataset):
         signal_path_column: str,
         ecg_waveform_length: int,
         ecg_num_leads: int,
-        tokenizer: GPT2Tokenizer, 
+        tokenizer: AutoTokenizerT, 
         max_length: int = 512
     ):
         """
@@ -33,7 +34,7 @@ class ECGClinicalReportDataset(Dataset):
         
         self.ecg_waveform_length: int = ecg_waveform_length
         self.ecg_num_leads: int = ecg_num_leads
-        self.tokenizer: GPT2Tokenizer = tokenizer
+        self.tokenizer: AutoTokenizerT = tokenizer
         self.max_length: int = max_length
         self.signal_path_column: str = signal_path_column
         
@@ -136,7 +137,7 @@ def get_distributed_clinical_report_dataloader(
     signal_path_column: str,
     ecg_waveform_length: int,
     ecg_num_leads: int,
-    tokenizer: GPT2Tokenizer,
+    tokenizer: AutoTokenizerT,
     max_token_length: int = 512,
     batch_size: int = 32,
     num_workers: int = 16,

@@ -6,7 +6,7 @@ from torch.optim.optimizer import Optimizer
 from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
 from utils.ddp import DistributedUtils
 from utils.schedulers import get_scheduler
@@ -101,8 +101,7 @@ class LLMFinetuningProject(BaseProject):
         self._print_training_config(ecg_tokenizer)
                
         # Load the tokenizer
-        tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
                
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -144,7 +143,7 @@ class LLMFinetuningProject(BaseProject):
         # Get the parameter groups
         param_groups = [
             {
-                "params": ecg_tokenizer.module.decoder.gpt2.parameters(),
+                "params": self._get_llm_parameters(ecg_tokenizer.module.decoder),
                 "lr": self.config.llm_lr,
                 "weight_decay": self.config.llm_weight_decay,
                 "name": "llm"
@@ -257,8 +256,7 @@ class LLMFinetuningProject(BaseProject):
         ecg_tokenizer.eval()
         
         # Load the tokenizer
-        tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
         
         # Get the dataloaders
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -294,3 +292,25 @@ class LLMFinetuningProject(BaseProject):
             NotImplementedError: Extraction not implemented for LLM finetuning
         """        
         raise NotImplementedError("Extraction is not implemented for this project")
+    
+    def _get_tokenizer(self, tokenizer_name: str):
+        """Get the appropriate tokenizer using AutoTokenizer for all models."""
+        # Use AutoTokenizer which works for all Hugging Face models
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        
+        # Ensure pad token is set - use eos_token if no pad_token exists
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        return tokenizer
+    
+    def _get_llm_parameters(self, decoder):
+        """Get LLM parameters from the decoder's LLM model."""
+        if hasattr(decoder, 'llm_model'):
+            return decoder.llm_model.parameters()
+        else:
+            # Fallback to look for any transformer model attribute
+            for attr_name in ['transformer', 'model', 'llm']:
+                if hasattr(decoder, attr_name):
+                    return getattr(decoder, attr_name).parameters()
+            raise AttributeError(f"Decoder {type(decoder).__name__} doesn't have a recognizable LLM model attribute")
