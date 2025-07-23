@@ -4,7 +4,6 @@ from torch.utils.data import (
     DataLoader, 
     Dataset
 )
-from transformers import BertTokenizer
 
 from utils.ddp import DistributedUtils
 from utils.config.bert_classifier_config import BertReportClassifierConfig    

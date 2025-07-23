@@ -13,7 +13,7 @@ class Conv_Encoder(nn.Module):
     Encoder module that processes the input with convolutional layers to extract features.
 
     Expected input shape: (batch_size, 12, length)
-    """
+    """ 
     def __init__(self, input_channels=12):
         """
         Args:
