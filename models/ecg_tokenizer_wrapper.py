@@ -567,7 +567,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     f"For reconstruction, decoder should accept no parameters. Error: {e}"
                 )
         else:
-            raise ValueError(f"Unsupported decoder mode '{decoder_mode}'")
+            raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
 
     def _load_state_dict(
         self, 
@@ -818,16 +818,16 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         if self.decoder is None:
             raise ValueError("No decoder available for generation")
             
-        # Check if decoder has a generate method
-        if not hasattr(self.decoder, 'generate_report') and not hasattr(self.decoder, 'generate'):
-            raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
-        
         # Ensure input is in the right dtype
         x = x.to(dtype=torch.float32)
         
         # Get quantized features
         features = self.encoder(x)
         quantized, _, _ = self.quantizer(features)
+        
+        # Check if decoder has a generate method
+        if not hasattr(self.decoder, 'generate_report'):
+            raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
         
         return self.decoder.generate_report(
             quantized_features=quantized,
