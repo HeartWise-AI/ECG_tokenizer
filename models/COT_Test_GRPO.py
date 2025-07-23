@@ -42,28 +42,6 @@ def rewards_function(generated_answer_list, final_answer_list, thinking_list):
         
     return list_of_scores
 
-def thinking_presence(answer_list):
-
-  new_list = []
-
-  thinking_tokens = ["thinking", "step", "calculations", "furthermore", "in addition", "therefore", "as a result"]
-
-  for answer in answer_list:
-    answer = answer.lower()
-    
-    for token in thinking_tokens:
-
-      if token in answer:
-        new_list.append(1.0)
-        break
-      
-      else:
-        new_list.append(0.0)
-        break
-  
-  return new_list
-
-
 def parse_final_answer(text):
 
     raw_parts = text.split("####")
