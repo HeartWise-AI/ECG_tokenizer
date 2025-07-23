@@ -13,7 +13,7 @@ class Conv_Encoder(nn.Module):
     Encoder module that processes the input with convolutional layers to extract features.
 
     Expected input shape: (batch_size, 12, length)
-    """
+    """ 
     def __init__(self, input_channels=12):
         """
         Args:
@@ -475,6 +475,7 @@ class Conv_Decoder(nn.Module):
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_WRAPPER)
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_LLM_FINETUNING)
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_LINEAR_PROBING)
+@ModelRegistry.register(ModelName.LLAMA32_TOKENIZER_WRAPPER)
 class ECG_Tokenizer_Wrapper(nn.Module):
     """
     Combined tokenization wrapper that encapsulates the encoder, quantizer, and decoder.
@@ -497,9 +498,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         codebook_size: int = 512,
         decoder_mode: DecoderMode = DecoderMode.LLM,
         num_classes: int = 77,
-        # Additional parameters for GPT2 decoder
-        gpt2_model_name: str = 'gpt2',
-        gpt2_embedding_size: int = 768,
+        huggingface_model_name: str = 'gpt2',
+        llm_input_embedding_size: int = 768,
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
     ):
@@ -534,30 +534,38 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             codebook_size=codebook_size
         )
         
-        # Initialize appropriate decoder based on mode
         decoder_class: ModelClassT = ModelRegistry.get(decoder_name)
         if decoder_class is None:
             raise ValueError(f"Decoder '{decoder_name}' not found in ModelRegistry")
-            
-        if self.decoder_mode == DecoderMode.CLASSIFICATION and decoder_name in [
-                ModelName.LINEAR_CLASSIFIER_DECODER, 
-                ModelName.CLS_TOKEN_CLASSIFIER_DECODER,
-                ModelName.RESNET_CLASSIFIER_DECODER
-            ]:
+        
+        if self.decoder_mode == DecoderMode.LLM:
+            try:
+                quantized_feature_shape = (128, 82)
+                self.decoder = decoder_class(
+                    huggingface_model_name=huggingface_model_name,
+                    llm_input_embedding_size=llm_input_embedding_size,
+                    quantized_feature_shape=quantized_feature_shape,
+                    adapter_name=adapter_name,
+                    adapter_dropout=adapter_dropout
+                )
+            except TypeError as e:
+                raise ValueError(
+                    f"Decoder '{decoder_name}' does not support LLM mode parameters. "
+                    f"For LLM mode, decoder must accept: huggingface_model_name, llm_input_embedding_size, "
+                    f"quantized_feature_shape, adapter_name, and adapter_dropout. Error: {e}"
+                )
+        elif self.decoder_mode == DecoderMode.CLASSIFICATION:
+
             self.decoder: nn.Module = decoder_class(num_classes=num_classes)
-        elif self.decoder_mode == DecoderMode.LLM and decoder_name == ModelName.GPT2_DECODER:
-            # For LLM mode, we need the quantized feature shape from the quantizer
-            # Assuming the quantizer outputs (batch, 128, sequence_length)
-            quantized_feature_shape = (128, 82)  # This should match your quantizer output
-            self.decoder = decoder_class(
-                gpt2_model_name=gpt2_model_name,
-                gpt2_embedding_size=gpt2_embedding_size,
-                quantized_feature_shape=quantized_feature_shape,
-                adapter_name=adapter_name,
-                adapter_dropout=adapter_dropout
-            )
+
         elif self.decoder_mode == DecoderMode.RECONSTRUCTION:
-            self.decoder: nn.Module = decoder_class()
+            try:
+                self.decoder: nn.Module = decoder_class()
+            except TypeError as e:
+                raise ValueError(
+                    f"Decoder '{decoder_name}' does not support reconstruction mode. "
+                    f"For reconstruction, decoder should accept no parameters. Error: {e}"
+                )
         else:
             raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
 
@@ -757,23 +765,27 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             all_codes = None
 
         # Handle different decoder types
-        if self.decoder_mode == DecoderMode.LLM and self.decoder_name == ModelName.GPT2_DECODER:
-            # For GPT2 decoder, pass the quantized features and optional LLM parameters
-            decoder_output = self.decoder(
-                quantized_features=quantized,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
-            )
-            # GPT2 decoder returns a dict - return it directly for LLM mode
-            if isinstance(decoder_output, dict):
-                return decoder_output  # Return the dict directly instead of extracting tensor
-            else:
-                reconstructed_output = decoder_output
-                # Create a dict for consistency
-                return {"logits": reconstructed_output, "indices": indices, "commit_loss": commit_loss}
+        if self.decoder_mode == DecoderMode.LLM:
+            try:
+                decoder_output = self.decoder(
+                    quantized_features=quantized,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+
+                if isinstance(decoder_output, dict):
+                    return decoder_output
+                else:
+                    reconstructed_output = decoder_output
+                    return {"logits": reconstructed_output, "indices": indices, "commit_loss": commit_loss}
+            except TypeError as e:
+                # If the decoder doesn't accept LLM parameters, fall back to basic call
+                raise ValueError(
+                    f"LLM decoder '{self.decoder_name}' does not accept expected LLM parameters "
+                    f"(quantized_features, input_ids, attention_mask, labels). Error: {e}"
+                )
         else:
-            # Standard decoder (classification or reconstruction)
             reconstructed_output = self.decoder(quantized)
             
         if return_all_codes:
@@ -789,8 +801,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         **generate_kwargs
     ) -> torch.Tensor:
         """
-        Generate a clinical report from ECG signal using the GPT2 decoder.
-        Only available when decoder_mode is LLM and decoder is GPT2_DECODER.
+        Generate a clinical report from ECG signal using any LLM decoder.
+        Available when decoder_mode is LLM and decoder supports generation.
         
         Args:
             x: ECG signal tensor
@@ -800,12 +812,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         Returns:
             Generated token IDs
         """
-        if self.decoder_mode != DecoderMode.LLM or self.decoder_name != ModelName.GPT2_DECODER:
-            raise ValueError("generate_report() is only available with GPT2_DECODER in LLM mode")
+        if self.decoder_mode != DecoderMode.LLM:
+            raise ValueError("generate_report() is only available in LLM mode")
         
         if self.decoder is None:
             raise ValueError("No decoder available for generation")
-        
+            
         # Ensure input is in the right dtype
         x = x.to(dtype=torch.float32)
         
@@ -813,7 +825,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         features = self.encoder(x)
         quantized, _, _ = self.quantizer(features)
         
-        # Generate report using the GPT2 decoder
+        # Check if decoder has a generate method
+        if not hasattr(self.decoder, 'generate_report'):
+            raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
+        
         return self.decoder.generate_report(
             quantized_features=quantized,
             max_token_length=max_token_length,

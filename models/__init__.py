@@ -6,6 +6,7 @@ from models.adapters import (
 )
 from models.bert_classifier import BertClassifier
 from models.gpt2_tokenizer_decoder import GPT2Decoder
+from models.llama32_tokenizer_decoder import Llama32Decoder
 from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
     Conv_Encoder,
@@ -18,6 +19,7 @@ __all__ = [
     "EmbeddingAdapter", 
     "SequenceAdapter",
     "GPT2Decoder",
+    "Llama32Decoder",
     "SimpleEmbeddingAdapter",
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",

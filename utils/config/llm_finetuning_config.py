@@ -1,5 +1,3 @@
-    
-from typing import Tuple
 from dataclasses import dataclass
 
 from utils.enums import ConfigName
@@ -41,9 +39,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Model parameters
     huggingface_model_name: str
-    trainable_model_name: str
     adapter_name: str
-    gpt2_embedding_size: int
+    llm_input_embedding_size: int
     
     # Metrics
     metrics: list[str]

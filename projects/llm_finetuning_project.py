@@ -6,7 +6,7 @@ from torch.optim.optimizer import Optimizer
 from torch.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
 from utils.ddp import DistributedUtils
 from utils.schedulers import get_scheduler
@@ -87,6 +87,8 @@ class LLMFinetuningProject(BaseProject):
             codebook_size=pretrained_config.codebook_size,
             decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
             adapter_name=self.config.adapter_name,
+            huggingface_model_name=self.config.huggingface_model_name,
+            llm_input_embedding_size=self.config.llm_input_embedding_size,
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
@@ -99,8 +101,7 @@ class LLMFinetuningProject(BaseProject):
         self._print_training_config(ecg_tokenizer)
                
         # Load the tokenizer
-        tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
                
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -142,7 +143,7 @@ class LLMFinetuningProject(BaseProject):
         # Get the parameter groups
         param_groups = [
             {
-                "params": ecg_tokenizer.module.decoder.gpt2.parameters(),
+                "params": self._get_llm_parameters(ecg_tokenizer.module.decoder),
                 "lr": self.config.llm_lr,
                 "weight_decay": self.config.llm_weight_decay,
                 "name": "llm"
@@ -243,6 +244,8 @@ class LLMFinetuningProject(BaseProject):
             codebook_size=pretrained_config.codebook_size,
             decoder_mode=pretrained_config.decoder_mode,
             adapter_name=pretrained_config.adapter_name,
+            huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
+            llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
@@ -253,8 +256,7 @@ class LLMFinetuningProject(BaseProject):
         ecg_tokenizer.eval()
         
         # Load the tokenizer
-        tokenizer: GPT2Tokenizer = GPT2Tokenizer.from_pretrained(self.config.tokenizer_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
         
         # Get the dataloaders
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -290,3 +292,25 @@ class LLMFinetuningProject(BaseProject):
             NotImplementedError: Extraction not implemented for LLM finetuning
         """        
         raise NotImplementedError("Extraction is not implemented for this project")
+    
+    def _get_tokenizer(self, tokenizer_name: str):
+        """Get the appropriate tokenizer using AutoTokenizer for all models."""
+        # Use AutoTokenizer which works for all Hugging Face models
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        
+        # Ensure pad token is set - use eos_token if no pad_token exists
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        return tokenizer
+    
+    def _get_llm_parameters(self, decoder):
+        """Get LLM parameters from the decoder's LLM model."""
+        if hasattr(decoder, 'llm_model'):
+            return decoder.llm_model.parameters()
+        else:
+            # Fallback to look for any transformer model attribute
+            for attr_name in ['transformer', 'model', 'llm']:
+                if hasattr(decoder, attr_name):
+                    return getattr(decoder, attr_name).parameters()
+            raise AttributeError(f"Decoder {type(decoder).__name__} doesn't have a recognizable LLM model attribute")

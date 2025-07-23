@@ -36,6 +36,7 @@ class LinearAdapter(nn.Module):
         return self.adapter(x) 
     
 @ModelRegistry.register(AdapterName.GPT2_EMBEDDING_ADAPTER)
+@ModelRegistry.register(AdapterName.LLAMA32_EMBEDDING_ADAPTER)
 class EmbeddingAdapter(nn.Module):
     """CNN-based adapter that processes 3D input through convolutional layers to GPT-2 embedding size."""
 
@@ -102,6 +103,7 @@ class EmbeddingAdapter(nn.Module):
         return x  # Shape: (batch_size, 768)
 
 @ModelRegistry.register(AdapterName.GPT2_SIMPLE_EMBEDDING_ADAPTER)
+@ModelRegistry.register(AdapterName.LLAMA32_SIMPLE_EMBEDDING_ADAPTER)
 class SimpleEmbeddingAdapter(nn.Module):
     """Minimal adapter using global average pooling and single linear layer."""
     
@@ -135,6 +137,7 @@ class SimpleEmbeddingAdapter(nn.Module):
         return x  # Output shape: (batch, output_size)
     
 @ModelRegistry.register(AdapterName.GPT2_SEQUENCE_ADAPTER)
+@ModelRegistry.register(AdapterName.LLAMA32_SEQUENCE_ADAPTER)
 class SequenceAdapter(nn.Module):
     """Adapter that processes 2D input through a sequence of operations to GPT-2 embedding size."""
     
@@ -212,4 +215,4 @@ class SequenceAdapter(nn.Module):
         # Final projection to GPT2 embedding size
         x = self.final_projection(x)  # (batch, output_size)
 
-        return x 
+        return x
