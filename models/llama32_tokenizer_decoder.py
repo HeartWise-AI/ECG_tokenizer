@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from typing import Union, Optional, Dict, Any, Tuple
 from transformers.generation.utils import GenerateOutput
-from transformers import LlamaForCausalLM, LlamaTokenizer, PreTrainedModel
+from transformers import LlamaForCausalLM, PreTrainedModel
 
 from utils.enums import (
     ModelName, 
