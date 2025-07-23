@@ -829,18 +829,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         features = self.encoder(x)
         quantized, _, _ = self.quantizer(features)
         
-        # Generate report using any LLM decoder that supports generation
-        if hasattr(self.decoder, 'generate_report'):
-            return self.decoder.generate_report(
-                quantized_features=quantized,
-                max_token_length=max_token_length,
-                **generate_kwargs
-            )
-        elif hasattr(self.decoder, 'generate'):
-            return self.decoder.generate(
-                quantized_features=quantized,
-                max_token_length=max_token_length,
-                **generate_kwargs
-            )
-        else:
-            raise ValueError(f"Decoder '{self.decoder_name}' does not have a generate method")
+        return self.decoder.generate_report(
+            quantized_features=quantized,
+            max_token_length=max_token_length,
+            **generate_kwargs
+        )
