@@ -1,51 +1,51 @@
 command:
-  - python
-  - ./linear_probe.py
+  - torchrun
+  - "--nproc_per_node=3"
+  - "--master_port=29500"
+  - "scripts/main.py"
   - "--base_config"
   - "config/linear_probing/base_config.yaml"
   - ${args}
 
-method: bayes
-
-name: "final_sweep"
-project: "ECG_Tokenizer_Linear_Probing"
+name: "gpt2_mhi_sweep"
+project: "ECG_tokenizer_LLM_finetuning_GPT2"
 entity: "jacques-delfrate"
-
+method: bayes
 metric:
-  name: validate/cls_loss
+  name: validate/loss
   goal: minimize
 
 parameters:
-  lr:
-    values: [1e-6, 1e-5, 1e-4, 1e-3]
-
+  llm_lr:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.001
   batch_size:
-    values: [16, 32]
-
-  weight_decay:
-    values: [1e-4, 1e-3, 1e-2]
-
+    values: [8, 16, 32, 64]
+  optimizer:
+    values: ["RAdam", "AdamW"]
+  scheduler_type:
+    values: ["step", "cosine", "linear_warmup", "cosine_with_warmup", "cosine_warm_restart", "cosine_with_hard_restarts_with_warmup"]
+  llm_weight_decay:
+    values: [0.0, 0.0001, 0.001, 0.01, 0.1]
   criterion:
-    values: ["focal_loss", "bce_loss"]
-
-  num_layers:
-    values: [1, 2, 3]
-
-  hidden_dim:
-    values: [256, 512, 1024, 2048]
-  name:
-    values: ["sweep"]
-  project:
-    values: ["ECG_Tokenizer_Linear_Probing"]
-  entity:
-    values: ["jacques-delfrate"]
+    values: ["bce_loss"]
+  num_warmup_percent:
+    values: [0.05, 0.1, 0.2]
+  num_hard_restarts_cycles:
+    values: [1.0, 2.0, 3.0]
+  warm_restart_tmult:
+    values: [2, 3, 4]
+  gamma:
+    values: [0.1, 0.2, 0.3]
+  step_size:
+    values: [1, 5, 10, 15, 20]
 
 early_terminate:
   type: hyperband
   min_iter: 3
   eta: 2
   s: 2
-
 
 
   
