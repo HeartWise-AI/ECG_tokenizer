@@ -8,8 +8,8 @@ command:
   - ${args}
 
 name: "gpt2_mhi_sweep"
-project: "ECG_tokenizer_LLM_finetuning_GPT2"
-entity: "jacques-delfrate"
+project: "ECG_Tokenizer_Linear_Probing"
+entity: "mhi_ai"
 method: bayes
 metric:
   name: validate/loss
