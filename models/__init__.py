@@ -1,12 +1,12 @@
-from models.adapters import (
+from .adapters import (
     LinearAdapter, 
     EmbeddingAdapter, 
     SequenceAdapter,
     SimpleEmbeddingAdapter,
 )
-from models.bert_classifier import BertClassifier
-from models.gpt2_tokenizer_decoder import GPT2Decoder
-from models.ecg_tokenizer_wrapper import (
+from .bert_classifier import BertClassifier
+from .gpt2_tokenizer_decoder import GPT2Decoder
+from .ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
     Conv_Encoder,
     Conv_Decoder,

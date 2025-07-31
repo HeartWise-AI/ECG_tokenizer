@@ -5,7 +5,7 @@ from models.local_residual_vq import ResidualVQ
 
 from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
-from models.types import ModelT, ModelClassT
+from .custom1_types import ModelT, ModelClassT
 
 @ModelRegistry.register(ModelName.CONV_ENCODER)
 class Conv_Encoder(nn.Module):

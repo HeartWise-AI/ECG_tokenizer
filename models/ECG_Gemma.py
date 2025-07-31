@@ -1,28 +1,31 @@
 import torch 
 import torch.nn as nn
-from typing import Optional, Union, Dict, Any, List, Tuple, Cache
+from typing import Optional, Union, Dict, Any, List, Tuple
 from collections.abc import Callable
 import logging
-from transformers import Gemma3ForConditionalGeneration, Gemma3Model, Gemma3MultiModalProjector, PreTrainedConfig, Gemma3ModelOutputWithPast, Gemma3Config, Gemma3RMSNorm
+from transformers.models.gemma3.modeling_gemma3 import Gemma3ForConditionalGeneration, Gemma3Model, Gemma3MultiModalProjector, Gemma3ModelOutputWithPast, Gemma3Config, Gemma3RMSNorm, Gemma3CausalLMOutputWithPast
+from transformers.configuration_utils import PretrainedConfig
 logger = logging.getLogger(__name__)
-from tokenizer import ECG_Tokenizer_Wrapper
-from torch._dynamo import is_torchdynamo_compiling
-from ...masking_utils import create_causal_mask, create_masks_for_generate, create_sliding_window_causal_mask
+#from .tokenizer import ECG_Tokenizer_Wrapper
+from transformers.masking_utils import create_causal_mask, create_masks_for_generate, create_sliding_window_causal_mask
+from transformers.cache_utils import Cache
+from transformers.utils import auto_docstring
 
-class ECGConfig(PreTrainedConfig):
 
-    model_type = "ecg_model"
+class ECGConfig(PretrainedConfig):
+	
+	model_type = "ecg_model"
 
-    def __init__(self, 
-			  ecg_token_id = 513,
-			  pad_token_id = 0,
-			  embedding_dim = 256,
-			  num_quantizers = 8,
-			  codebook_size = 512,
-			  layer_norm_eps = 1e-5,
-			  hidden_size = 256, 
-			  **kwargs):
-	   
+	def __init__(self, 
+				ecg_token_id = 513,
+				pad_token_id = 0,
+				embedding_dim = 256,
+				num_quantizers = 8,
+				codebook_size = 512,
+				layer_norm_eps = 1e-5,
+				hidden_size = 256, 
+				**kwargs):
+		 
 		super().__init__(pad_token_id=pad_token_id, **kwargs)
 		self.ecg_token_id = ecg_token_id
 		self.embedding_dim = embedding_dim
@@ -34,209 +37,211 @@ class ECGConfig(PreTrainedConfig):
 
 class ECG_Gemma_config(Gemma3Config):
 
-    model_type = "ecg_gemma"
+	 model_type = "ecg_gemma"
 
-    def __init__(self, ecg_config: Optional[Union[ECGConfig, Dict[str, Any]]] = None, **kwargs):
+	 def __init__(self, ecg_config: Optional[Union[ECGConfig, Dict[str, Any]]] = None, **kwargs):
 
-	   if isinstance(ecg_config, dict):
-		  ecg_config = ECGConfig(**ecg_config)
-	   elif ecg_config is None:
-		  ecg_config = ECGConfig()
-		  logger.info("ecg_config is None, using default ECGConfig ecg config.")
-	   
-	   self.ecg_config = ecg_config
-	   kwargs["ecg_config"] = ecg_config.to_dict()
+			if isinstance(ecg_config, dict):
+			 ecg_config = ECGConfig(**ecg_config)
+			elif ecg_config is None:
+				ecg_config = ECGConfig()
+				logger.info("ecg_config is None, using default ECGConfig ecg config.")
+		 
+			self.ecg_config = ecg_config
+			kwargs["ecg_config"] = ecg_config.to_dict()
 
-	   super().__init__(**kwargs)
+			super().__init__(**kwargs)
 
 class ECG_Gemma_model(Gemma3Model):
 
-    _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
+	_checkpoint_conversion_mapping = {"language_model.model": "language_model"}
 
-    def __init__(self, config: ECG_Gemma_config):
+	def __init__(self, config: ECG_Gemma_config):
 
-	   super().__init__(config)
+		super().__init__(config)
 
-	   self.ecg_tokenizer = ECG_Tokenizer_Wrapper()
-	   self.ecg_codebook = nn.Embedding(config.codebook_size + 2, config.embedding_dim)
+		#self.ecg_tokenizer = ECG_Tokenizer_Wrapper()
+		self.ecg_codebook = nn.Embedding(config.codebook_size + 2, config.embedding_dim)
 
-    def get_ecg_features(self, ecg_signals: torch.Tensor):
+	def get_ecg_features(self, ecg_signals: torch.Tensor):
 
-	   reconstructed_output, indices, commit_loss = self.ecg_tokenizer(ecg_signals)
-	   B, L, Q = indices.shape
-	   flat_indices = indices.view(-1) #flatten 1 D list of indices B * L * Q
-	   embeddings = self.ecg_codebook(flat_indices) #-1 is the embedding dimension
-	   embedded = embeddings.view(B, L, Q, -1) #reshape
-	   ecg_features = embedded.mean(dim = 2) #shape: (B, L, embed_dim)
-	   return ecg_features
-    
-    def forward_vision(self,
-	   input_ids: torch.LongTensor = None,
-	   pixel_values: torch.FloatTensor = None,
-	   attention_mask: Optional[torch.Tensor] = None,
-	   position_ids: Optional[torch.LongTensor] = None,
-	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
-	   token_type_ids: Optional[torch.LongTensor] = None,
-	   cache_position: Optional[torch.LongTensor] = None,
-	   inputs_embeds: Optional[torch.FloatTensor] = None,
-	   labels: Optional[torch.LongTensor] = None,
-	   use_cache: Optional[bool] = None,
-	   output_attentions: Optional[bool] = None,
-	   output_hidden_states: Optional[bool] = None,
-	   return_dict: Optional[bool] = None,
-	   **lm_kwargs,
-    ) -> Union[Tuple, Gemma3ModelOutputWithPast]:
+		reconstructed_output, indices, commit_loss = self.ecg_tokenizer(ecg_signals)
+		B, L, Q = indices.shape
+		flat_indices = indices.view(-1) #flatten 1 D list of indices B * L * Q
+		embeddings = self.ecg_codebook(flat_indices) #-1 is the embedding dimension
+		embedded = embeddings.view(B, L, Q, -1) #reshape
+		ecg_features = embedded.mean(dim = 2) #shape: (B, L, embed_dim)
+		return ecg_features
+	 
+	def forward_vision(self,
+		input_ids: torch.LongTensor = None,
+		pixel_values: torch.FloatTensor = None,
+		attention_mask: Optional[torch.Tensor] = None,
+		position_ids: Optional[torch.LongTensor] = None,
+		past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
+		token_type_ids: Optional[torch.LongTensor] = None,
+		cache_position: Optional[torch.LongTensor] = None,
+		inputs_embeds: Optional[torch.FloatTensor] = None,
+		labels: Optional[torch.LongTensor] = None,
+		use_cache: Optional[bool] = None,
+		output_attentions: Optional[bool] = None,
+		output_hidden_states: Optional[bool] = None,
+		return_dict: Optional[bool] = None,
+		**lm_kwargs,
+	 ) -> Union[Tuple, Gemma3ModelOutputWithPast]:
 
-	   return super().forward(
-		  input_ids=input_ids,
-		  pixel_values=pixel_values,
-		  attention_mask=attention_mask,
-		  position_ids=position_ids,
-		  past_key_values=past_key_values,
-		  token_type_ids=token_type_ids,
-		  cache_position=cache_position,
-		  inputs_embeds=inputs_embeds,
-		  labels=labels,
-		  use_cache=use_cache,
-		  output_attentions=output_attentions,
-		  output_hidden_states=output_hidden_states,
-		  return_dict=return_dict,
-		  **lm_kwargs
+		return super().forward(
+			input_ids=input_ids,
+			pixel_values=pixel_values,
+			attention_mask=attention_mask,
+			position_ids=position_ids,
+			past_key_values=past_key_values,
+			token_type_ids=token_type_ids,
+			cache_position=cache_position,
+			inputs_embeds=inputs_embeds,
+			labels=labels,
+			use_cache=use_cache,
+			output_attentions=output_attentions,
+			output_hidden_states=output_hidden_states,
+			return_dict=return_dict,
+			**lm_kwargs
 )
-    
-    def forward_ecg(self,
-	   input_ids: torch.LongTensor = None,
-	   ecg_signals: torch.FloatTensor = None,
-	   attention_mask: Optional[torch.Tensor] = None,
-	   position_ids: Optional[torch.LongTensor] = None,
-	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
-	   token_type_ids: Optional[torch.LongTensor] = None,
-	   cache_position: Optional[torch.LongTensor] = None,
-	   inputs_embeds: Optional[torch.FloatTensor] = None,
-	   labels: Optional[torch.LongTensor] = None,
-	   use_cache: Optional[bool] = None,
-	   output_attentions: Optional[bool] = None,
-	   output_hidden_states: Optional[bool] = None,
-	   return_dict: Optional[bool] = None,
-	   **lm_kwargs,
-    ) -> Union[Tuple, Gemma3ModelOutputWithPast]:
-		  
-	   if (input_ids is None) ^ (inputs_embeds is not None):
-		  raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-	   
-	   output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-	   output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
-	   return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-	   
-	   ecg_features = None
+	 
+	def forward_ecg(self,
+		 input_ids: torch.LongTensor = None,
+		 ecg_signals: torch.FloatTensor = None,
+		 attention_mask: Optional[torch.Tensor] = None,
+		 position_ids: Optional[torch.LongTensor] = None,
+		 past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
+		 token_type_ids: Optional[torch.LongTensor] = None,
+		 cache_position: Optional[torch.LongTensor] = None,
+		 inputs_embeds: Optional[torch.FloatTensor] = None,
+		 labels: Optional[torch.LongTensor] = None,
+		 use_cache: Optional[bool] = None,
+		 output_attentions: Optional[bool] = None,
+		 output_hidden_states: Optional[bool] = None,
+		 return_dict: Optional[bool] = None,
+		 **lm_kwargs,
+	 ) -> Union[Tuple, Gemma3ModelOutputWithPast]:
+			 
+		if (input_ids is None) ^ (inputs_embeds is not None):
+			raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+		 
+			output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+			output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
+			return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+		 
+			ecg_features = None
 
-	   # Replace image id with PAD if the image token if OOV, to avoid index-errors
-	   if input_ids is not None and self.config.ecg_token_id >= self.vocab_size:
-		  special_ecg_mask = input_ids == self.config.ecg_token_id
-		  llm_input_ids = input_ids.clone()
-		  llm_input_ids[special_ecg_mask] = 0
-	   else:
-		  llm_input_ids = input_ids
+		# Replace image id with PAD if the image token if OOV, to avoid index-errors
+		if input_ids is not None and self.config.ecg_token_id >= self.vocab_size:
+			special_ecg_mask = input_ids == self.config.ecg_token_id
+			llm_input_ids = input_ids.clone()
+			llm_input_ids[special_ecg_mask] = 0
+		else:
+			llm_input_ids = input_ids
 
-	   if inputs_embeds is None:
-		  inputs_embeds = self.get_input_embeddings()(llm_input_ids)
+		if inputs_embeds is None:
+			inputs_embeds = self.get_input_embeddings()(llm_input_ids)
 
-	   if cache_position is None:
-		  past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-		  cache_position = torch.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device)
+		if cache_position is None:
+			past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+			cache_position = torch.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device)
 
-	   if ecg_signals is not None:
-		  ecg_features = self.get_ecg_features(ecg_signals)
+		if ecg_signals is not None:
+			ecg_features = self.get_ecg_features(ecg_signals)
 
-		  if input_ids is None:
-			 special_ecg_mask = inputs_embeds == self.get_input_embeddings()(
+			if input_ids is None:
+				special_ecg_mask = inputs_embeds == self.get_input_embeddings()(
 				torch.tensor(self.config.ecg_token_id, dtype=torch.long, device=inputs_embeds.device)
-			 )
-		  else:
-			 special_ecg_mask = (input_ids == self.config.ecg_token_id).unsqueeze(-1)
-			 special_ecg_mask = special_ecg_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
+				 )
+			else:
+				special_ecg_mask = (input_ids == self.config.ecg_token_id).unsqueeze(-1)
+				special_ecg_mask = special_ecg_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
 
-		  if not is_torchdynamo_compiling() and inputs_embeds[special_ecg_mask].numel() != ecg_features.numel():
-			 ecg_tokens_in_text = (special_ecg_mask).sum(dim=1).sum(dim=0)[0]
-			 raise ValueError(
-				f"Number of ecg does not match number of special ecg tokens in the input text. "
-				f"Got {ecg_tokens_in_text} ecg tokens in the text but {ecg_features.shape[0] * ecg_features.shape[1]} "
-				"tokens from ecg embeddings."
-			 )
-		  ecg_features = ecg_features.to(inputs_embeds.device, inputs_embeds.dtype)
-		  inputs_embeds = inputs_embeds.masked_scatter(special_ecg_mask, ecg_features)
+			if inputs_embeds[special_ecg_mask].numel() != ecg_features.numel():
+				ecg_tokens_in_text = special_ecg_mask.sum(dim=1).sum(dim=0)[0]
+				raise ValueError(
+		  f"Number of ecg does not match number of special ecg tokens in the input text. "
+		  f"Got {ecg_tokens_in_text} ecg tokens in the text but {ecg_features.shape[0] * ecg_features.shape[1]} "
+		  "tokens from ecg embeddings."
+	 )
 
-	   # It may already have been prepared by e.g. `generate`
-	   if not isinstance(causal_mask_mapping := attention_mask, dict):
-		  # Prepare mask arguments
-		  mask_kwargs = {
-			 "config": self.config.get_text_config(),
-			 "input_embeds": inputs_embeds,
-			 "attention_mask": attention_mask,
-			 "cache_position": cache_position,
-			 "past_key_values": past_key_values,
-		  }
-		  if token_type_ids is not None and inputs_embeds.shape[1] != 1:
-			 # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
-			 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-				token_type_ids.to(cache_position.device), self.config.mm_tokens_per_ecg
-			 )
 
-		  # Create the masks
-		  causal_mask_mapping = {
-			 "full_attention": create_causal_mask(**mask_kwargs),
-			 "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
-		  }
+			ecg_features = ecg_features.to(inputs_embeds.device, inputs_embeds.dtype)
+			inputs_embeds = inputs_embeds.masked_scatter(special_ecg_mask, ecg_features)
 
-	   outputs = self.language_model(
-		  attention_mask=causal_mask_mapping,
-		  position_ids=position_ids,
-		  past_key_values=past_key_values,
-		  inputs_embeds=inputs_embeds,
-		  use_cache=use_cache,
-		  output_attentions=output_attentions,
-		  output_hidden_states=output_hidden_states,
-		  return_dict=True,
-		  cache_position=cache_position,
-		  **lm_kwargs,
-	   )
+		 # It may already have been prepared by e.g. `generate`
+		if not isinstance(causal_mask_mapping := attention_mask, dict):
+			 # Prepare mask arguments
+			mask_kwargs = {
+				 "config": self.config.get_text_config(),
+				 "input_embeds": inputs_embeds,
+				 "attention_mask": attention_mask,
+				 "cache_position": cache_position,
+				 "past_key_values": past_key_values,
+			 }
+			if token_type_ids is not None and inputs_embeds.shape[1] != 1:
+				 # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
+				mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+					 token_type_ids.to(cache_position.device), self.config.mm_tokens_per_ecg
+				 )
 
-	   return ECG_Gemma3ModelOutputWithPast(
-		  last_hidden_state=outputs.last_hidden_state,
-		  past_key_values=outputs.past_key_values if use_cache else None,
-		  hidden_states=outputs.hidden_states,
-		  attentions=outputs.attentions,
-		  ecg_hidden_states=ecg_features if ecg_signals is not None else None,
-	   )
+			 # Create the masks
+				causal_mask_mapping = {
+				 "full_attention": create_causal_mask(**mask_kwargs),
+				 "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
+			 }
+
+		outputs = self.language_model(
+			 attention_mask=causal_mask_mapping,
+			 position_ids=position_ids,
+			 past_key_values=past_key_values,
+			 inputs_embeds=inputs_embeds,
+			 use_cache=use_cache,
+			 output_attentions=output_attentions,
+			 output_hidden_states=output_hidden_states,
+			 return_dict=True,
+			 cache_position=cache_position,
+			 **lm_kwargs,
+		 )
+
+		return ECG_Gemma3ModelOutputWithPast(
+			 last_hidden_state=outputs.last_hidden_state,
+			 past_key_values=outputs.past_key_values if use_cache else None,
+			 hidden_states=outputs.hidden_states,
+			 attentions=outputs.attentions,
+			 ecg_hidden_states=ecg_features if ecg_signals is not None else None,
+		 )
 
 class ECG_Gemma3ModelOutputWithPast(Gemma3ModelOutputWithPast):
 
-    ecg_hidden_states: Optional[torch.FloatTensor] = None
+	ecg_hidden_states: Optional[torch.FloatTensor] = None
 
 class ECG_Gemma3MultiModalProjector(Gemma3MultiModalProjector):
 
 
-    def __init__(self, config: ECG_Gemma_config):
-	   super().__init__(config)
+	def __init__(self, config: ECG_Gemma_config):
+		super().__init__(config)
 
-	   self.ecg_input_projection_weight = nn.Parameter(
-	   torch.zeros(config.ecg_config.hidden_size, config.text_config.hidden_size)
-	   )
+		self.ecg_input_projection_weight = nn.Parameter(
+		torch.zeros(config.ecg_config.hidden_size, config.text_config.hidden_size)
+		 )
 
-	   self.ecg_soft_emb_norm = Gemma3RMSNorm(
-		  config.ecg_config.hidden_size, eps=config.ecg_config.layer_norm_eps
-	   )
+		self.ecg_soft_emb_norm = Gemma3RMSNorm(
+			 config.ecg_config.hidden_size, eps=config.ecg_config.layer_norm_eps
+		 )
 
-    def forward_vision(self, vision_outputs: torch.Tensor):
-    
-	   return super().forward(vision_outputs)
-    
-    def forward_ecg(self, ecg_outputs: torch.Tensor):
+	def forward_vision(self, vision_outputs: torch.Tensor):
+	 
+		return super().forward(vision_outputs)
+	 
+	def forward_ecg(self, ecg_outputs: torch.Tensor):
 		batch_size, leads, seq_length = ecg_outputs.shape
 		#Transpose to (batch_size, seq_length, leads) so that 'leads' is the feature dimension
-	   
+		 
 		ecg_outputs = ecg_outputs.transpose(1, 2).contiguous()
-   
+	
 		normed_ecg_outputs = self.ecg_soft_emb_norm(ecg_outputs)
 
 		projected_ecg_outputs = torch.matmul(normed_ecg_outputs, self.ecg_input_projection_weight)
@@ -245,208 +250,236 @@ class ECG_Gemma3MultiModalProjector(Gemma3MultiModalProjector):
 
 class ECG_Gemma3ForConditionalGeneration(Gemma3ForConditionalGeneration):
 
-    _checkpoint_conversion_mapping = {
-	   "^language_model.model": "model.language_model",
-	   "^vision_tower": "model.vision_tower",
-	   "^ecg_codebook": "model.ecg_codebook",
-	   "^multi_modal_projector": "model.multi_modal_projector",
-	   "^language_model.lm_head": "lm_head",
-    }
-	
-    _tied_weights_keys = ["lm_head.weight"]
+	_checkpoint_conversion_mapping = {
+		 "^language_model.model": "model.language_model",
+		 "^vision_tower": "model.vision_tower",
+		 "^ecg_codebook": "model.ecg_codebook",
+		 "^multi_modal_projector": "model.multi_modal_projector",
+		 "^language_model.lm_head": "lm_head",
+	 }
+	 
+	_tied_weights_keys = ["lm_head.weight"]
 
-    def __init__(self, config: ECG_Gemma_config):
+	def __init__(self, config: ECG_Gemma_config):
 		super().__init__(config)
 		self.model = ECG_Gemma_model(config)
 		self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
 		self.post_init()
 
-    def get_ecg_features(self, ecg_signals):
-	   return self.model.get_ecg_features(ecg_signals)
+	def get_ecg_features(self, ecg_signals):
+		return self.model.get_ecg_features(ecg_signals)
 
-    @property
-    def ecg_tokenizer(self):
-	   return self.model.ecg_tokenizer
-
-    @auto_docstring
-	def forward_vision(
-	   self,
-	   input_ids: torch.LongTensor = None,
-	   pixel_values: torch.FloatTensor = None,
-	   attention_mask: Optional[torch.Tensor] = None,
-	   position_ids: Optional[torch.LongTensor] = None,
-	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
-	   token_type_ids: Optional[torch.LongTensor] = None,
-	   cache_position: Optional[torch.LongTensor] = None,
-	   inputs_embeds: Optional[torch.FloatTensor] = None,
-	   labels: Optional[torch.LongTensor] = None,
-	   use_cache: Optional[bool] = None,
-	   output_attentions: Optional[bool] = None,
-	   output_hidden_states: Optional[bool] = None,
-	   return_dict: Optional[bool] = None,
-	   logits_to_keep: Union[int, torch.Tensor] = 0,
-	   **lm_kwargs,
-    ) -> Union[Tuple, Gemma3CausalLMOutputWithPast]:
-
-		return super().forward(
-        input_ids=input_ids,
-        pixel_values=pixel_values,
-        attention_mask=attention_mask,
-        position_ids=position_ids,
-        past_key_values=past_key_values,
-        token_type_ids=token_type_ids,
-        cache_position=cache_position,
-        inputs_embeds=inputs_embeds,
-        labels=labels,
-        use_cache=use_cache,
-        output_attentions=output_attentions,
-        output_hidden_states=output_hidden_states,
-        return_dict=return_dict,
-        logits_to_keep=logits_to_keep,
-        **lm_kwargs,
-    )
+	@property
+	def ecg_tokenizer(self):
+		return self.model.ecg_tokenizer
 
 	@auto_docstring
-    def forward_ecg(
-	   self,
-	   input_ids: torch.LongTensor = None,
-	   ecg_signals: torch.FloatTensor = None,
-	   attention_mask: Optional[torch.Tensor] = None,
-	   position_ids: Optional[torch.LongTensor] = None,
-	   past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
-	   token_type_ids: Optional[torch.LongTensor] = None,
-	   cache_position: Optional[torch.LongTensor] = None,
-	   inputs_embeds: Optional[torch.FloatTensor] = None,
-	   labels: Optional[torch.LongTensor] = None,
-	   use_cache: Optional[bool] = None,
-	   output_attentions: Optional[bool] = None,
-	   output_hidden_states: Optional[bool] = None,
-	   return_dict: Optional[bool] = None,
-	   logits_to_keep: Union[int, torch.Tensor] = 0,
-	   **lm_kwargs,
-    ) -> Union[Tuple, Gemma3CausalLMOutputWithPast]:
+	def forward_vision(
+		 self,
+		 input_ids: torch.LongTensor = None,
+		 pixel_values: torch.FloatTensor = None,
+		 attention_mask: Optional[torch.Tensor] = None,
+		 position_ids: Optional[torch.LongTensor] = None,
+		 past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
+		 token_type_ids: Optional[torch.LongTensor] = None,
+		 cache_position: Optional[torch.LongTensor] = None,
+		 inputs_embeds: Optional[torch.FloatTensor] = None,
+		 labels: Optional[torch.LongTensor] = None,
+		 use_cache: Optional[bool] = None,
+		 output_attentions: Optional[bool] = None,
+		 output_hidden_states: Optional[bool] = None,
+		 return_dict: Optional[bool] = None,
+		 logits_to_keep: Union[int, torch.Tensor] = 0,
+		 **lm_kwargs,
+	 ) -> Union[Tuple, Gemma3CausalLMOutputWithPast]:
+
+		return super().forward(
+			input_ids=input_ids,
+			pixel_values=pixel_values,
+			attention_mask=attention_mask,
+			position_ids=position_ids,
+			past_key_values=past_key_values,
+			token_type_ids=token_type_ids,
+			cache_position=cache_position,
+			inputs_embeds=inputs_embeds,
+			labels=labels,
+			use_cache=use_cache,
+			output_attentions=output_attentions,
+			output_hidden_states=output_hidden_states,
+			return_dict=return_dict,
+			logits_to_keep=logits_to_keep,
+			**lm_kwargs,
+	 )
+
+	@auto_docstring
+	def forward_ecg(
+		self,
+		input_ids: torch.LongTensor = None,
+		ecg_signals: torch.FloatTensor = None,
+		attention_mask: Optional[torch.Tensor] = None,
+		position_ids: Optional[torch.LongTensor] = None,
+		past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
+		token_type_ids: Optional[torch.LongTensor] = None,
+		cache_position: Optional[torch.LongTensor] = None,
+		inputs_embeds: Optional[torch.FloatTensor] = None,
+		labels: Optional[torch.LongTensor] = None,
+		use_cache: Optional[bool] = None,
+		output_attentions: Optional[bool] = None,
+		output_hidden_states: Optional[bool] = None,
+		return_dict: Optional[bool] = None,
+		logits_to_keep: Union[int, torch.Tensor] = 0,
+		**lm_kwargs,
+	) -> Union[Tuple, Gemma3CausalLMOutputWithPast]:
+
+		"""
+    	Forward method for ECG-Gemma model with ECG signal inputs.
+
+    	This method extends the conditional generation capabilities of the Gemma3 model
+    	by integrating ECG signal features along with textual inputs.
+
+    	Args:
+        input_ids (torch.LongTensor, optional): Indices of input sequence tokens.
+        ecg_signals (torch.FloatTensor, optional): ECG signal tensor of shape (batch_size, signal_length).
+        attention_mask (torch.Tensor, optional): Mask to avoid attending to padding tokens.
+        position_ids (torch.LongTensor, optional): Positional indices of the input tokens.
+        past_key_values (List[torch.FloatTensor] or Cache, optional): Cached past key values for fast decoding.
+        token_type_ids (torch.LongTensor, optional): Segment token indicators.
+        cache_position (torch.LongTensor, optional): Cache position indices.
+        inputs_embeds (torch.FloatTensor, optional): Embedded token representations.
+        labels (torch.LongTensor, optional): Ground truth for calculating loss.
+        use_cache (bool, optional): Whether to use past key values cache.
+        output_attentions (bool, optional): Whether to return attention weights.
+        output_hidden_states (bool, optional): Whether to return all hidden states.
+        return_dict (bool, optional): If True, returns a dictionary instead of a tuple.
+        logits_to_keep (int or torch.Tensor, optional): Restrict logits to the specified slice.
+        **lm_kwargs: Additional keyword arguments.
+
+		Returns:
+			Union[Tuple, ECG_Gemma3CausalLMOutputWithPast]: Model output including logits, loss,
+			hidden states, attentions, and ECG-specific outputs.
+		"""
+    
+
 
  
-	   output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-	   output_hidden_states = (
-		  output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-	   )
-	   return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+		output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+		output_hidden_states = (
+			 output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+		 )
+		return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-	   outputs = self.model(
-		  input_ids=input_ids,
-		  ecg_signals = ecg_signals,
-		  token_type_ids=token_type_ids,
-		  attention_mask=attention_mask,
-		  position_ids=position_ids,
-		  past_key_values=past_key_values,
-		  inputs_embeds=inputs_embeds,
-		  use_cache=use_cache,
-		  labels=labels,
-		  output_attentions=output_attentions,
-		  output_hidden_states=output_hidden_states,
-		  return_dict=return_dict,
-		  cache_position=cache_position,
-		  **lm_kwargs,
-	   )
+		outputs = self.model(
+			 input_ids=input_ids,
+			 ecg_signals = ecg_signals,
+			 token_type_ids=token_type_ids,
+			 attention_mask=attention_mask,
+			 position_ids=position_ids,
+			 past_key_values=past_key_values,
+			 inputs_embeds=inputs_embeds,
+			 use_cache=use_cache,
+			 labels=labels,
+			 output_attentions=output_attentions,
+			 output_hidden_states=output_hidden_states,
+			 return_dict=return_dict,
+			 cache_position=cache_position,
+			 **lm_kwargs,
+		 )
 
-	   hidden_states = outputs[0]
-	   # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-	   slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-	   logits = self.lm_head(hidden_states[:, slice_indices, :])
+		hidden_states = outputs[0]
+		 # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+		slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+		logits = self.lm_head(hidden_states[:, slice_indices, :])
 
-	   loss = None
-	   if labels is not None:
-		  logits = logits.float()
-		  shift_logits = logits[..., :-1, :]
-		  shift_labels = labels[..., 1:]
-		  if attention_mask is not None:
-			 shift_attention_mask = attention_mask[:, -shift_logits.shape[1] :].to(logits.device)
-			 shift_logits = shift_logits[shift_attention_mask.to(logits.device) != 0].contiguous()
-			 shift_labels = shift_labels[shift_attention_mask.to(shift_labels.device) != 0].contiguous()
-		  else:
-			 shift_logits = shift_logits.contiguous()
-			 shift_labels = shift_labels.contiguous()
-		  loss_fct = nn.CrossEntropyLoss()
+		loss = None
+		if labels is not None:
+			logits = logits.float()
+			shift_logits = logits[..., :-1, :]
+			shift_labels = labels[..., 1:]
+			if attention_mask is not None:
+				shift_attention_mask = attention_mask[:, -shift_logits.shape[1] :].to(logits.device)
+				shift_logits = shift_logits[shift_attention_mask.to(logits.device) != 0].contiguous()
+				shift_labels = shift_labels[shift_attention_mask.to(shift_labels.device) != 0].contiguous()
+			else:
+				shift_logits = shift_logits.contiguous()
+				shift_labels = shift_labels.contiguous()
+			loss_fct = nn.CrossEntropyLoss()
 
-		  flat_logits = shift_logits.view(-1, self.config.text_config.vocab_size)
-		  flat_labels = shift_labels.view(-1).to(shift_logits.device)
-		  loss = loss_fct(flat_logits, flat_labels)
+			flat_logits = shift_logits.view(-1, self.config.text_config.vocab_size)
+			flat_labels = shift_labels.view(-1).to(shift_logits.device)
+			loss = loss_fct(flat_logits, flat_labels)
 
-	   if not return_dict:
-		  output = (logits,) + outputs[1:]
-		  return (loss,) + output if loss is not None else output
+		if not return_dict:
+			output = (logits,) + outputs[1:]
+			return (loss,) + output if loss is not None else output
 
-	   ecg_hidden_states = outputs.ecg_hidden_states
+		ecg_hidden_states = outputs.ecg_hidden_states
 
-	   return ECG_Gemma3CausalLMOutputWithPast(
-		  loss=loss,
-		  logits=logits,
-		  past_key_values=outputs.past_key_values,
-		  hidden_states=outputs.hidden_states,
-		  attentions=outputs.attentions,
-		  image_hidden_states=outputs.image_hidden_states,
-		  ecg_hidden_states = ecg_hidden_states
-	   )
-    
-    def prepare_inputs_for_generation(
-	   self,
-	   input_ids,
-	   past_key_values=None,
-	   inputs_embeds=None,
-	   cache_position=None,
-	   position_ids=None,
-	   pixel_values=None,
-	   ecg_signals = None,
-	   attention_mask=None,
-	   token_type_ids=None,
-	   use_cache=True,
-	   logits_to_keep=None,
-	   labels=None,
-	   **kwargs,
-    ):
-	   # Overwritten -- custom `position_ids` and `pixel_values` handling
-	   model_inputs = super().prepare_inputs_for_generation(
-		  input_ids,
-		  past_key_values=past_key_values,
-		  inputs_embeds=inputs_embeds,
-		  attention_mask=attention_mask,
-		  position_ids=position_ids,
-		  cache_position=cache_position,
-		  use_cache=use_cache,
-		  logits_to_keep=logits_to_keep,
-		  token_type_ids=token_type_ids,
-		  **kwargs,
-	   )
-		if cache_position is not None and cache_position[0] == 0:
-			if ecg_signals is not None:
-    			model_inputs["ecg_signals"] = ecg_signals
-    		if pixel_values is not None:
-        		model_inputs["pixel_values"] = pixel_values
+		return ECG_Gemma3CausalLMOutputWithPast(
+			 loss=loss,
+			 logits=logits,
+			 past_key_values=outputs.past_key_values,
+			 hidden_states=outputs.hidden_states,
+			 attentions=outputs.attentions,
+			 image_hidden_states=outputs.image_hidden_states,
+			 ecg_hidden_states = ecg_hidden_states
+		 )
+	
+	def prepare_inputs_for_generation(
+		 self,
+		 input_ids,
+		 past_key_values=None,
+		 inputs_embeds=None,
+		 cache_position=None,
+		 position_ids=None,
+		 pixel_values=None,
+		 ecg_signals = None,
+		 attention_mask=None,
+		 token_type_ids=None,
+		 use_cache=True,
+		 logits_to_keep=None,
+		 labels=None,
+		 **kwargs,
+	 ):
+		 # Overwritten -- custom `position_ids` and `pixel_values` handling
+		model_inputs = super().prepare_inputs_for_generation(
+			 input_ids,
+			 past_key_values=past_key_values,
+			 inputs_embeds=inputs_embeds,
+			 attention_mask=attention_mask,
+			 position_ids=position_ids,
+			 cache_position=cache_position,
+			 use_cache=use_cache,
+			 logits_to_keep=logits_to_keep,
+			 token_type_ids=token_type_ids,
+			 **kwargs,
+		 )
+		  
+		  #if cache_position is not None and cache_position[0] == 0:
+		  #    if ecg_signals is not None:
+		  #        model_inputs["ecg_signals"] = ecg_signals
+		  #    if pixel_values is not None:
+		  #        model_inputs["pixel_values"] = pixel_values
 
 
-	   return model_inputs
+		return model_inputs
 
-    forward = forward_ecg
+	forward = forward_ecg
 
 def token_type_ids_mask_function(token_type_ids: Optional[torch.Tensor], tokens_per_image: int) -> Optional[Callable]:
-    """
-    This function adds the correct offsets to the `q_idx` and `kv_idx` as the torch API can only accept lengths,
-    not start and end indices.
-    """
-    # Do not return an additional mask in this case
-    if token_type_ids is None:
-	   return None
+	
+	 # Do not return an additional mask in this case
+	if token_type_ids is None:
+		return None
 
-    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
-	   # If the difference is less than image size, both are part of the same image block
-	   same_image_block = torch.abs(kv_idx - q_idx) <= tokens_per_image
-	   # If it's 1 for both query and key/value, we are in an image block
-	   is_image_block = (token_type_ids[batch_idx, q_idx] == 1) & (token_type_ids[batch_idx, kv_idx] == 1)
+	def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+		# If the difference is less than image size, both are part of the same image block
+		same_image_block = torch.abs(kv_idx - q_idx) <= tokens_per_image
+		 # If it's 1 for both query and key/value, we are in an image block
+		is_image_block = (token_type_ids[batch_idx, q_idx] == 1) & (token_type_ids[batch_idx, kv_idx] == 1)
 
-	   # This is bidirectional attention whenever we are dealing with image tokens
-	   return is_image_block & same_image_block
+		 # This is bidirectional attention whenever we are dealing with image tokens
+		return is_image_block & same_image_block
 
-    return inner_mask
+	return inner_mask
 
 

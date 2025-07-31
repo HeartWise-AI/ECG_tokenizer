@@ -10,7 +10,7 @@ from utils.enums import (
     AdapterName
 )
 from utils.registry import ModelRegistry
-from models.types import ModelT, ModelClassT
+from .custom1_types import ModelT, ModelClassT
 
 
 @ModelRegistry.register(ModelName.GPT2_DECODER)
