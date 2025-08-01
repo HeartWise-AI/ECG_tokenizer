@@ -508,6 +508,13 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             encoder_name: Name of the encoder
             quantizer_name: Name of the quantizer
             decoder_name: Name of the decoder
+            num_quantizers: Number of quantizers
+            codebook_size: Size of the codebook
+            decoder_mode: Mode of the decoder
+            num_classes: Number of classes
+            huggingface_model_name: Name of the huggingface model
+            llm_input_embedding_size: Size of the input embedding
+            adapter_name: Name of the adapter
         """
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
