@@ -97,3 +97,11 @@ class BertReportClassifierProject(BaseProject):
             NotImplementedError: Training not implemented for BERT classifier
         """        
         raise NotImplementedError("Training is not implemented for this project")
+    
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """Setup objects for validation mode.
+        
+        Raises:
+            NotImplementedError: Validation not implemented for BERT classifier
+        """        
+        raise NotImplementedError("Validation is not implemented for this project")

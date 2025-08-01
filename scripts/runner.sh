@@ -10,7 +10,7 @@ print_usage() {
     echo "Arguments:"
     echo "  --selected_gpus  Comma-separated list of GPU IDs to use"
     echo "  --base_config    Path to the base configuration file"
-    echo "  --run_mode       Run mode to use (supported: train, inference, extract_embeddings)"
+    echo "  --run_mode       Run mode to use (supported: train, inference, validate, extract_embeddings)"
     echo "  --use_wandb      Use W&B for logging (true/false)"
     echo "  --help, -h       Display this help message"
     exit 1
@@ -64,7 +64,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 # Check if run_mode is supported
-if [ "$RUN_MODE" != "train" ] && [ "$RUN_MODE" != "inference" ] && [ "$RUN_MODE" != "extract_embeddings" ]; then
+if [ "$RUN_MODE" != "train" ] && [ "$RUN_MODE" != "inference" ] && [ "$RUN_MODE" != "validate" ] && [ "$RUN_MODE" != "extract_embeddings" ]; then
     echo "Error: Unsupported run mode: $RUN_MODE"
     print_usage
 fi
@@ -94,8 +94,8 @@ yq eval -i ".use_wandb = $USE_WANDB" "$CONFIG_PATH"
 # Calculate number of GPUs from the comma-separated list
 NUM_GPUS=$(echo $SELECTED_GPUS | tr ',' '\n' | wc -l)
 
-# Print training configuration
-echo "Starting training with:"
+# Print configuration
+echo "Starting $RUN_MODE with:"
 echo "Selected GPUs: $SELECTED_GPUS (Total: $NUM_GPUS GPUs)"
 echo "Config path: $CONFIG_PATH"
 
@@ -104,7 +104,7 @@ export NCCL_DEBUG=WARNING
 export CUDA_VISIBLE_DEVICES=$SELECTED_GPUS
 export OMP_NUM_THREADS=1
 
-# Run the training
+# Run the script
 torchrun \
     --nproc_per_node=$NUM_GPUS \
     --master_port=29505 \

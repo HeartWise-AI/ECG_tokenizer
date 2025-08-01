@@ -186,7 +186,7 @@ class LLMFinetuningRunner(BaseRunner):
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
         
-        if self.train_dataloader is None or self.validation_dataloader is None:
+        if self.train_dataloader is None and self.validation_dataloader is None:
             raise ValueError("Train or validation dataloader is not set")
         
         # Get the dataloader and step function
@@ -586,7 +586,43 @@ class LLMFinetuningRunner(BaseRunner):
             df.to_csv(csv_path, index=False)
 
     def validate(self):
-        raise NotImplementedError("Validate not implemented")
+        """
+        Run standalone validation on the model.
+        
+        Returns:
+            dict[str, float]: Dictionary containing validation metrics
+        """
+        if self.validation_dataloader is None:
+            raise ValueError("Validation dataloader is not set")
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        if self.config.is_ref_device:
+            print("Starting standalone validation...")
+        
+        # Run validation epoch (using epoch=0 as placeholder since this is standalone)
+        validation_metrics: dict[str, float] = self._run_epoch(
+            RunMode.VALIDATE,
+            epoch=0
+        )
+        
+        # Log validation results to console
+        if self.config.is_ref_device:
+            print("\n" + "="*60)
+            print("VALIDATION RESULTS")
+            print("="*60)
+            for metric_name, metric_value in validation_metrics.items():
+                print(f"{metric_name}: {metric_value:.4f}")
+            print("="*60 + "\n")
+        
+        # Log to wandb if available
+        if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            # Add a prefix to distinguish standalone validation from training validation
+            standalone_metrics = {f"standalone_{k}": v for k, v in validation_metrics.items()}
+            self.wandb_wrapper.log(standalone_metrics)
+        
+        return validation_metrics
 
     def _save_model(
         self,
