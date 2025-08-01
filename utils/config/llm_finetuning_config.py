@@ -56,3 +56,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     # Waveform parameters
     ecg_waveform_length: int
     ecg_num_leads: int
+    
+    # LLM inference path
+    inference_model_path: str = ""
+    
+    # Test set path
+    test_dataset_path: str = ""

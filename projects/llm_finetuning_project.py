@@ -50,61 +50,152 @@ class LLMFinetuningProject(BaseProject):
         """Execute the LLM finetuning workflow."""
         super().run()
         
-    def _setup_training_objects(self)->dict[str, Any]: 
-        """Setup objects required for LLM finetuning training.
+    def _load_and_setup_model(self, checkpoint_path: str, model_registry_key: str = None, for_training: bool = False) -> tuple[ECG_Tokenizer_Wrapper, dict]:
+        """Load checkpoint and setup model with pretrained weights.
         
-        Loads pretrained tokenizer, freezes encoder/quantizer components,
-        and prepares training infrastructure including data loaders,
-        optimizer, scheduler, and gradient scaler.
-        
+        Args:
+            checkpoint_path: Path to model checkpoint
+            model_registry_key: Key for model registry (defaults to self.config.model_name)
+            for_training: Whether setting up for training (affects weight loading)
+            
         Returns:
-            Dictionary containing training objects: optimizer, scheduler, 
-            scaler, model, and data loaders
-        """        
-        # Load the pretrained tokenizer
-        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
-        
-        # Get the config from the pretrained tokenizer
+            Tuple of (model, pretrained_config)
+        """
+        # Load checkpoint
+        state_dict = self._load_checkpoint(checkpoint_path)
         pretrained_config = state_dict['config']
-        if self.config.is_ref_device:
-            print(f"Pretrained config: {pretrained_config}")                
         
-        # Set encoder_name to the pretrained encoder_name -> otherwise the encoder_name is not saved in the checkpoint
-        self.config.encoder_name = pretrained_config.encoder_name
-        # Set quantizer_name to the pretrained quantizer_name -> otherwise the quantizer_name is not saved in the checkpoint
-        self.config.quantizer_name = pretrained_config.quantizer_name
-        # Set num_quantizers to the pretrained num_quantizers -> otherwise the num_quantizers is not saved in the checkpoint
-        self.config.num_quantizers = pretrained_config.num_quantizers
-        # Set codebook_size to the pretrained codebook_size -> otherwise the codebook_size is not saved in the checkpoint
+        if self.config.is_ref_device:
+            print(f"Loading model from: {checkpoint_path}")
+            print(f"Model config: {pretrained_config}")
+        
+        # Use provided registry key or default to model_name
+        registry_key = model_registry_key or self.config.model_name
+        
+        # Initialize model - training uses current config for some params, inference uses pretrained config
+        if for_training:
+            ecg_tokenizer = ModelRegistry.get(registry_key)(
+                encoder_name=pretrained_config.encoder_name, 
+                quantizer_name=pretrained_config.quantizer_name,
+                decoder_name=self.config.decoder_name,  # use current config
+                num_quantizers=pretrained_config.num_quantizers,
+                codebook_size=pretrained_config.codebook_size,
+                decoder_mode=self.config.decoder_mode,  # use current config
+                adapter_name=self.config.adapter_name,
+                huggingface_model_name=self.config.huggingface_model_name,
+                llm_input_embedding_size=self.config.llm_input_embedding_size,
+            ).to(self.config.device)
+        else:
+            ecg_tokenizer = ModelRegistry.get(registry_key)(
+                encoder_name=pretrained_config.encoder_name,
+                quantizer_name=pretrained_config.quantizer_name,
+                decoder_name=pretrained_config.decoder_name,  # use pretrained config
+                num_quantizers=pretrained_config.num_quantizers,
+                codebook_size=pretrained_config.codebook_size,
+                decoder_mode=pretrained_config.decoder_mode,  # use pretrained config
+                adapter_name=pretrained_config.adapter_name,
+                huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
+                llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
+            ).to(self.config.device)
+        
+        # Set codebook size in current config
         self.config.codebook_size = pretrained_config.codebook_size
         
-        # Initialize the tokenizer with the appropriate configuration
-        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
-            encoder_name=pretrained_config.encoder_name, 
-            quantizer_name=pretrained_config.quantizer_name,
-            decoder_name=self.config.decoder_name, # use the decoder from the current config
-            num_quantizers=pretrained_config.num_quantizers,
-            codebook_size=pretrained_config.codebook_size,
-            decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
-            adapter_name=self.config.adapter_name,
-            huggingface_model_name=self.config.huggingface_model_name,
-            llm_input_embedding_size=self.config.llm_input_embedding_size,
-        ).to(self.config.device)
-        # Set the codebook size to the pretrained codebook size
-        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
-        
-        # Load the pretrained state dict
+        # Load weights
         pretrained_state_dict = state_dict['model_state_dict']
-        ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
+        if for_training:
+            ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
+        else:
+            ecg_tokenizer._load_state_dict(pretrained_state_dict, strict=True)
+            ecg_tokenizer.eval()
+        
+        return ecg_tokenizer, pretrained_config
+
+    def _create_validation_dataloader(self, tokenizer, shuffle: bool = False) -> DataLoader:
+        """Create validation dataloader with common parameters.
+        
+        Args:
+            tokenizer: Tokenizer for the dataset
+            shuffle: Whether to shuffle the data
+            
+        Returns:
+            Validation DataLoader
+        """
+        return get_distributed_clinical_report_dataloader(
+            dataset_path=self.config.validation_dataset_path,
+            signal_path_column=self.config.signal_path_column,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
+            tokenizer=tokenizer,
+            max_token_length=self.config.max_token_length,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=shuffle,
+            pin_memory=True
+        )
+
+    def _create_test_dataloader(self, tokenizer, shuffle: bool = False) -> DataLoader:
+        """Create test dataloader with common parameters.
+        
+        Args:
+            tokenizer: Tokenizer for the dataset
+            shuffle: Whether to shuffle the data
+            
+        Returns:
+            Test DataLoader
+        """
+        return get_distributed_clinical_report_dataloader(
+            dataset_path=self.config.test_dataset_path,
+            signal_path_column=self.config.signal_path_column,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
+            tokenizer=tokenizer,
+            max_token_length=self.config.max_token_length,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=shuffle,
+            pin_memory=True
+        )
+
+    def _wrap_model_for_distributed(self, model: ECG_Tokenizer_Wrapper) -> ECG_Tokenizer_Wrapper:
+        """Wrap model in DDP for distributed training/inference.
+        
+        Args:
+            model: ECG tokenizer wrapper model
+            
+        Returns:
+            DDP-wrapped model
+        """
+        return DistributedUtils.DDP(
+            model,
+            device_ids=[self.config.device]
+        )
+
+    def _setup_training_objects(self)->dict[str, Any]: 
+        """Setup objects required for LLM finetuning training."""        
+        # Load model and config
+        ecg_tokenizer, pretrained_config = self._load_and_setup_model(
+            self.config.pretrained_tokenizer_path, 
+            for_training=True
+        )
+        
+        # Copy pretrained config values to current config
+        self.config.encoder_name = pretrained_config.encoder_name
+        self.config.quantizer_name = pretrained_config.quantizer_name
+        self.config.num_quantizers = pretrained_config.num_quantizers
         
         # Print training configuration
         self._print_training_config(ecg_tokenizer)
-               
-        # Load the tokenizer
+        
+        # Load tokenizer
         tokenizer = self._get_tokenizer(self.config.tokenizer_name)
-               
-        # Get the dataloaders
-        train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
+        
+        # Create dataloaders
+        train_dataloader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
             signal_path_column=self.config.signal_path_column,
             ecg_waveform_length=self.config.ecg_waveform_length,
@@ -119,28 +210,12 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True
         )
         
-        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.validation_dataset_path,
-            signal_path_column=self.config.signal_path_column,
-            ecg_waveform_length=self.config.ecg_waveform_length,
-            ecg_num_leads=self.config.ecg_num_leads,
-            tokenizer=tokenizer,
-            max_token_length=self.config.max_token_length,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            num_replicas=self.config.world_size,
-            rank=self.config.device,
-            shuffle=False, 
-            pin_memory=True
-        )
+        validation_dataloader = self._create_validation_dataloader(tokenizer, shuffle=False)
 
-        # Wrap the model in DDP
-        ecg_tokenizer = DistributedUtils.DDP(
-            ecg_tokenizer,
-            device_ids=[self.config.device]
-        )
+        # Wrap model in DDP
+        ecg_tokenizer = self._wrap_model_for_distributed(ecg_tokenizer)
         
-        # Get the parameter groups
+        # Setup optimizer, scheduler, scaler (training-specific code)
         param_groups = [
             {
                 "params": self._get_llm_parameters(ecg_tokenizer.module.decoder),
@@ -156,11 +231,9 @@ class LLMFinetuningProject(BaseProject):
             }
         ]
         
-        # Get the optimizer
         optimizer_class = getattr(torch.optim, self.config.optimizer)
         optimizer: Optimizer = optimizer_class(param_groups)
 
-        # Get the scheduler
         scheduler: LRScheduler = get_scheduler(
             scheduler_name=self.config.scheduler_type,
             optimizer=optimizer,
@@ -174,7 +247,6 @@ class LLMFinetuningProject(BaseProject):
             warm_restart_tmult=self.config.warm_restart_tmult if hasattr(self.config, 'warm_restart_tmult') else None
         )
                 
-        # Get the scaler
         scaler: GradScaler = GradScaler()
         
         return {
@@ -218,67 +290,20 @@ class LLMFinetuningProject(BaseProject):
         print("="*60 + "\n")
     
     def _setup_inference_objects(self)->dict[str, Any]:
-        """Setup objects for inference mode.
+        """Setup objects for inference mode."""        
+        # Load model and config
+        ecg_tokenizer, _ = self._load_and_setup_model(
+            self.config.inference_model_path,
+            model_registry_key=self.config.pipeline_project,
+            for_training=False
+        )
         
-        Loads pretrained tokenizer, initializes tokenizer,
-        and prepares data loader for inference on clinical reports.
-        
-        Returns:
-            Dictionary containing validation data loader and model for inference
-        """        
-        # Load the pretrained tokenizer
-        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
-        
-        # Get the config from the pretrained tokenizer
-        pretrained_config = state_dict['config']
-        if self.config.is_ref_device:
-            print(f"Pretrained config: {pretrained_config}")              
-        
-        # Initialize the tokenizer with the appropriate configuration
-        # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
-        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
-            encoder_name=pretrained_config.encoder_name,
-            quantizer_name=pretrained_config.quantizer_name,
-            decoder_name=pretrained_config.decoder_name, 
-            num_quantizers=pretrained_config.num_quantizers,
-            codebook_size=pretrained_config.codebook_size,
-            decoder_mode=pretrained_config.decoder_mode,
-            adapter_name=pretrained_config.adapter_name,
-            huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
-            llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
-        ).to(self.config.device)
-        # Set the codebook size to the pretrained codebook size
-        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
-        
-        # Load the pretrained state dict
-        pretrained_state_dict = state_dict['model_state_dict']
-        ecg_tokenizer._load_state_dict(pretrained_state_dict, strict=True)
-        ecg_tokenizer.eval()
-        
-        # Load the tokenizer
+        # Load tokenizer and create dataloader
         tokenizer = self._get_tokenizer(self.config.tokenizer_name)
-        
-        # Get the dataloaders
-        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.validation_dataset_path,
-            signal_path_column=self.config.signal_path_column,
-            ecg_waveform_length=self.config.ecg_waveform_length,
-            ecg_num_leads=self.config.ecg_num_leads,
-            tokenizer=tokenizer,
-            max_token_length=self.config.max_token_length,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            num_replicas=self.config.world_size,
-            rank=self.config.device,
-            shuffle=False, 
-            pin_memory=True
-        )
+        validation_dataloader = self._create_validation_dataloader(tokenizer, shuffle=False)
 
-        # Wrap the model in DDP
-        ecg_tokenizer = DistributedUtils.DDP(
-            ecg_tokenizer,
-            device_ids=[self.config.device]
-        )
+        # Wrap model in DDP
+        ecg_tokenizer = self._wrap_model_for_distributed(ecg_tokenizer)
         
         return {
             "model": ecg_tokenizer,
@@ -292,6 +317,54 @@ class LLMFinetuningProject(BaseProject):
             NotImplementedError: Extraction not implemented for LLM finetuning
         """        
         raise NotImplementedError("Extraction is not implemented for this project")
+    
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """Setup objects for standalone validation mode."""               
+        # Load model and config
+        ecg_tokenizer, _ = self._load_and_setup_model(
+            self.config.inference_model_path,
+            for_training=False
+        )
+        
+        # Load tokenizer and create dataloader
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
+        validation_dataloader = self._create_validation_dataloader(tokenizer, shuffle=False)
+
+        # Wrap model in DDP
+        ecg_tokenizer = self._wrap_model_for_distributed(ecg_tokenizer)
+        
+        return {
+            "model": ecg_tokenizer,
+            "validation_dataloader": validation_dataloader
+        }
+
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects for standalone test mode.
+        
+        Loads a trained model checkpoint and prepares test data loader
+        for standalone test evaluation. Similar to validation setup but
+        uses test dataset instead.
+        
+        Returns:
+            Dictionary containing test data loader and model for testing
+        """               
+        # Load model and config
+        ecg_tokenizer, _ = self._load_and_setup_model(
+            self.config.inference_model_path,
+            for_training=False
+        )
+        
+        # Load tokenizer and create dataloader
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
+        test_dataloader = self._create_test_dataloader(tokenizer, shuffle=False)
+
+        # Wrap model in DDP
+        ecg_tokenizer = self._wrap_model_for_distributed(ecg_tokenizer)
+        
+        return {
+            "model": ecg_tokenizer,
+            "test_dataloader": test_dataloader
+        }
     
     def _get_tokenizer(self, tokenizer_name: str):
         """Get the appropriate tokenizer using AutoTokenizer for all models."""

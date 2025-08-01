@@ -50,6 +50,23 @@ class BaseProject(ABC):
         pass
     
     @abstractmethod
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """Setup objects required for validation mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for validation.
+        """
+        pass
+    
+    @abstractmethod
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects required for test mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for test.
+        """
+        pass
+    
     def _setup_extraction_objects(self)->dict[str, Any]:
         """Setup objects required for extraction mode.
         
@@ -123,6 +140,12 @@ class BaseProject(ABC):
         
         elif self.config.run_mode == RunMode.INFERENCE:
             runner_args.update(self._setup_inference_objects())
+        
+        elif self.config.run_mode == RunMode.VALIDATE:
+            runner_args.update(self._setup_validation_objects())
+        
+        elif self.config.run_mode == RunMode.TEST:
+            runner_args.update(self._setup_test_objects())
         
         runner_class: RunnerClassT = RunnerRegistry.get(self.config.runner_name)
         runner: RunnerT = runner_class(**runner_args)
