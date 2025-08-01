@@ -227,7 +227,7 @@ class LLMFinetuningProject(BaseProject):
             Dictionary containing validation data loader and model for inference
         """        
         # Load the pretrained tokenizer
-        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        state_dict = self._load_checkpoint(self.config.inference_model_path)
         
         # Get the config from the pretrained tokenizer
         pretrained_config = state_dict['config']
