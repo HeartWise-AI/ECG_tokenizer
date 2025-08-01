@@ -53,6 +53,7 @@ class LLMFinetuningRunner(BaseRunner):
         optimizer: AdamW | None = None,
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
+        test_dataloader: DataLoader | None = None
     ):
         """
         Args:
@@ -64,12 +65,14 @@ class LLMFinetuningRunner(BaseRunner):
             optimizer: Optimizer for the model
             scheduler: Scheduler for the optimizer
             scaler: Scaler for the optimizer
+            test_dataloader: DataLoader for testing
         """
         self.model: ECG_Tokenizer_Wrapper = model
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
         self.train_dataloader: DataLoader | None = train_dataloader
         self.validation_dataloader: DataLoader | None = validation_dataloader
+        self.test_dataloader: DataLoader | None = test_dataloader
         self.optimizer: AdamW | None = optimizer
         self.scheduler: LRScheduler | None = scheduler
         self.scaler: GradScaler | None = scaler
@@ -172,26 +175,33 @@ class LLMFinetuningRunner(BaseRunner):
         epoch: int
     )->dict[str, float]:
         """
-        Run an epoch of training or validation.
+        Run an epoch of training, validation, or testing.
         
         Args:
-            mode: The execution mode (TRAIN, VALIDATE)
+            mode: The execution mode (TRAIN, VALIDATE, TEST)
             epoch: The current epoch
             
         Returns:
             dict[str, float]: Dictionary containing the metrics for the epoch
         """
-        assert mode in [RunMode.TRAIN, RunMode.VALIDATE]
+        assert mode in [RunMode.TRAIN, RunMode.VALIDATE, RunMode.TEST]
         
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
         
-        if self.train_dataloader is None and self.validation_dataloader is None:
-            raise ValueError("Train or validation dataloader is not set")
+        if self.train_dataloader is None and self.validation_dataloader is None and self.test_dataloader is None:
+            raise ValueError("Train, validation, or test dataloader is not set")
         
         # Get the dataloader and step function
-        dataloader: DataLoader = self.train_dataloader if mode == RunMode.TRAIN else self.validation_dataloader
-        step_fn: Callable | None = self._train_step if mode == RunMode.TRAIN else self._val_step
+        if mode == RunMode.TRAIN:
+            dataloader: DataLoader = self.train_dataloader
+            step_fn: Callable | None = self._train_step
+        elif mode == RunMode.VALIDATE:
+            dataloader: DataLoader = self.validation_dataloader
+            step_fn: Callable | None = self._val_step
+        else:  # RunMode.TEST
+            dataloader: DataLoader = self.test_dataloader
+            step_fn: Callable | None = self._val_step  # Use same step function as validation
         
         # Create a progress bar for the epoch
         data_iter: tqdm = tqdm(
@@ -213,7 +223,7 @@ class LLMFinetuningRunner(BaseRunner):
         # Iterate over the dataloader
         epoch_metrics: dict[str, float] = {}
         
-        if mode == RunMode.VALIDATE:
+        if mode in [RunMode.VALIDATE, RunMode.TEST]:
             worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
         
         for batch_idx, batch in enumerate(data_iter):            
@@ -241,7 +251,7 @@ class LLMFinetuningRunner(BaseRunner):
                     metrics[key] = float(value) if isinstance(value, torch.Tensor) else value
             
             # Compute rouge score, bleu score, and meteor score
-            if mode == RunMode.VALIDATE:
+            if mode in [RunMode.VALIDATE, RunMode.TEST]:
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
                 metrics.update(
                     # TODO: best_batch_metrics, worst_batch_metrics and random_batch_metrics are computed on the reference device
@@ -585,6 +595,45 @@ class LLMFinetuningRunner(BaseRunner):
             csv_path = os.path.join(self.config.output_dir, 'inference.csv')
             df.to_csv(csv_path, index=False)
 
+    def test(self):
+        """
+        Run standalone test on the model.
+        
+        Returns:
+            dict[str, float]: Dictionary containing test metrics
+        """
+        if self.test_dataloader is None:
+            raise ValueError("Test dataloader is not set")
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        if self.config.is_ref_device:
+            print("Starting standalone test...")
+        
+        self.config.num_epochs = 1
+        
+        # Run test epoch (using epoch=0 as placeholder since this is standalone)
+        test_metrics: dict[str, float] = self._run_epoch(
+            RunMode.TEST,
+            epoch=0
+        )
+        
+        # Log test results to console
+        if self.config.is_ref_device:
+            print("\n" + "="*60)
+            print("TEST RESULTS")
+            print("="*60)
+            for metric_name, metric_value in test_metrics.items():
+                print(f"{metric_name}: {metric_value:.4f}")
+            print("="*60 + "\n")
+        
+        # Log to wandb if available
+        if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            # Add a prefix to distinguish standalone test from training test
+            standalone_metrics = {f"standalone_{k}": v for k, v in test_metrics.items()}
+            self.wandb_wrapper.log(standalone_metrics)
+                    
     def validate(self):
         """
         Run standalone validation on the model.
@@ -600,6 +649,8 @@ class LLMFinetuningRunner(BaseRunner):
         
         if self.config.is_ref_device:
             print("Starting standalone validation...")
+        
+        self.config.num_epochs = 1
         
         # Run validation epoch (using epoch=0 as placeholder since this is standalone)
         validation_metrics: dict[str, float] = self._run_epoch(
@@ -622,8 +673,6 @@ class LLMFinetuningRunner(BaseRunner):
             standalone_metrics = {f"standalone_{k}": v for k, v in validation_metrics.items()}
             self.wandb_wrapper.log(standalone_metrics)
         
-        return validation_metrics
-
     def _save_model(
         self,
         epoch: int,

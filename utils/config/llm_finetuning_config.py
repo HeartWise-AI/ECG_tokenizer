@@ -59,3 +59,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
     
     # LLM inference path
     inference_model_path: str = ""
+    
+    # Test set path
+    test_dataset_path: str = ""

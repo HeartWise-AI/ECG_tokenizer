@@ -136,6 +136,31 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True
         )
 
+    def _create_test_dataloader(self, tokenizer, shuffle: bool = False) -> DataLoader:
+        """Create test dataloader with common parameters.
+        
+        Args:
+            tokenizer: Tokenizer for the dataset
+            shuffle: Whether to shuffle the data
+            
+        Returns:
+            Test DataLoader
+        """
+        return get_distributed_clinical_report_dataloader(
+            dataset_path=self.config.test_dataset_path,
+            signal_path_column=self.config.signal_path_column,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
+            tokenizer=tokenizer,
+            max_token_length=self.config.max_token_length,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=shuffle,
+            pin_memory=True
+        )
+
     def _wrap_model_for_distributed(self, model: ECG_Tokenizer_Wrapper) -> ECG_Tokenizer_Wrapper:
         """Wrap model in DDP for distributed training/inference.
         
@@ -311,6 +336,34 @@ class LLMFinetuningProject(BaseProject):
         return {
             "model": ecg_tokenizer,
             "validation_dataloader": validation_dataloader
+        }
+
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects for standalone test mode.
+        
+        Loads a trained model checkpoint and prepares test data loader
+        for standalone test evaluation. Similar to validation setup but
+        uses test dataset instead.
+        
+        Returns:
+            Dictionary containing test data loader and model for testing
+        """               
+        # Load model and config
+        ecg_tokenizer, _ = self._load_and_setup_model(
+            self.config.inference_model_path,
+            for_training=False
+        )
+        
+        # Load tokenizer and create dataloader
+        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
+        test_dataloader = self._create_test_dataloader(tokenizer, shuffle=False)
+
+        # Wrap model in DDP
+        ecg_tokenizer = self._wrap_model_for_distributed(ecg_tokenizer)
+        
+        return {
+            "model": ecg_tokenizer,
+            "test_dataloader": test_dataloader
         }
     
     def _get_tokenizer(self, tokenizer_name: str):

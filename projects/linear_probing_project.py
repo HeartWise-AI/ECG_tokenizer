@@ -212,3 +212,11 @@ class ECGTokenizerLinearProbing(BaseProject):
             NotImplementedError: Validation not implemented for linear probing
         """        
         raise NotImplementedError("Validation is not implemented for this project")
+    
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects for standalone test mode.
+        
+        Raises:
+            NotImplementedError: Test not implemented for linear probing
+        """        
+        raise NotImplementedError("Test is not implemented for this project")
