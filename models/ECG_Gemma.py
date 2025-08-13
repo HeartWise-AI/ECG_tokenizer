@@ -6,11 +6,24 @@ import logging
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForConditionalGeneration, Gemma3Model, Gemma3MultiModalProjector, Gemma3ModelOutputWithPast, Gemma3Config, Gemma3RMSNorm, Gemma3CausalLMOutputWithPast
 from transformers.configuration_utils import PretrainedConfig
 logger = logging.getLogger(__name__)
-#from .tokenizer import ECG_Tokenizer_Wrapper
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from transformers.masking_utils import create_causal_mask, create_masks_for_generate, create_sliding_window_causal_mask
 from transformers.cache_utils import Cache
 from transformers.utils import auto_docstring
+from utils.enums import DecoderMode, ModelName
+import sys
+import os
+from torch.nn.utils.rnn import pad_sequence
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../transformers_ecg/src')))
+#print("sys.path =", sys.path)
+
+class ECG_Gemma3ModelOutputWithPast(Gemma3ModelOutputWithPast):
+	
+	def __init__(self, *, ecg_hidden_states=None, **kwargs):
+		super().__init__(**kwargs)
+
+	ecg_hidden_states: Optional[torch.FloatTensor] = None
 
 class ECGConfig(PretrainedConfig):
 	
@@ -19,11 +32,13 @@ class ECGConfig(PretrainedConfig):
 	def __init__(self, 
 				ecg_token_id = 513,
 				pad_token_id = 0,
-				embedding_dim = 256,
+				embedding_dim = 4,
 				num_quantizers = 8,
 				codebook_size = 512,
 				layer_norm_eps = 1e-5,
-				hidden_size = 256, 
+				hidden_size = 82,
+				vocab_size=30522, 
+				eos_token_id = 1,
 				**kwargs):
 		 
 		super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -32,8 +47,10 @@ class ECGConfig(PretrainedConfig):
 		self.num_quantizers = num_quantizers
 		self.codebook_size = codebook_size
 		self.hidden_size = hidden_size
+		self.vocab_size = vocab_size
 		self.layer_norm_eps = layer_norm_eps
 		self.pad_token_id = pad_token_id
+		self.eos_token_id = eos_token_id
 
 class ECG_Gemma_config(Gemma3Config):
 
@@ -48,7 +65,7 @@ class ECG_Gemma_config(Gemma3Config):
 				logger.info("ecg_config is None, using default ECGConfig ecg config.")
 		 
 			self.ecg_config = ecg_config
-			kwargs["ecg_config"] = ecg_config.to_dict()
+			#kwargs["ecg_config"] = ecg_config.to_dict()
 
 			super().__init__(**kwargs)
 
@@ -56,22 +73,64 @@ class ECG_Gemma_model(Gemma3Model):
 
 	_checkpoint_conversion_mapping = {"language_model.model": "language_model"}
 
-	def __init__(self, config: ECG_Gemma_config):
+	def __init__(self, config: ECG_Gemma_config, ecg_tokenizer: Optional[ECG_Tokenizer_Wrapper] = None):
 
-		super().__init__(config)
+		super().__init__(config)			
 
-		#self.ecg_tokenizer = ECG_Tokenizer_Wrapper()
-		self.ecg_codebook = nn.Embedding(config.codebook_size + 2, config.embedding_dim)
+		self.ecg_tokenizer = ecg_tokenizer or ECG_Tokenizer_Wrapper(
+    encoder_name="Residual_Conv_Encoder",        
+    quantizer_name="ECG_Tokenizer_Quantizer",     
+    decoder_name="Conv_Decoder",                  
+    decoder_mode=DecoderMode.RECONSTRUCTION,      
+    num_quantizers=8,                             
+    codebook_size=512,                           
+    num_classes=-1                                
+)
 
-	def get_ecg_features(self, ecg_signals: torch.Tensor):
+		self.ecg_codebook = nn.Embedding(config.ecg_config.codebook_size + 2, config.ecg_config.embedding_dim)
+		self.projection = nn.Linear(in_features=4, out_features=82)
+		self.ecg_proj = nn.Linear(512, self.config.ecg_config.hidden_size)
+		self.lm_head = nn.Linear(2304, config.ecg_config.vocab_size)
 
-		reconstructed_output, indices, commit_loss = self.ecg_tokenizer(ecg_signals)
-		B, L, Q = indices.shape
-		flat_indices = indices.view(-1) #flatten 1 D list of indices B * L * Q
-		embeddings = self.ecg_codebook(flat_indices) #-1 is the embedding dimension
-		embedded = embeddings.view(B, L, Q, -1) #reshape
-		ecg_features = embedded.mean(dim = 2) #shape: (B, L, embed_dim)
-		return ecg_features
+	def get_ecg_features(self, ecg_signals: torch.Tensor, chunk_size = 10):
+		x = ecg_signals
+		#print(f"Input ecg_signals shape: {x.shape}")
+
+		features = self.ecg_tokenizer.encoder(x)	#[T, D1, D2]
+		#print(f"Encoded features shape: {features.shape}")
+
+		features_flattened = features.view(features.size(0), -1)  # [T, D]
+
+		T = (features_flattened.size(0) // chunk_size) * chunk_size
+		trimmed = features_flattened[:T]
+		#print(f"Trimmed features shape: {trimmed.shape}")
+
+		num_chunks = T // chunk_size
+		chunks = trimmed.view(num_chunks, chunk_size, -1)
+		#print(f"Chunks shape: {chunks.shape}")
+
+		pooled_chunks = chunks.mean(dim=1)
+		#print(f"Pooled chunks shape: {pooled_chunks.shape}")
+    
+    	# Project to match LLM embedding dim
+		ecg_proj = self.ecg_proj(pooled_chunks)  # [num_chunks, hidden_dim]
+		#print(f"Pooled+Projected features shape: {ecg_proj.shape}")
+		
+		projected = ecg_proj.unsqueeze(1)  # Add sequence dimension: [250, 1, 82]
+
+		return projected
+
+	def tokenize_ecg(self, projected_chunks: torch.Tensor, return_all_codes: bool = False):
+		quantizer_outputs = self.ecg_tokenizer.quantizer(
+		projected_chunks,
+		return_all_codes=return_all_codes)
+		
+		_, indices, _ = quantizer_outputs
+		indices = indices.long()
+		#print(f"indices shape: {indices.shape}")
+		
+		return indices
+
 	 
 	def forward_vision(self,
 		input_ids: torch.LongTensor = None,
@@ -106,70 +165,60 @@ class ECG_Gemma_model(Gemma3Model):
 			return_dict=return_dict,
 			**lm_kwargs
 )
-	 
-	def forward_ecg(self,
-		 input_ids: torch.LongTensor = None,
-		 ecg_signals: torch.FloatTensor = None,
-		 attention_mask: Optional[torch.Tensor] = None,
-		 position_ids: Optional[torch.LongTensor] = None,
-		 past_key_values: Optional[Union[List[torch.FloatTensor], Cache]] = None,
-		 token_type_ids: Optional[torch.LongTensor] = None,
-		 cache_position: Optional[torch.LongTensor] = None,
-		 inputs_embeds: Optional[torch.FloatTensor] = None,
-		 labels: Optional[torch.LongTensor] = None,
-		 use_cache: Optional[bool] = None,
-		 output_attentions: Optional[bool] = None,
-		 output_hidden_states: Optional[bool] = None,
-		 return_dict: Optional[bool] = None,
-		 **lm_kwargs,
-	 ) -> Union[Tuple, Gemma3ModelOutputWithPast]:
-			 
-		if (input_ids is None) ^ (inputs_embeds is not None):
-			raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-		 
-			output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-			output_hidden_states = (output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states)
-			return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-		 
-			ecg_features = None
+	
+	def generate_text(self, tokenizer, inputs_embeds, attention_mask, max_length=20):
+		generated_tokens = []
+		past_key_values = None
 
-		# Replace image id with PAD if the image token if OOV, to avoid index-errors
-		if input_ids is not None and self.config.ecg_token_id >= self.vocab_size:
-			special_ecg_mask = input_ids == self.config.ecg_token_id
-			llm_input_ids = input_ids.clone()
-			llm_input_ids[special_ecg_mask] = 0
-		else:
-			llm_input_ids = input_ids
+		for step in range(max_length):
+			outputs = self.language_model(
+				inputs_embeds=inputs_embeds,
+				attention_mask=attention_mask,
+				past_key_values=past_key_values,
+				use_cache=True,
+        )
+			logits = outputs.last_hidden_state[:, -1, :]  # logits for last token
+			next_token = torch.argmax(logits, dim=-1)  # greedy decoding
+			token_id = next_token[0].item()
 
-		if inputs_embeds is None:
-			inputs_embeds = self.get_input_embeddings()(llm_input_ids)
+			generated_tokens.append(token_id)
 
+			if token_id == self.config.eos_token_id:
+				break
+
+        	# Prepare inputs_embeds for next step
+			#get input embeddings inherited from Gemma
+
+
+			next_token_tensor = torch.tensor([[token_id]], device=attention_mask.device)  # shape (1,1)
+			inputs_embeds = self.get_input_embeddings()(next_token_tensor)  # shape (1,1,embedding_dim)
+
+
+
+			#the torch.ones is the new column that is being concatenated as the new token 
+			attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.size(0), 1), device=attention_mask.device)], dim=1)
+			past_key_values = outputs.past_key_values
+
+		generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+		return generated_text
+	
+	def forward_ecg(
+    	self,
+    	input_ids: torch.LongTensor = None,
+    	attention_mask: Optional[torch.Tensor] = None,
+    	tokenizer=None,
+    	past_key_values=None,
+    	cache_position=None,
+    	token_type_ids=None,
+    	**lm_kwargs,) -> Union[Tuple, Gemma3ModelOutputWithPast]:
+
+		inputs_embeds = self.get_input_embeddings()(input_ids)
+
+		# Handle cache_position for past_key_values
 		if cache_position is None:
-			past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+			past_seen_tokens = getattr(past_key_values, "get_seq_length", lambda: 0)() if past_key_values is not None else 0
 			cache_position = torch.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device)
-
-		if ecg_signals is not None:
-			ecg_features = self.get_ecg_features(ecg_signals)
-
-			if input_ids is None:
-				special_ecg_mask = inputs_embeds == self.get_input_embeddings()(
-				torch.tensor(self.config.ecg_token_id, dtype=torch.long, device=inputs_embeds.device)
-				 )
-			else:
-				special_ecg_mask = (input_ids == self.config.ecg_token_id).unsqueeze(-1)
-				special_ecg_mask = special_ecg_mask.expand_as(inputs_embeds).to(inputs_embeds.device)
-
-			if inputs_embeds[special_ecg_mask].numel() != ecg_features.numel():
-				ecg_tokens_in_text = special_ecg_mask.sum(dim=1).sum(dim=0)[0]
-				raise ValueError(
-		  f"Number of ecg does not match number of special ecg tokens in the input text. "
-		  f"Got {ecg_tokens_in_text} ecg tokens in the text but {ecg_features.shape[0] * ecg_features.shape[1]} "
-		  "tokens from ecg embeddings."
-	 )
-
-
-			ecg_features = ecg_features.to(inputs_embeds.device, inputs_embeds.dtype)
-			inputs_embeds = inputs_embeds.masked_scatter(special_ecg_mask, ecg_features)
 
 		 # It may already have been prepared by e.g. `generate`
 		if not isinstance(causal_mask_mapping := attention_mask, dict):
@@ -192,31 +241,13 @@ class ECG_Gemma_model(Gemma3Model):
 				 "full_attention": create_causal_mask(**mask_kwargs),
 				 "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
 			 }
+		
+		generated_tokens = self.generate_text(tokenizer,
+			inputs_embeds=inputs_embeds,
+			attention_mask=causal_mask_mapping["full_attention"] if isinstance(causal_mask_mapping, dict) else causal_mask_mapping,
+			max_length=20)
 
-		outputs = self.language_model(
-			 attention_mask=causal_mask_mapping,
-			 position_ids=position_ids,
-			 past_key_values=past_key_values,
-			 inputs_embeds=inputs_embeds,
-			 use_cache=use_cache,
-			 output_attentions=output_attentions,
-			 output_hidden_states=output_hidden_states,
-			 return_dict=True,
-			 cache_position=cache_position,
-			 **lm_kwargs,
-		 )
-
-		return ECG_Gemma3ModelOutputWithPast(
-			 last_hidden_state=outputs.last_hidden_state,
-			 past_key_values=outputs.past_key_values if use_cache else None,
-			 hidden_states=outputs.hidden_states,
-			 attentions=outputs.attentions,
-			 ecg_hidden_states=ecg_features if ecg_signals is not None else None,
-		 )
-
-class ECG_Gemma3ModelOutputWithPast(Gemma3ModelOutputWithPast):
-
-	ecg_hidden_states: Optional[torch.FloatTensor] = None
+		return generated_tokens
 
 class ECG_Gemma3MultiModalProjector(Gemma3MultiModalProjector):
 
@@ -481,5 +512,4 @@ def token_type_ids_mask_function(token_type_ids: Optional[torch.Tensor], tokens_
 		return is_image_block & same_image_block
 
 	return inner_mask
-
 

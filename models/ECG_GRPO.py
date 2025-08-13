@@ -89,77 +89,6 @@ def thinking_presence(answer_list):
 
   return new_list
 
-# Extract the first reasonable numeric answer from model output
-def extract_aligned_answers(text, expected_count):
-    
-    results = []
-    
-    num_step = expected_count - 1
-    
-    for i in range(num_step):
-        
-        match = re.search(rf"A{i}:\s*([^QF]+)", text)
-        
-        if match:
-            results.append(match.group(1).strip())
-        else:
-            results.append("")
-    
-    # Now final answer:
-    final_match = re.search(r"Final Answer:\s*(.+)", text)
-    
-    if final_match:
-        results.append(final_match.group(1).strip())
-    else:
-        results.append("")
-    
-    return results 
-
-def clean(answer_list):
-    
-    end_characters = ["$", "=", "of"]
-
-    new_list = []
-    
-    for x in answer_list:
-
-        for y in end_characters:
-        
-            if y in x:
-            
-                x = x.split(y)[-1]
-          
-        if x == " " or x == "" or x == "\n" or "\xad" in x:
-    
-            x = 0.0
-
-        new_list.append(x)
-
-    return new_list
-
-def extract_numeric_answer(text_list):
-
-    new_list = []
-
-    for x in text_list:
-
-        # Look for standalone numbers
-
-        if type(x) != float:
-            number_matches = re.findall(r'[-+]?\d+(?:\.\d+)?', x)
-    
-            if number_matches:
-                new_list.append(float(number_matches[0]))
-            
-            else: 
-                new_list.append(0.0)
-            
-        else:
-            new_list.append(x)  
-
-    return new_list 
-
-
 #from the outputted generated text extract the final answer
 #needed to compare with the actual final answer in the rewards function
 
@@ -212,25 +141,8 @@ class Training:
                 device = torch.device("cpu")
         
         self.device = device
-
-        #to decode the text when using .generate()
-        if text_tokenizer == None:
-            text_tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v0.3")
         
-        self.text_tokenizer = text_tokenizer
-
-        # Initialize wandb
-        self.run = wandb.init(
-            project="cot-grpo-reward-model",
-            name="training-run-1",
-            config={
-                "learning_rate": learning_rate,
-                "weight_decay": weight_decay,
-                "use_lora": lora_config is not None,
-            }
-        )
-        wandb.watch(self.model, log="all", log_freq=10)
-
+        self.tokenizer = tokenizer
     
     def train_adapters(self, dataloader, num_epochs = 2, gradient_accumulation_steps = 8):
 
@@ -265,9 +177,9 @@ class Training:
                     attention_mask = attention_mask.to(self.device)
                
                 #forward pass
-                outputs = self.model(input_ids = input_ids,
-                                                labels = labels,
+                outputs = self.model.forward_ecg(input_ids = input_ids,
                                                 attention_mask = attention_mask,
+                                                tokenizer = self.tokenizer,
                                                 return_dict = True)
 
                 #raw scores
@@ -311,7 +223,6 @@ class Training:
             avg_loss = total_loss /len(dataloader)
 
             print(f"Training adapters: \n Epoch {epoch + 1} average loss: {avg_loss:.4f}")
-            wandb.log({"adapter_train_loss": avg_loss, "epoch": epoch + 1})
 
     
     def save_adapter_checkpoint(self, path):
@@ -321,7 +232,6 @@ class Training:
 
         #saves the model's state as files in a directory
         self.model.save_pretrained(path)
-        wandb.save(os.path.join(path, "*"))
         print(f"Adapter saved at path {path}")
 
 
@@ -555,15 +465,9 @@ class Training:
 
                 self.optimizer.step()
 
-                wandb.log({
-                    "grpo_loss": loss.item(),
-                    "epoch": epoch + 1,
-                    "batch": batch_number,
-                })
-
+             
                 batch_number += 1 
 
                 print(f"GRPO: \n Epoch {epoch} | Batch number {batch_number} | Loss : {loss.item():.4f}")
 
-wandb.finish()
 

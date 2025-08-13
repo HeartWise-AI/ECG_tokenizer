@@ -492,6 +492,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self, 
         encoder_name: str = "Conv_Encoder", 
         quantizer_name: str = "ECG_Tokenizer_Quantizer", 
+
         decoder_name: str = "Linear_Decoder",
         num_quantizers: int = 8,
         codebook_size: int = 512,
