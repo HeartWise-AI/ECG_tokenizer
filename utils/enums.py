@@ -73,7 +73,8 @@ class ModelName(str, Enum):
     
     # Quantizers
     ECG_TOKENIZER_QUANTIZER = "ECG_Tokenizer_Quantizer"
-    
+    ECG_TOKENIZER_QUANTIZER_RVQ = "ECG_Tokenizer_Quantizer_RVQ"
+
     # Decoders
     GPT2_DECODER = "GPT2_Decoder"
     LLAMA32_DECODER = "Llama32_Decoder"
@@ -81,6 +82,7 @@ class ModelName(str, Enum):
     LINEAR_CLASSIFIER_DECODER = "Linear_Classifier_Decoder"
     RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"
     CLS_TOKEN_CLASSIFIER_DECODER = "CLS_Token_Classifier_Decoder"
+    EFFICIENTNETV2_CLASSIFIER_DECODER = "EfficientNetV2_Classifier_Decoder"
     
     # Report classifiers
     BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"

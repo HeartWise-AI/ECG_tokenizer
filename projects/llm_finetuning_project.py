@@ -78,6 +78,17 @@ class LLMFinetuningProject(BaseProject):
         # Set codebook_size to the pretrained codebook_size -> otherwise the codebook_size is not saved in the checkpoint
         self.config.codebook_size = pretrained_config.codebook_size
         
+        # Prepare LoRA config if enabled
+        lora_config = None
+        if self.config.use_lora:
+            lora_config = {
+                'r': self.config.lora_r,
+                'alpha': self.config.lora_alpha,
+                'dropout': self.config.lora_dropout,
+                'target_modules': self.config.lora_target_modules,
+                'bias': self.config.lora_bias
+            }
+
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
             encoder_name=pretrained_config.encoder_name, 
@@ -89,6 +100,8 @@ class LLMFinetuningProject(BaseProject):
             adapter_name=self.config.adapter_name,
             huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
+            use_lora=self.config.use_lora,
+            lora_config=lora_config
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
@@ -209,6 +222,27 @@ class LLMFinetuningProject(BaseProject):
         print(f"\nAdapter: {model.decoder.adapter_name}")
         print(f"Decoder: {model.decoder_name} ({model.decoder_mode.value} mode)")
         
+        # Print LoRA configuration if enabled
+        if self.config.use_lora:
+            print(f"\nLoRA Configuration:")
+            print(f"  Rank (r): {self.config.lora_r}")
+            print(f"  Alpha: {self.config.lora_alpha}")
+            print(f"  Dropout: {self.config.lora_dropout}")
+            print(f"  Target modules: {self.config.lora_target_modules}")
+            print(f"  Bias: {self.config.lora_bias}")
+            
+            # Print LoRA-specific parameter counts if available
+            llm_model = None
+            if hasattr(model.decoder, 'llm_model'):
+                llm_model = model.decoder.llm_model
+            elif hasattr(model.decoder, 'llm'):
+                llm_model = model.decoder.llm
+            
+            if llm_model and hasattr(llm_model, 'peft_config'):
+                total_llm_params = sum(p.numel() for p in llm_model.parameters())
+                trainable_llm_params = sum(p.numel() for p in llm_model.parameters() if p.requires_grad)
+                print(f"  LoRA trainable parameters: {trainable_llm_params:,}/{total_llm_params:,} ({100 * trainable_llm_params / total_llm_params:.2f}%)")
+        
         print("\nComponent-wise breakdown:")
         print(f"  Encoder: {training_info['encoder']['trainable']:,}/{training_info['encoder']['total']:,} trainable")
         print(f"  Quantizer: {training_info['quantizer']['trainable']:,}/{training_info['quantizer']['total']:,} trainable")
@@ -236,6 +270,17 @@ class LLMFinetuningProject(BaseProject):
         
         # Initialize the tokenizer with the appropriate configuration
         # Use the pretrained config to initialize the ecg_tokenizer_wrapper class
+        # For inference, we need to check if the checkpoint has LoRA weights
+        checkpoint_has_lora = any('lora_A' in key or 'lora_B' in key or 'base_layer' in key for key in state_dict['model_state_dict'].keys())
+        
+        # If checkpoint has LoRA weights, we should load with LoRA enabled
+        # If checkpoint doesn't have LoRA weights, we should load without LoRA
+        use_lora_for_inference = checkpoint_has_lora and (hasattr(pretrained_config, 'use_lora') and pretrained_config.use_lora)
+        
+        if self.config.is_ref_device:
+            print(f"Checkpoint has LoRA weights: {checkpoint_has_lora}")
+            print(f"Using LoRA for inference: {use_lora_for_inference}")
+        
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             encoder_name=pretrained_config.encoder_name,
             quantizer_name=pretrained_config.quantizer_name,
@@ -246,6 +291,14 @@ class LLMFinetuningProject(BaseProject):
             adapter_name=pretrained_config.adapter_name,
             huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
             llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
+            use_lora=use_lora_for_inference,
+            lora_config={
+                'r': pretrained_config.lora_r if hasattr(pretrained_config, 'lora_r') else 16,
+                'alpha': pretrained_config.lora_alpha if hasattr(pretrained_config, 'lora_alpha') else 32,
+                'dropout': pretrained_config.lora_dropout if hasattr(pretrained_config, 'lora_dropout') else 0.1,
+                'target_modules': pretrained_config.lora_target_modules if hasattr(pretrained_config, 'lora_target_modules') else None,
+                'bias': pretrained_config.lora_bias if hasattr(pretrained_config, 'lora_bias') else 'none'
+            } if use_lora_for_inference else None
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
@@ -253,6 +306,11 @@ class LLMFinetuningProject(BaseProject):
         # Load the pretrained state dict
         pretrained_state_dict = state_dict['model_state_dict']
         ecg_tokenizer._load_state_dict(pretrained_state_dict, strict=True)
+        
+        # Set LoRA to inference mode if using LoRA
+        if use_lora_for_inference:
+            ecg_tokenizer.set_lora_inference_mode(True)
+            
         ecg_tokenizer.eval()
         
         # Load the tokenizer
@@ -306,11 +364,23 @@ class LLMFinetuningProject(BaseProject):
     
     def _get_llm_parameters(self, decoder):
         """Get LLM parameters from the decoder's LLM model."""
+        # First try to get the LLM model
+        llm_model = None
         if hasattr(decoder, 'llm_model'):
-            return decoder.llm_model.parameters()
+            llm_model = decoder.llm_model
         else:
             # Fallback to look for any transformer model attribute
             for attr_name in ['transformer', 'model', 'llm']:
                 if hasattr(decoder, attr_name):
-                    return getattr(decoder, attr_name).parameters()
+                    llm_model = getattr(decoder, attr_name)
+                    break
+        
+        if llm_model is None:
             raise AttributeError(f"Decoder {type(decoder).__name__} doesn't have a recognizable LLM model attribute")
+        
+        # For LoRA, only return trainable parameters
+        if self.config.use_lora and hasattr(llm_model, 'peft_config'):
+            return [p for p in llm_model.parameters() if p.requires_grad]
+        else:
+            # Original implementation for full finetuning
+            return llm_model.parameters()

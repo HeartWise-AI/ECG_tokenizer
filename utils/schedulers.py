@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -11,6 +12,65 @@ from transformers import (
 
 from utils.config.heartwise_config import HeartWiseConfig
 
+
+class ScheduledOptim():
+    """
+    A learning rate scheduler that implements the transformer-style learning rate schedule
+    from "Attention is All You Need" paper. Features a warmup period followed by 
+    inverse square root decay.
+    """
+    def __init__(self, optimizer, d_model, n_warmup_steps):
+        """
+        Args:
+            optimizer: The underlying optimizer (e.g., Adam, AdamW)
+            d_model: Model dimension, used to scale the initial learning rate
+            n_warmup_steps: Number of warmup steps
+        """
+        self._optimizer = optimizer
+        self.n_warmup_steps = n_warmup_steps
+        self.n_current_steps = 0
+        self.init_lr = np.power(d_model, -0.5)
+    
+    def step_and_update_lr(self):
+        """Step with the inner optimizer and update learning rate"""
+        self._update_learning_rate()
+        self._optimizer.step()
+
+    def step(self):
+        """Compatibility method for standard scheduler interface - only updates LR, doesn't step optimizer"""
+        self._update_learning_rate()
+
+    def zero_grad(self):
+        """Zero out the gradients by the inner optimizer"""
+        self._optimizer.zero_grad()
+
+    def _get_lr_scale(self):
+        """Calculate the learning rate scaling factor"""
+        return np.min([
+            np.power(self.n_current_steps, -0.5),
+            np.power(self.n_warmup_steps, -1.5) * self.n_current_steps])
+
+    def _update_learning_rate(self):
+        """Update the learning rate for all parameter groups"""
+        self.n_current_steps += 1
+        lr = self.init_lr * self._get_lr_scale()
+        for param_group in self._optimizer.param_groups:
+            param_group['lr'] = lr
+    
+    def state_dict(self):
+        """Return the state of the scheduler"""
+        return {
+            'n_current_steps': self.n_current_steps,
+            'n_warmup_steps': self.n_warmup_steps,
+            'init_lr': self.init_lr
+        }
+    
+    def load_state_dict(self, state_dict):
+        """Load the state of the scheduler"""
+        self.n_current_steps = state_dict['n_current_steps']
+        self.n_warmup_steps = state_dict['n_warmup_steps'] 
+        self.init_lr = state_dict['init_lr']
+
 def get_scheduler(
     scheduler_name: str, 
     optimizer: Optimizer, 
@@ -22,7 +82,8 @@ def get_scheduler(
     num_warmup_percent: Optional[float] = 0.1,
     num_hard_restarts_cycles: Optional[float] = 1.0,          
     warm_restart_tmult: Optional[int] = 2,
-    num_restarts: int = 10  # New parameter for cosine_warm_restart
+    num_restarts: int = 10,  # New parameter for cosine_warm_restart
+    d_model: Optional[int] = 512  # New parameter for transformer_warmup
 ) -> LRScheduler:
     """
     Configures and returns a learning rate scheduler based on the specified name.
@@ -30,7 +91,7 @@ def get_scheduler(
     Args:
         scheduler_name (str): Name of the scheduler ('cosine', 'step', 'cosine_warm_restart',
                               'linear_warmup', 'cosine_with_warmup', 
-                              'cosine_with_hard_restarts_with_warmup').
+                              'cosine_with_hard_restarts_with_warmup', 'transformer_warmup').
         optimizer (torch.optim.Optimizer): Optimizer to attach the scheduler to.
         num_epochs (int): Number of training epochs.
         train_dataloader (torch.utils.data.DataLoader): Training data loader.
@@ -41,9 +102,10 @@ def get_scheduler(
         num_hard_restarts_cycles (float, optional): Number of cycles for cosine with hard restarts. Defaults to 1.0.
         warm_restart_tmult (int, optional): T_mult factor for cosine warm restarts. Defaults to 2.
         num_restarts (int, optional): Number of desired restarts for cosine_warm_restart. Defaults to 10.
+        d_model (int, optional): Model dimension for transformer_warmup scheduler. Defaults to 512.
 
     Returns:
-        torch.optim.lr_scheduler.LRScheduler: Configured learning rate scheduler.
+        torch.optim.lr_scheduler.LRScheduler or ScheduledOptim: Configured learning rate scheduler.
     """
     # Handle None values by using defaults
     gamma = gamma if gamma is not None else 0.3
@@ -115,6 +177,19 @@ def get_scheduler(
             num_cycles=int(num_hard_restarts_cycles)  # Number of restart cycles
         )
 
+    elif scheduler_name == 'transformer_warmup':
+        # Transformer-style warmup schedule from "Attention is All You Need"
+        # Features warmup followed by inverse square root decay
+        num_warmup_steps = int(t_total * num_warmup_percent)
+        d_model = d_model if d_model is not None else 512
+        print(f"[transformer_warmup] t_total={t_total}, num_warmup_steps={num_warmup_steps}, "
+              f"d_model={d_model}")
+        return ScheduledOptim(
+            optimizer=optimizer,
+            d_model=d_model,
+            n_warmup_steps=num_warmup_steps
+        )
+
     else:
         raise ValueError(f"Scheduler {scheduler_name} not found")
 
@@ -126,7 +201,7 @@ def scheduler_is_per_iteration(config: HeartWiseConfig) -> bool:
     Most modern schedulers work best with per-iteration updates, with StepLR 
     being the main exception that works on an epoch basis.
     """
-    sched_name = getattr(config, "scheduler_name", "").lower()
+    sched_name = getattr(config, "scheduler_type", "").lower()  # Changed from scheduler_name to scheduler_type
     
     # Only StepLR should be updated per-epoch in our implementation
     PER_EPOCH_SCHEDULERS = ["step"]

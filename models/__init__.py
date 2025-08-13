@@ -11,7 +11,8 @@ from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
     Conv_Encoder,
     Conv_Decoder,
-    ECG_Tokenizer_Quantizer
+    ECG_Tokenizer_Quantizer,
+    ECG_Tokenizer_Quantizer_RVQ
 )
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "ECG_Tokenizer_Wrapper",
     "Conv_Encoder",
     "Conv_Decoder",
-    "ECG_Tokenizer_Quantizer"
+    "ECG_Tokenizer_Quantizer",
+    "ECG_Tokenizer_Quantizer_RVQ",
 ]

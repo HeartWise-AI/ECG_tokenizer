@@ -608,15 +608,42 @@ class LLMFinetuningRunner(BaseRunner):
         save_dir: str = self.config.output_dir
         os.makedirs(save_dir, exist_ok=True)
         
-        # Prepare checkpoint - get the underlying model's state dict for DDP models
+        # Get the underlying model for DDP
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        
+        # Handle LoRA model saving
+        model_state_dict = model.state_dict()
+        if self.config.use_lora:
+            # Check if any part of the model has LoRA
+            llm_model = None
+            if hasattr(model.decoder, 'llm_model'):
+                llm_model = model.decoder.llm_model
+            elif hasattr(model.decoder, 'llm'):
+                llm_model = model.decoder.llm
+            
+            if llm_model and hasattr(llm_model, 'peft_config'):
+                # Save only LoRA weights for smaller checkpoints
+                try:
+                    from peft import get_peft_model_state_dict
+                    lora_state_dict = get_peft_model_state_dict(llm_model)
+                    # Combine with other components (remove original LLM weights, add LoRA weights)
+                    model_state_dict = {
+                        **{k: v for k, v in model_state_dict.items() if not k.startswith('decoder.llm_model.') and not k.startswith('decoder.llm.')},
+                        **{f'decoder.{"llm_model" if hasattr(model.decoder, "llm_model") else "llm"}.{k}': v for k, v in lora_state_dict.items()}
+                    }
+                except ImportError:
+                    print("Warning: peft not available, saving full model state dict")
+        
+        # Prepare checkpoint
         checkpoint: dict[str, Any] = {
             'epoch': epoch,
-            'model_state_dict': self.model.module.state_dict() if hasattr(self.model, 'module') else self.model.state_dict(),
+            'model_state_dict': model_state_dict,
             'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
             'loss': loss,
-            'config': self.config
+            'config': self.config,
+            'use_lora': self.config.use_lora  # Store LoRA flag for loading
         }
         
         # Save regular checkpoint for current epoch
@@ -753,4 +780,4 @@ class LLMFinetuningRunner(BaseRunner):
             random_batch_metrics = {}
             # Select a random batch index
             random_batch_idx = random.randint(0, len(dataloader) - 1)
-            return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx    
+            return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx

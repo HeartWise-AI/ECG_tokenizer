@@ -100,7 +100,7 @@ class BaseProject(ABC):
             f"[{self.__class__.__name__}] Loading checkpoint: {checkpoint_path}"
         )
         
-        return torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        return torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     def run(self): 
         """Execute project workflow based on configured run mode.
