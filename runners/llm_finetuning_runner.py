@@ -104,15 +104,13 @@ class LLMFinetuningRunner(BaseRunner):
                 device_ids=self.config.device
             )
             
-            epoch_metrics: dict[str, float] = self._run_epoch(
+            epoch_train_metrics: dict[str, float] = self._run_epoch(
                 RunMode.TRAIN,
                 epoch
             )
                         
             if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                self.wandb_wrapper.log(
-                    epoch_metrics
-                )
+                self.wandb_wrapper.log(epoch_train_metrics)
             
             # Step the scheduler if it should be updated per-epoch
             if self.scheduler and (not self.scheduler_per_iteration):
@@ -221,24 +219,34 @@ class LLMFinetuningRunner(BaseRunner):
             ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
-            labels: torch.Tensor = input_ids.clone()
+            labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
             
             # Run the step function
-            outputs: dict[str, torch.Tensor] | torch.Tensor = step_fn(
-                ecg_signal=ecg_signal, 
-                input_ids=input_ids, 
-                attention_mask=attention_mask, 
-                labels=labels
-            )
+            if mode == RunMode.VALIDATE and getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
+                outputs = self._val_step(
+                    ecg_signal=ecg_signal,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                    prompt_input_ids=batch['prompt_input_ids'].to(self.config.device),
+                    prompt_attention_mask=batch['prompt_attention_mask'].to(self.config.device)
+                )
+            else:
+                outputs = step_fn(
+                    ecg_signal=ecg_signal, 
+                    input_ids=input_ids, 
+                    attention_mask=attention_mask, 
+                    labels=labels
+                )
             
             # initialize metrics
             metrics: dict[str, float] = {}
-            metrics['loss'] = outputs['loss'].item()
+            metrics['loss'] = outputs['loss'].item()  # type: ignore[index]
             
             # Extract learning rate metrics
-            for key, value in outputs.items():
+            for key, value in outputs.items():  # type: ignore[attr-defined]
                 if key.startswith('lr_'):
-                    metrics[key] = float(value) if isinstance(value, torch.Tensor) else value
+                    metrics[key] = float(value) if isinstance(value, torch.Tensor) else float(value)
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
@@ -406,7 +414,9 @@ class LLMFinetuningRunner(BaseRunner):
         ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: torch.Tensor
+        labels: torch.Tensor,
+        prompt_input_ids: torch.Tensor | None = None,
+        prompt_attention_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Validate a single step of the model.
@@ -430,16 +440,49 @@ class LLMFinetuningRunner(BaseRunner):
             loss: torch.Tensor = outputs['loss']
             
             # Time the generate_report function
-            if hasattr(self.model, 'module'):
-                generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_signal, 
-                    max_token_length=self.config.max_token_length
-                )
+            if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
+                # Build begin_suppress_tokens to prevent leaking headers like 'assistant' at start
+                tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
+                # begin_suppress_tokens: list[int] = []
+                # try:
+                #     # Special header tokens
+                #     for tok in ["<|start_header_id|>", "<|end_header_id|>"]:
+                #         tok_id = tokenizer.convert_tokens_to_ids(tok)
+                #         if tok_id is not None and tok_id != -1:
+                #             begin_suppress_tokens.append(int(tok_id))
+                #     # Note: do not suppress 'assistant' token forms for now
+                # except Exception:
+                #     pass
+
+                if hasattr(self.model, 'module'):
+                    gen_ids_q = self.model.module.generate_report_with_question(
+                        ecg_signal,
+                        prompt_input_ids=prompt_input_ids,
+                        prompt_attention_mask=prompt_attention_mask,
+                        max_token_length=self.config.max_token_length,
+                        # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
+                    )
+                else:
+                    gen_ids_q = self.model.generate_report_with_question(
+                        ecg_signal,
+                        prompt_input_ids=prompt_input_ids,
+                        prompt_attention_mask=prompt_attention_mask,
+                        max_token_length=self.config.max_token_length,
+                        # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
+                    )
+                generated_ids = gen_ids_q
             else:
-                generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_signal, 
-                    max_token_length=self.config.max_token_length
-                )
+                if hasattr(self.model, 'module'):
+                    gen_ids = self.model.module.generate_report(
+                        ecg_signal, 
+                        max_token_length=self.config.max_token_length
+                    )
+                else:
+                    gen_ids = self.model.generate_report(
+                        ecg_signal, 
+                        max_token_length=self.config.max_token_length
+                    )
+                generated_ids = gen_ids
 
             # Get learning rate metrics
             lr_metrics = {}
@@ -458,7 +501,9 @@ class LLMFinetuningRunner(BaseRunner):
         ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: torch.Tensor
+        labels: torch.Tensor,
+        prompt_input_ids: torch.Tensor | None = None,
+        prompt_attention_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Inference a single step of the model.
@@ -482,16 +527,34 @@ class LLMFinetuningRunner(BaseRunner):
             loss: torch.Tensor = outputs['loss']
             
             # Time the generate_report function
-            if hasattr(self.model, 'module'):
-                generated_ids: torch.Tensor = self.model.module.generate_report(
-                    ecg_signal, 
-                    max_token_length=self.config.max_token_length
-                )
+            if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
+                if hasattr(self.model, 'module'):
+                    gen_ids_q = self.model.module.generate_report_with_question(
+                        ecg_signal,
+                        prompt_input_ids=prompt_input_ids,
+                        prompt_attention_mask=prompt_attention_mask,
+                        max_token_length=self.config.max_token_length
+                    )
+                else:
+                    gen_ids_q = self.model.generate_report_with_question(
+                        ecg_signal,
+                        prompt_input_ids=prompt_input_ids,
+                        prompt_attention_mask=prompt_attention_mask,
+                        max_token_length=self.config.max_token_length
+                    )  
+                generated_ids = gen_ids_q
             else:
-                generated_ids: torch.Tensor = self.model.generate_report(
-                    ecg_signal, 
-                    max_token_length=self.config.max_token_length
-                )  
+                if hasattr(self.model, 'module'):
+                    gen_ids = self.model.module.generate_report(
+                        ecg_signal, 
+                        max_token_length=self.config.max_token_length
+                    )
+                else:
+                    gen_ids = self.model.generate_report(
+                        ecg_signal, 
+                        max_token_length=self.config.max_token_length
+                    )  
+                generated_ids = gen_ids
             
             return {
                 "loss": loss,
@@ -525,13 +588,15 @@ class LLMFinetuningRunner(BaseRunner):
             ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
-            labels: torch.Tensor = input_ids.clone()
+            labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
             
             outputs: dict[str, torch.Tensor] = self._inference_step(
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=labels
+                labels=labels,
+                prompt_input_ids=(batch['prompt_input_ids'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None),
+                prompt_attention_mask=(batch['prompt_attention_mask'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None)
             )
             generated_ids: torch.Tensor = outputs['generated_ids']
             loss = outputs['loss'].item()
@@ -547,9 +612,32 @@ class LLMFinetuningRunner(BaseRunner):
                 f"inference/mean_loss": f'{running_loss / (batch_idx + 1):.4f}'
             })
             batch_waveform_names: list[str] = batch['waveform_name']
-            for gen, lab, filename in zip(generated_ids, labels, batch_waveform_names):
-                # Decode both predictions and references as strings.
-                decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
+            for idx in range(len(batch_waveform_names)):
+                gen = generated_ids[idx]
+                lab = labels[idx]
+                filename = batch_waveform_names[idx]
+
+                # Decode only newly generated tokens (skip input portion)
+                gen_list = gen.tolist()
+
+                # In instruction mode, skip ECG token + prompt; in normal mode, skip just ECG token
+                if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
+                    prompt_row = batch['prompt_input_ids'][idx]
+                    if hasattr(tokenizer, 'pad_token_id') and tokenizer.pad_token_id is not None:
+                        prompt_len = (prompt_row != tokenizer.pad_token_id).sum().item()
+                    else:
+                        prompt_len = int((prompt_row != 0).sum().item())
+                    skip_tokens = prompt_len + 1  # +1 for ECG token
+                else:
+                    skip_tokens = 1  # Just skip ECG token
+
+                # Slice from the end of input to get only newly generated tokens
+                if len(gen_list) > skip_tokens:
+                    gen_list = gen_list[skip_tokens:]
+                else:
+                    gen_list = []  # No new tokens generated
+
+                decoded_prediction = tokenizer.decode(gen_list, skip_special_tokens=True)
                 decoded_reference  = tokenizer.decode(lab.tolist(), skip_special_tokens=True)
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
@@ -706,6 +794,18 @@ class LLMFinetuningRunner(BaseRunner):
         
         """
         computed_metrics: dict[str, float] = {}
+        # Prepare labels for decoding: replace -100 with pad_token_id (or eos if pad not set)
+        tokenizer = dataloader.dataset.tokenizer  # type: ignore
+        pad_token_id = getattr(tokenizer, 'pad_token_id', None)
+        eos_token_id = getattr(tokenizer, 'eos_token_id', None)
+        if isinstance(eos_token_id, list):
+            eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
+        replacement_id = pad_token_id if pad_token_id is not None else eos_token_id
+        labels_for_metrics = labels
+        if replacement_id is not None:
+            labels_for_metrics = labels.clone()
+            labels_for_metrics = torch.where(labels_for_metrics == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_metrics)
+
         for metric in self.config.metrics:
             registered_metrics: Union[
                 RougeMetric, 
@@ -714,8 +814,8 @@ class LLMFinetuningRunner(BaseRunner):
             ] = MetricRegistry.get(metric)
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
-                labels,
-                dataloader.dataset.tokenizer  # type: ignore
+                labels_for_metrics,
+                tokenizer  # type: ignore
             )
             for metric_name, metric_value in LLM_metrics.items():
                 if metric_name not in ('predictions', 'references'):

@@ -30,15 +30,17 @@ warm_restart_tmult: !!int 2
 decoder_mode: !!str "llm"
 decoder_name: !!str "Llama32_Decoder"
 # LLM tokenizer parameters
-tokenizer_name: !!str "meta-llama/Llama-3.2-1B"
+tokenizer_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
 max_token_length: !!int 256
+# Instruction tuning
+instruct_mode: !!bool true
 # LLM model parameters
-huggingface_model_name: !!str "meta-llama/Llama-3.2-1B"
+huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
 adapter_name: !!str "Llama32_SequenceAdapter"
 llm_input_embedding_size: !!int 2048
 # Dataset parameters
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated_with_questions.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_test_updated_with_questions.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/train_subset.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/test_subset.parquet"
 num_workers: !!int 12
 batch_size: !!int 16
 signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original

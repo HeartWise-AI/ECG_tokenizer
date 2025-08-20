@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from typing import Union, Optional, Dict, Any, Tuple
+from typing import Union, Optional, Dict, Any, Tuple, cast
 from transformers.generation.utils import GenerateOutput
 from transformers import LlamaForCausalLM, PreTrainedModel
 
@@ -23,7 +23,7 @@ class Llama32Decoder(nn.Module):
     """
     def __init__(
         self, 
-        huggingface_model_name: str = 'meta-llama/Llama-3.2-3B', 
+        huggingface_model_name: str = 'meta-llama/Llama-3.2-3B-Instruct', 
         llm_input_embedding_size: int = 2048, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
         adapter_name: AdapterName = AdapterName.LLAMA32_SEQUENCE_ADAPTER,
@@ -33,7 +33,7 @@ class Llama32Decoder(nn.Module):
         default_do_sample: bool = True,
         default_top_p: float = 0.92,
         default_temperature: float = 0.85,
-        default_num_beams: int = 4,
+        default_num_beams: int = 1,
     ):
         """
         Initialize Llama 3.2 decoder.
@@ -55,10 +55,13 @@ class Llama32Decoder(nn.Module):
         # Store configuration
         self.label_ignore_index = label_ignore_index
         self.default_generation_params = {
-            "do_sample": default_do_sample,
+            "do_sample": False,
             "top_p": default_top_p,
             "temperature": default_temperature,
             "num_beams": default_num_beams,
+            # Anti-repetition controls for stable generation
+            "no_repeat_ngram_size": 3,
+            "repetition_penalty": 1.05,
         }
         
         # Load the adapter class
@@ -70,9 +73,11 @@ class Llama32Decoder(nn.Module):
         
         # Initialize the adapter to transform quantized features to Llama 3.2 embedding space
         # Input shape: (batch, channels, sequence_length)
-        self.adapter: ModelT = self.adapter_class(
+        # SequenceAdapter expects input_shape=(seq_len, channels), output_size=hidden_size
+        adapter_ctor = cast(Any, self.adapter_class)
+        self.adapter: ModelT = adapter_ctor(
             input_shape=quantized_feature_shape,
-            output_size=llm_input_embedding_size, 
+            output_size=llm_input_embedding_size,
             dropout=adapter_dropout
         )
         
@@ -86,7 +91,18 @@ class Llama32Decoder(nn.Module):
         # Add special ECG token
         self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
         self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
-        self.eos_token_id = self.llm_model.config.eos_token_id
+        
+        # Configure pad/eos token ids: keep eos as list to allow stopping on <|eot_id|>
+        pad_id = self.llm_model.config.pad_token_id
+        if isinstance(pad_id, list):
+            pad_id = pad_id[0] if len(pad_id) > 0 else None
+        if pad_id is None:
+            eos_cfg = self.llm_model.config.eos_token_id
+            pad_id = (eos_cfg[0] if isinstance(eos_cfg, list) and len(eos_cfg) > 0 else int(eos_cfg))
+        self.pad_token_id = int(pad_id)
+
+        eos_cfg = self.llm_model.config.eos_token_id
+        self.eos_token_ids = eos_cfg if isinstance(eos_cfg, list) else [int(eos_cfg)]
 
     def forward(
         self, 
@@ -123,8 +139,8 @@ class Llama32Decoder(nn.Module):
         """
         Forward pass with teacher forcing (standard training approach).
         
-        Prepends ECG token to input sequence and replaces its embedding
-        with the processed ECG signal embedding.
+        For chat template mode: Finds ECG special tokens and replaces them with ECG embedding.
+        For legacy mode: Prepends ECG token to input sequence.
         
         Args:
             ecg_embedding: Processed ECG features (batch, embedding_dim).
@@ -137,7 +153,11 @@ class Llama32Decoder(nn.Module):
         """
         batch_size = input_ids.size(0)
         
-        # Prepend the special ECG token ID to input_ids
+        # Check if we're using chat template with ECG special tokens
+        # For now, we'll still use the legacy prepend approach for compatibility
+        # TODO: Implement proper ECG token replacement within the sequence
+        
+        # Prepend the special ECG token ID to input_ids  
         ecg_token = torch.full(
             (batch_size, 1),
             self.ecg_token_id,
@@ -153,7 +173,8 @@ class Llama32Decoder(nn.Module):
         else:
             attention_mask = torch.ones_like(input_ids, device=input_ids.device)
         
-        # Adjust labels if provided
+        # Always adjust labels when we prepend ECG token to input_ids
+        # We must maintain input_ids.shape[1] == labels.shape[1] for the loss computation
         if labels is not None:
             label_ignore = torch.full(
                 (batch_size, 1),
@@ -162,6 +183,37 @@ class Llama32Decoder(nn.Module):
                 device=labels.device
             )
             labels = torch.cat([label_ignore, labels], dim=1)
+        
+        # Debug: Print final sequences after ECG token prepending (first call only)
+        if not hasattr(self, '_decoder_debug_printed'):
+            self._decoder_debug_printed = True
+            print(f"\n{'='*80}")
+            print(f"DECODER FINAL SEQUENCES (after ECG token prepending)")
+            print(f"{'='*80}")
+            print(f"Batch size: {batch_size}")
+            print(f"ECG token ID: {self.ecg_token_id}")
+            print(f"Final input_ids shape: {input_ids.shape}")
+            print(f"Final labels shape: {labels.shape if labels is not None else 'None'}")
+            
+            # Show first sequence
+            if batch_size > 0:
+                seq_input_ids = input_ids[0]
+                seq_labels = labels[0] if labels is not None else None
+                print(f"\nFirst 20 tokens after ECG prepending:")
+                print(f"{'Pos':<4} {'Token ID':<8} {'Label':<8} {'Special?':<10}")
+                print("-" * 50)
+                for i in range(min(20, len(seq_input_ids))):
+                    token_id = seq_input_ids[i].item()
+                    label = seq_labels[i].item() if seq_labels is not None else "N/A"
+                    special = ""
+                    if i == 0:
+                        special = "ECG_TOKEN"
+                    elif token_id in self.eos_token_ids:
+                        special = "EOS"
+                    elif token_id >= 128000:  # LLaMA special tokens are usually high IDs
+                        special = "SPECIAL"
+                    print(f"{i:<4} {token_id:<8} {label:<8} {special:<10}")
+            print(f"{'='*80}")
         
         # Get input embeddings and replace the first token's embedding with ECG embedding
         input_embedding = self.llm_model.get_input_embeddings()(input_ids)
@@ -223,20 +275,79 @@ class Llama32Decoder(nn.Module):
         # Set generation parameters
         generation_params = generate_kwargs.copy()
         generation_params.setdefault("attention_mask", attention_mask)
-        generation_params.setdefault("pad_token_id", self.eos_token_id)
-        generation_params.setdefault("eos_token_id", self.eos_token_id)
+        generation_params.setdefault("pad_token_id", self.pad_token_id)
+        generation_params.setdefault("eos_token_id", self.eos_token_ids)
         generation_params.setdefault("use_cache", True)
         
         # Apply default parameters
         for key, value in self.default_generation_params.items():
             generation_params.setdefault(key, value)
         
-        # Generate
+        # Generate using max_new_tokens to avoid coupling with prompt length
         with torch.inference_mode():
             result = self.llm_model.generate(
                 inputs_embeds=input_embedding,
-                max_length=max_token_length,
+                max_new_tokens=max_token_length,
                 **generation_params
             )
-        
+        return result
+
+    @torch.no_grad()
+    def generate_report_with_question(
+        self,
+        quantized_features: torch.Tensor,
+        prompt_input_ids: torch.Tensor,
+        prompt_attention_mask: Optional[torch.Tensor] = None,
+        max_token_length: int = 256,
+        **generate_kwargs
+    ) -> Union[GenerateOutput, torch.Tensor]:
+        """Question-conditioned generation using simple "Question: [q] Answer:" format.
+        Expects prompt_input_ids to represent the prompt ending with "Answer:".
+        The ECG token's embedding replaces the first prompt token embedding.
+        """
+        # Handle both 2D and 3D inputs
+        if quantized_features.dim() == 2:
+            adapter_input = quantized_features.unsqueeze(1)
+        else:
+            adapter_input = quantized_features
+
+        ecg_embedding: torch.Tensor = self.adapter(adapter_input)
+
+        # Use provided prompt ids/mask
+        batch_size: int = ecg_embedding.size(0)
+        input_ids = prompt_input_ids
+        if prompt_attention_mask is None:
+            prompt_attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+
+        # Prepend ECG token id (to match training) and adjust attention mask
+        ecg_token = torch.full(
+            (batch_size, 1),
+            self.ecg_token_id,
+            dtype=torch.long,
+            device=ecg_embedding.device
+        )
+        input_ids = torch.cat([ecg_token, input_ids], dim=1)
+        ecg_mask = torch.ones((batch_size, 1), device=prompt_attention_mask.device, dtype=prompt_attention_mask.dtype)
+        prompt_attention_mask = torch.cat([ecg_mask, prompt_attention_mask], dim=1)
+
+        # Get input embeddings and replace the ECG token embedding with processed ECG embedding
+        input_embedding = self.llm_model.get_input_embeddings()(input_ids)
+        input_embedding[:, 0, :] = ecg_embedding
+
+        # Set generation parameters
+        generation_params = generate_kwargs.copy()
+        generation_params.setdefault("attention_mask", prompt_attention_mask)
+        generation_params.setdefault("pad_token_id", self.pad_token_id)
+        generation_params.setdefault("eos_token_id", self.eos_token_ids)
+        generation_params.setdefault("use_cache", True)
+
+        for key, value in self.default_generation_params.items():
+            generation_params.setdefault(key, value)
+
+        with torch.inference_mode():
+            result = self.llm_model.generate(
+                inputs_embeds=input_embedding,
+                max_new_tokens=max_token_length,
+                **generation_params
+            )
         return result

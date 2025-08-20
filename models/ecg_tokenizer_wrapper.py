@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, cast
 from models.local_residual_vq import ResidualVQ
+from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
 
 from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
@@ -739,6 +740,47 @@ class ECG_Tokenizer_Quantizer_RVQ(nn.Module):
         quantizer_outputs = self.quantizer(x, return_all_codes=return_all_codes)
         return quantizer_outputs
 
+@ModelRegistry.register(ModelName.ECG_TOKENIZER_QUANTIZER_VANILLA)
+class ECG_Tokenizer_Quantizer_Vanilla(nn.Module):
+    """
+    Baseline vanilla Vector Quantization that uses a single codebook (no residual quantizers).
+
+    It wraps a single VectorQuantize layer from vector_quantize_pytorch, matching the interface
+    of the residual variant for drop-in replacement within the wrapper.
+    """
+    def __init__(
+        self,
+        num_quantizers: int,  # kept for interface compatibility, must be 1 for vanilla VQ
+        codebook_size: int
+    ):
+        super().__init__()
+        if num_quantizers != 1:
+            raise ValueError("ECG_Tokenizer_Quantizer_Vanilla expects num_quantizers == 1")
+
+        latent_dim = 82
+
+        # Use a single VectorQuantize layer with the same commitment weight default as RVQ
+        self.quantizer = VectorQuantize(
+            dim=latent_dim,
+            codebook_size=codebook_size,
+            codebook_dim=latent_dim,
+            commitment_weight=0.25,
+            accept_image_fmap=False
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_all_codes: bool = False
+    ):
+        # VectorQuantize returns (quantized, indices, commit_loss)
+        quantized, indices, commit_loss = self.quantizer(x)
+
+        if return_all_codes:
+            all_codes = quantized.unsqueeze(0)
+            return quantized, indices.unsqueeze(-1), commit_loss.unsqueeze(-1), all_codes
+        return quantized, indices.unsqueeze(-1), commit_loss.unsqueeze(-1)
+
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_QUANTIZER)
 class ECG_Tokenizer_Quantizer(nn.Module):
     """
@@ -845,7 +887,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
         use_lora: bool = False,
-        lora_config: dict = None
+        lora_config: Optional[dict[str, Any]] = None
     ):
         """
         Args:
@@ -876,10 +918,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         quantizer_class: ModelClassT = ModelRegistry.get(quantizer_name)
         if quantizer_class is None:
             raise ValueError(f"Quantizer '{quantizer_name}' not found in ModelRegistry")
-        self.quantizer: nn.Module = quantizer_class(
+        quantizer_ctor = cast(Any, quantizer_class)
+        self.quantizer = cast(nn.Module, quantizer_ctor(
             num_quantizers=num_quantizers,
             codebook_size=codebook_size
-        )
+        ))
         
         decoder_class: ModelClassT = ModelRegistry.get(decoder_name)
         if decoder_class is None:
@@ -888,13 +931,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         if self.decoder_mode == DecoderMode.LLM:
             try:
                 quantized_feature_shape = (128, 82)
-                self.decoder = decoder_class(
+                decoder_ctor = cast(Any, decoder_class)
+                self.decoder = cast(nn.Module, decoder_ctor(
                     huggingface_model_name=huggingface_model_name,
                     llm_input_embedding_size=llm_input_embedding_size,
                     quantized_feature_shape=quantized_feature_shape,
                     adapter_name=adapter_name,
                     adapter_dropout=adapter_dropout
-                )
+                ))
                 
                 # Apply LoRA to the LLM if requested
                 if use_lora and lora_config:
@@ -908,11 +952,13 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 )
         elif self.decoder_mode == DecoderMode.CLASSIFICATION:
 
-            self.decoder: nn.Module = decoder_class(num_classes=num_classes)
+            decoder_ctor = cast(Any, decoder_class)
+            self.decoder = cast(nn.Module, decoder_ctor(num_classes=num_classes))
 
         elif self.decoder_mode == DecoderMode.RECONSTRUCTION:
             try:
-                self.decoder: nn.Module = decoder_class()
+                decoder_ctor = cast(Any, decoder_class)
+                self.decoder = cast(nn.Module, decoder_ctor())
             except TypeError as e:
                 raise ValueError(
                     f"Decoder '{decoder_name}' does not support reconstruction mode. "
@@ -921,7 +967,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         else:
             raise ValueError(f"Unsupported decoder mode '{decoder_mode}' with decoder '{decoder_name}'")
 
-    def _apply_lora(self, lora_config: dict):
+    def _apply_lora(self, lora_config: dict[str, Any]):
         """Apply LoRA to the LLM component."""
         if not PEFT_AVAILABLE:
             raise ImportError("PEFT library is not available. Please install it with: pip install peft")
@@ -1152,8 +1198,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             hasattr(self.quantizer.quantizer.mlps, 'parameters') and
             callable(getattr(self.quantizer.quantizer.mlps, 'parameters'))):
             try:
-                mlp_trainable: int = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters() if p.requires_grad)
-                mlp_total: int = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters())
+                mlp_trainable = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters() if p.requires_grad)
+                mlp_total = sum(p.numel() for p in self.quantizer.quantizer.mlps.parameters())
             except (AttributeError, TypeError):
                 # MLPs might exist but not be a proper PyTorch module
                 mlp_trainable = 0
@@ -1194,10 +1240,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         # For quantizer, check if base layers are frozen
         if hasattr(self.quantizer, 'quantizer'):
             # Check if VQ layers (non-MLP parts) are frozen
-            vq_params_frozen: bool = True
+            vq_params_frozen = True
             for name, param in self.quantizer.named_parameters():
                 if 'mlps.' not in name and param.requires_grad:
-                    vq_params_frozen: bool = False
+                    vq_params_frozen = False
                     break
             
             if vq_params_frozen:
@@ -1333,6 +1379,36 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         
         return self.decoder.generate_report(
             quantized_features=quantized,
+            max_token_length=max_token_length,
+            **generate_kwargs
+        )
+
+    @torch.no_grad()
+    def generate_report_with_question(
+        self,
+        x: torch.Tensor,
+        prompt_input_ids: torch.Tensor,
+        prompt_attention_mask: Optional[torch.Tensor] = None,
+        max_token_length: int = 512,
+        **generate_kwargs
+    ) -> torch.Tensor:
+        """Generate conditioned on a chat-formatted question prompt."""
+        if self.decoder_mode != DecoderMode.LLM:
+            raise ValueError("generate_report_with_question() is only available in LLM mode")
+        if self.decoder is None:
+            raise ValueError("No decoder available for generation")
+
+        x = x.to(dtype=torch.float32)
+        features = self.encoder(x)
+        quantized, _, _ = self.quantizer(features)
+
+        if not hasattr(self.decoder, 'generate_report_with_question'):
+            raise ValueError(f"Decoder '{self.decoder_name}' does not support question-conditioned generation")
+
+        return self.decoder.generate_report_with_question(
+            quantized_features=quantized,
+            prompt_input_ids=prompt_input_ids,
+            prompt_attention_mask=prompt_attention_mask,
             max_token_length=max_token_length,
             **generate_kwargs
         )

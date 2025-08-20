@@ -25,9 +25,9 @@ warm_restart_tmult: !!int 2
 # VQVAE parameters
 decoder_mode: !!str "reconstruction"
 encoder_name: !!str "Residual_Conv_Encoder"
-quantizer_name: !!str "ECG_Tokenizer_Quantizer_RVQ"
+quantizer_name: !!str "ECG_Tokenizer_Quantizer_Vanilla"
 decoder_name: !!str "Conv_Decoder"
-num_quantizers: !!int 8
+num_quantizers: !!int 1
 codebook_size: !!int 512
 # Classification parameters
 num_classes: !!int -1

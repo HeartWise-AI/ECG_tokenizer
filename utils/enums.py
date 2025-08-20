@@ -74,6 +74,7 @@ class ModelName(str, Enum):
     # Quantizers
     ECG_TOKENIZER_QUANTIZER = "ECG_Tokenizer_Quantizer"
     ECG_TOKENIZER_QUANTIZER_RVQ = "ECG_Tokenizer_Quantizer_RVQ"
+    ECG_TOKENIZER_QUANTIZER_VANILLA = "ECG_Tokenizer_Quantizer_Vanilla"
 
     # Decoders
     GPT2_DECODER = "GPT2_Decoder"

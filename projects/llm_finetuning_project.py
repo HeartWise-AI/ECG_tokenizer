@@ -89,6 +89,12 @@ class LLMFinetuningProject(BaseProject):
                 'bias': self.config.lora_bias
             }
 
+        # Load the tokenizer first (may add special tokens)
+        tokenizer_name = self.config.tokenizer_name
+        if getattr(self.config, 'instruct_mode', False) and 'llama' in tokenizer_name.lower() and '-instruct' not in tokenizer_name.lower():
+            tokenizer_name = tokenizer_name + '-Instruct'
+        tokenizer = self._get_tokenizer(tokenizer_name)
+        
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
             encoder_name=pretrained_config.encoder_name, 
@@ -103,6 +109,10 @@ class LLMFinetuningProject(BaseProject):
             use_lora=self.config.use_lora,
             lora_config=lora_config
         ).to(self.config.device)
+        
+        # Resize model embeddings if new tokens were added
+        if getattr(self.config, 'instruct_mode', False):
+            ecg_tokenizer.decoder.llm_model.resize_token_embeddings(len(tokenizer))
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
         
@@ -112,9 +122,6 @@ class LLMFinetuningProject(BaseProject):
         
         # Print training configuration
         self._print_training_config(ecg_tokenizer)
-               
-        # Load the tokenizer
-        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
                
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -129,7 +136,8 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=True, 
-            pin_memory=True
+            pin_memory=True,
+            instruct_mode=getattr(self.config, 'instruct_mode', False)
         )
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -144,7 +152,8 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False, 
-            pin_memory=True
+            pin_memory=True,
+            instruct_mode=getattr(self.config, 'instruct_mode', False)
         )
 
         # Wrap the model in DDP
@@ -355,10 +364,52 @@ class LLMFinetuningProject(BaseProject):
         """Get the appropriate tokenizer using AutoTokenizer for all models."""
         # Use AutoTokenizer which works for all Hugging Face models
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
+        if getattr(self.config, 'instruct_mode', False):
+        # Override chat template to remove system additions
+            custom_template = """<|begin_of_text|>{% for message in messages %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>
+
+                {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>
+
+                {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>
+
+                {{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>
+
+                {% endif %}"""
+            tokenizer.chat_template = custom_template
         
         # Ensure pad token is set - use eos_token if no pad_token exists
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+            
+        # Ensure pad_token_id is a single integer (not a list)
+        if hasattr(tokenizer, 'pad_token_id') and isinstance(tokenizer.pad_token_id, list):
+            tokenizer.pad_token_id = tokenizer.pad_token_id[0]
+            
+        # Add ECG special tokens for instruction mode
+        if getattr(self.config, 'instruct_mode', False):
+            special_tokens_dict = {
+                'additional_special_tokens': ['<|start_ecg|>', '<|end_ecg|>']
+            }
+            num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+            if num_added_tokens > 0 and self.config.is_ref_device:
+                print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
+        
+        # Ensure chat template exists for instruction tuning
+        if getattr(self.config, 'instruct_mode', False):
+            chat_tmpl = getattr(tokenizer, 'chat_template', None)
+            if not chat_tmpl and 'llama' in tokenizer_name.lower():
+                tokenizer.chat_template = (
+                    "{{ bos_token }}"
+                    "{% for message in messages %}"
+                    "<|start_header_id|>{{ message['role'] }}<|end_header_id|>\n\n"
+                    "{{ message['content'] }}<|eot_id|>"
+                    "{% endfor %}"
+                    "{% if add_generation_prompt %}"
+                    "<|start_header_id|>assistant<|end_header_id|>\n\n"
+                    "{% endif %}"
+                )
             
         return tokenizer
     
