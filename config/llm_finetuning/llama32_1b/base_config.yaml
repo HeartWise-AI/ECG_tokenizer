@@ -13,11 +13,11 @@ wandb_project: !!str "ECG_tokenizer_LLM_finetuning_Llama32_1B"
 wandb_entity: !!str "mhi_ai"
 use_wandb: !!bool true
 # training parameters
-llm_lr: !!float 6e-6
-adapter_lr: !!float 5e-4
+llm_lr: !!float 2e-6
+adapter_lr: !!float 2e-4
 llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
-scheduler_type: !!str "cosine"
+scheduler_type: !!str "cosine_with_warmup"
 lr_step_period: !!int 1
 factor: !!float 0.3
 optimizer: !!str "AdamW"
@@ -39,7 +39,7 @@ huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
 adapter_name: !!str "Llama32_SequenceAdapter"
 llm_input_embedding_size: !!int 2048
 # Dataset parameters
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/train_subset.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated_with_questions.parquet"
 validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/test_subset.parquet"
 num_workers: !!int 12
 batch_size: !!int 16

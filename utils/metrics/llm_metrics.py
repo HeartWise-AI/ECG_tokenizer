@@ -13,6 +13,7 @@ import torch
 from typing import Dict, List, Union
 from transformers import GPT2Tokenizer
 from evaluate import load as load_metric
+import numpy as np
 
 from utils.registry import MetricRegistry  # Ensure this registry is defined in your project
 
@@ -132,6 +133,53 @@ class MeteorMetric:
             "meteor": result["meteor"],
             "predictions": predictions,
             "references": references
+        }
+
+@MetricRegistry.register("bertscore")
+class BertScoreMetric:
+    _metric = None  # Lazy-loaded to avoid import errors at module import time
+    _lang = "en"
+    
+    @staticmethod
+    def compute_score(
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+        tokenizer: GPT2Tokenizer
+    ) -> Dict[str, Union[float, List[str]]]:
+        """
+        Computes mean BERTScore Precision/Recall/F1 over a batch.
+        Returns hf-prec, hf-rec, hf-f1 to mirror the requested keys.
+        """
+        predictions: List[str] = []
+        references: List[str] = []
+        for gen, lab in zip(generated_ids, labels):
+            predictions.append(tokenizer.decode(gen.tolist(), skip_special_tokens=True))
+            references.append(tokenizer.decode(lab.tolist(), skip_special_tokens=True))
+
+        # Lazy-load evaluate metric and dependency to avoid ModuleNotFoundError at import time
+        if BertScoreMetric._metric is None:
+            try:
+                BertScoreMetric._metric = load_metric("bertscore")
+            except Exception as e:
+                raise RuntimeError("BERTScore metric unavailable. Please install 'bert-score' package.") from e
+
+        # evaluate.bertscore returns lists per example; take mean over batch
+        results = BertScoreMetric._metric.compute(
+            predictions=predictions,
+            references=references,
+            lang=BertScoreMetric._lang
+        )
+        # results["precision"], ["recall"], ["f1"] are lists of floats
+        prec = float(np.mean(results["precision"])) if isinstance(results["precision"], list) else float(results["precision"])  # type: ignore[arg-type]
+        rec = float(np.mean(results["recall"])) if isinstance(results["recall"], list) else float(results["recall"])  # type: ignore[arg-type]
+        f1 = float(np.mean(results["f1"])) if isinstance(results["f1"], list) else float(results["f1"])  # type: ignore[arg-type]
+
+        return {
+            "hf-prec": prec,
+            "hf-rec": rec,
+            "hf-f1": f1,
+            "predictions": predictions,
+            "references": references,
         }
 
 def update_best_metric(
