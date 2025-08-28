@@ -14,6 +14,9 @@ from utils.enums import DecoderMode, ModelName
 import sys
 import os
 from torch.nn.utils.rnn import pad_sequence
+from transformers.generation.utils import GenerationMixin
+from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutputWithCrossAttentions
+from torch.cuda.amp import autocast
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../transformers_ecg/src')))
 #print("sys.path =", sys.path)
@@ -69,7 +72,7 @@ class ECG_Gemma_config(Gemma3Config):
 
 			super().__init__(**kwargs)
 
-class ECG_Gemma_model(Gemma3Model):
+class ECG_Gemma_model(Gemma3Model, GenerationMixin):
 
 	_checkpoint_conversion_mapping = {"language_model.model": "language_model"}
 
@@ -91,6 +94,7 @@ class ECG_Gemma_model(Gemma3Model):
 		self.projection = nn.Linear(in_features=4, out_features=82)
 		self.ecg_proj = nn.Linear(512, self.config.ecg_config.hidden_size)
 		self.lm_head = nn.Linear(2304, config.ecg_config.vocab_size)
+		self.language_model = Gemma3Model(config)
 
 	def get_ecg_features(self, ecg_signals: torch.Tensor, chunk_size = 10):
 		x = ecg_signals
@@ -130,6 +134,35 @@ class ECG_Gemma_model(Gemma3Model):
 		#print(f"indices shape: {indices.shape}")
 		
 		return indices
+
+	def forward(
+		self,
+		input_ids=None,
+		attention_mask=None,
+		labels=None,
+		**kwargs):
+
+		with autocast(dtype=torch.bfloat16):
+
+			outputs = self.language_model(
+				input_ids=input_ids,
+				attention_mask=attention_mask,
+				**kwargs)
+		
+			logits = self.lm_head(outputs.last_hidden_state)
+
+			loss = None
+			if labels is not None:
+				loss_fct = nn.CrossEntropyLoss()
+				loss = loss_fct(
+					logits.view(-1, logits.size(-1)), 
+					labels.view(-1))
+
+		return CausalLMOutputWithCrossAttentions(
+			loss=loss,
+			logits=logits,
+			hidden_states=outputs.last_hidden_state,
+			past_key_values=outputs.past_key_values)
 
 	 
 	def forward_vision(self,
@@ -202,7 +235,7 @@ class ECG_Gemma_model(Gemma3Model):
 		generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
 		return generated_text
-	
+
 	def forward_ecg(
     	self,
     	input_ids: torch.LongTensor = None,
@@ -211,43 +244,65 @@ class ECG_Gemma_model(Gemma3Model):
     	past_key_values=None,
     	cache_position=None,
     	token_type_ids=None,
+		max_new_tokens=5,
     	**lm_kwargs,) -> Union[Tuple, Gemma3ModelOutputWithPast]:
 
-		inputs_embeds = self.get_input_embeddings()(input_ids)
+		input_ids = input_ids.to(self.device)
+		if attention_mask is not None:
+			attention_mask = attention_mask.to(self.device)
 
-		# Handle cache_position for past_key_values
-		if cache_position is None:
-			past_seen_tokens = getattr(past_key_values, "get_seq_length", lambda: 0)() if past_key_values is not None else 0
-			cache_position = torch.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device)
+		# Use the model's built-in generate
+		generated_ids = self.generate(
+			input_ids=input_ids,
+			attention_mask=attention_mask,
+			max_new_tokens=max_new_tokens,
+			do_sample=False
+    )
 
-		 # It may already have been prepared by e.g. `generate`
-		if not isinstance(causal_mask_mapping := attention_mask, dict):
-			 # Prepare mask arguments
-			mask_kwargs = {
-				 "config": self.config.get_text_config(),
-				 "input_embeds": inputs_embeds,
-				 "attention_mask": attention_mask,
-				 "cache_position": cache_position,
-				 "past_key_values": past_key_values,
-			 }
-			if token_type_ids is not None and inputs_embeds.shape[1] != 1:
-				 # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
-				mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-					 token_type_ids.to(cache_position.device), self.config.mm_tokens_per_ecg
-				 )
+		# Decode generated tokens
+		generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+		return generated_text
 
-			 # Create the masks
-				causal_mask_mapping = {
-				 "full_attention": create_causal_mask(**mask_kwargs),
-				 "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
-			 }
-		
-		generated_tokens = self.generate_text(tokenizer,
-			inputs_embeds=inputs_embeds,
-			attention_mask=causal_mask_mapping["full_attention"] if isinstance(causal_mask_mapping, dict) else causal_mask_mapping,
-			max_length=20)
+	def prepare_inputs_for_generation(
+		 self,
+		 input_ids,
+		 past_key_values=None,
+		 inputs_embeds=None,
+		 cache_position=None,
+		 position_ids=None,
+		 pixel_values=None,
+		 ecg_signals = None,
+		 attention_mask=None,
+		 token_type_ids=None,
+		 use_cache=True,
+		 logits_to_keep=None,
+		 labels=None,
+		 **kwargs,
+	 ):
+		 # Overwritten -- custom `position_ids` and `pixel_values` handling
+		model_inputs = super().prepare_inputs_for_generation(
+			 input_ids,
+			 past_key_values=past_key_values,
+			 inputs_embeds=inputs_embeds,
+			 attention_mask=attention_mask,
+			 position_ids=position_ids,
+			 cache_position=cache_position,
+			 use_cache=use_cache,
+			 logits_to_keep=logits_to_keep,
+			 token_type_ids=token_type_ids,
+			 **kwargs,
+		 )
+		  
+		  #if cache_position is not None and cache_position[0] == 0:
+		  #    if ecg_signals is not None:
+		  #        model_inputs["ecg_signals"] = ecg_signals
+		  #    if pixel_values is not None:
+		  #        model_inputs["pixel_values"] = pixel_values
 
-		return generated_tokens
+
+		return model_inputs
+
+
 
 class ECG_Gemma3MultiModalProjector(Gemma3MultiModalProjector):
 
@@ -512,4 +567,3 @@ def token_type_ids_mask_function(token_type_ids: Optional[torch.Tensor], tokens_
 		return is_image_block & same_image_block
 
 	return inner_mask
-

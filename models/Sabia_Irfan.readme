@@ -1,0 +1,230 @@
+Reasoning ECG Model
+
+Author: Sabia Irfan
+
+ECG_Gemma.py
+-------------
+
+ECG-Gemma3: ECG + Text Multi-Modal Model
+This module extends the Gemma3 language model with the ability to process ECG signals alongside text.
+It integrates a custom ECG tokenizer/encoder, projection layers, and a multi-modal interface, enabling the model to understand and generate text conditioned on ECG features.
+
+ECGConfig class:
+- Configuration for ECG-specific components:
+    ecg_token_id: Special token ID for ECG input
+    embedding_dim: Dimension of quantized ECG embeddings
+    num_quantizers: Number of quantization codebooks    
+    codebook_size: Size of each quantizer codebook  
+    hidden_size: Hidden state size for ECG projection   
+    Inherits from PretrainedConfig (Hugging Face)
+
+ECG_Gemma_config class:
+- Extends Gemma3Config with an embedded ECGConfig.
+
+ECG_Gemma_model class (extends Gemma):
+- ECG Tokenizer Wrapper (ECG_Tokenizer_Wrapper) for encoding ECG signals
+- Projection layers to align ECG feature space with LLM hidden space
+- ECG Feature Pipeline:
+    Encode raw ECG signals → embeddings
+    Chunk + pool → stable temporal features
+    Project into LLM hidden dimension
+- Methods:
+    get_ecg_features: Extract ECG embeddings from raw signals
+    tokenize_ecg: Convert projected ECG features into token indices
+    forward: Standard language modeling forward pass
+    forward_ecg: Generate text conditioned on ECG signals
+    generate_text: Simple greedy decoding loop for text
+
+ECG_Gemma3MultiModalProjector (extends Gemma3MultiModalProjector):
+- Adds ECG projection layers
+-Normalizes ECG embeddings (RMSNorm)
+- Projects them into Gemma3’s hidden dimension for fusion with text/vision
+
+
+ECG_Gemma3ForConditionalGeneration (extends Gemma3ForConditionalGeneration)
+- Full ECG-augmented multimodal LLM:
+- Ties together language, vision, and ECG encoders
+- Defines forward_ecg() to integrate ECG features into text generation
+- Computes loss when labels are provided
+- Returns ECG_Gemma3CausalLMOutputWithPast, which includes:
+    Loss
+    Logits
+    Past key values
+    Hidden states
+
+ECG_Tokenizer_Wrapper → wraps encoder, quantizer, and decoder for ECG signals
+
+Custom prepare_inputs_for_generation() → allows ECG & multimodal inputs during text generation
+
+token_type_ids_mask_function() → handles masking rules for multimodal attention
+
+ECG_GRPO.py
+------------
+
+This repository implements a GRPO reinforcement-learning-based reasoning model for ECG data.
+
+Key features:
+- LoRA fine-tuning on a quantized base model.
+- 4-bit quantization with bitsandbytes for efficiency.
+- Adapter training using cross-entropy.
+- GRPO training for reward-driven fine-tuning on reasoning tasks.
+
+Function model_4bit:
+- Converts the base model to 4 bits using bitsandbyte
+- Creating a new Linear4bit layer with the same config, weights as the original in place of every linear layer 
+
+Training Class:
+- The Training class provides a wrapper around model initialization, adapter setup (LoRA), quantization, and optimizer configuration for fine-tuning the causal language model
+- Freezes the base model weights and attaches LoRA adapters
+- Sets up the optimizer
+- Handles device placement
+- Stores the tokenizer and reward model for later use in training/evaluation
+- Quantizes all linear layers (model_4bit)
+- Functions include: Training Adapters, Save Adapter Checkpoint, Generate Initial Reports, GRPO
+
+Training Adapters: This method trains the LoRA adapters
+- input ids are a concatenation of ECG signals, text for prompt, labels that are the correct generated report  
+- input dataloader batches: 
+    input_ids: Tensor of shape (batch_size, seq_len) → tokenized input text
+    labels: Tensor of shape (batch_size, seq_len) → tokenized target/output text
+    attention_mask (optional): Tensor of shape (batch_size, seq_len) → mask for padding tokens
+- Uses CrossEntropyLoss
+- Mixed precision: forward/backward passes in autocast(dtype=torch.bfloat16) for faster training and lower memory usage
+- Forward Pass: 
+    Model outputs logits (batch_size, seq_len, vocab_size)
+    Logits and labels are reshaped for CrossEntropyLoss.
+- Gradient Accumulation:
+    Loss is divided by gradient_accumulation_steps
+    Accumulates gradients over multiple steps before performing an optimizer update
+-Backward Pass
+    Gradients are scaled and backpropagated
+    Gradients are clipped (max_norm=1.0) to stabilize training
+    Optimizer step & gradient reset occur after accumulation steps
+-Logging
+    Prints the average loss per epoch for monitoring.
+
+Save Adapter Checkpoint:
+- save trained adapter weights at the specified path 
+
+Generate Initial Reports: This method generates text reports using the fine-tuned LoRA adapters
+- Load trained adapters
+- disables gradients with torch.no_grad() for faster inference
+- Generate outputs. Uses model.generate() to produce token sequences
+- Converts generated token IDs into text with the tokenizer
+- Skips special tokens (like <pad> or <eos>)
+- Collects all decoded reports into all_reports and returns 
+- Input is input ids and attention mask, no labels or reports, using the rl_dataset 
+
+GRPO: Unfinished RL training - has NOT been adapted to ECG yet 
+- Load LoRA adapters from adapter_path into the base model
+- Defines tokens that signal the end of a generated response (e.g. "Answer:", "Therefore")
+- Epoch Training Loop
+    For each epoch:
+    Iterate over dataloader batches containing:
+        input_ids (prompt text tokens)
+        step_answers (reference answers / ground truth steps)
+        Attention_mask
+        Generate Candidate Outputs
+    Use model.generate() with sampling to produce num_candidates outputs per input
+- Generation settings:
+    do_sample=True, temperature=1.0 → encourages diverse outputs
+    max_new_tokens = limit on length of generations
+    repetition_penalty=1.2 to reduce repeated phrases   
+    stop_token_ids and EOS token to terminate sequences
+- Clean + Process Outputs
+    Post-process model outputs to align them with reference answers
+    Extract numeric answers, filter noise, and detect “thinking” traces
+- Reward Calculation:
+    Pass cleaned outputs + references into self.reward_model
+    Reward model returns scores for each generated candidate
+    Compute advantage tensor = candidate score – average score (baseline)
+- Log Probability Calculation:
+    Tokenize each candidate output
+    Run forward pass to compute log probabilities for generated tokens
+    Collect log-prob sums for each sequence
+- GRPO Loss
+    Compute policy gradient–style loss:
+    L=−E[log_prob(candidate)×advantage(candidate)]
+- Optimization Step
+- Backpropagate loss and update adapter weights with optimizer
+- Print training progress: epoch, batch number, loss
+
+
+ECG_Test.py
+------------
+
+Prepare Data:
+- Load and normalize raw ECG signals (.npy files from MIMIC parquet metadata)
+- Load the ECG waveforms as NumPy arrays into a new column ECG_signals
+
+ECG Tokenizer & Model Initialization:
+- Loads a pretrained ECG tokenizer model (ECG_Tokenizer_Wrapper) to discretize ECG signals.
+- Loads the model checkpoint and applies it to ECG_Gemma_model.
+- ECG_Gemma_model integrates ECG features with a generative language model.
+
+ECG Conversion to Torch Tensors:
+- Converts each ECG signal to a PyTorch tensor for model input
+
+Tokenizer for LLM (Gemma-7B):
+- Adds a special <|ecg|> token to embed ECG sequences into the LLM input.
+- Resizes embeddings in the language model to accommodate this new token.
+
+Full Prompt Construction for Supervised Fine-Tuning (SFT):
+
+    full_llm_prompts function:
+    - Extract ECG features using model.get_ecg_features.
+    - Tokenize ECG features into sequences.
+    - Insert ECG tokens into LLM input where <|ecg|> is placed.
+    - Pad input IDs and attention masks.
+    - Append report tokens for supervised learning.
+    - Construct labels tensor: -100 for tokens not in the report (ignored in loss calculation).
+
+    creating_full_prompts function:
+    - Iterates over a dataframe of ECG signals + reports.
+    - Calls full_llm_prompts for each sample.
+    - Returns padded input_ids, attention_mask, and labels for SFT training.
+
+RL Prompt Construction:
+    rl_llm_prompts function:
+        - Same as full_llm_prompts but excludes labels for RL
+    
+    rl_prompts function:
+    - Converts dataframe to RL-ready input_ids and attention_mask
+
+
+Collate Functions:
+
+    collate_fn(batch)
+    - Pads batches for SFT training.
+    - Returns input_ids, attention_mask, and labels.
+
+    rl_collate_fn(batch)
+    - Pads batches for RL training.
+    - Only returns input_ids and attention_mask.
+
+Dataset Classes:
+
+    TrainingDataset(Dataset):
+    - Stores SFT inputs: input_ids, attention_mask, labels.
+    - Masks padding tokens in labels to exclude them from loss.
+
+    RLDataset(Dataset):
+    - Stores RL-only inputs: input_ids and attention_mask.
+    - Casual LLM so no labels included TrainingDataset(Dataset)
+
+Train/Test Split:
+- Splits dataset into supervised fine-tuning (SFT) and RL training sets.
+- 20 % test size
+- Subsamples to speed up experiments.
+
+Convert Tokenized Data to Datasets and DataLoaders:
+- Converts tokenized inputs to PyTorch Dataset.
+- seperate dataset for RL and SFT
+- DataLoaders produce mini-batches for training.
+
+Adapter/LoRA Training Pipeline:
+- Initializes LoRA (Low-Rank Adaptation) for parameter-efficient fine-tuning.
+- Associates reward model (currently placeholder) for RL training.
+- LoRA adapts only selected model layers (q_proj, v_proj) for efficiency.
+
+Insert ECG_Gemma model in Training class and call its functions to train adapters, save weights, generate reports, and GRPO training 

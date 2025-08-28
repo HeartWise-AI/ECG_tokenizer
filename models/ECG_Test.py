@@ -12,7 +12,9 @@ import os
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from sklearn.model_selection import train_test_split
-from models.ECG_GRPO import model_4bit
+from models.ECG_GRPO import model_4bit, Training 
+import bitsandbytes as bnb 
+from peft import TaskType
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../transformers_ecg/src')))
 
@@ -147,8 +149,12 @@ def find_length(report):
 #test_report = mimic_train_copy["report"][0]   
 #print(find_length(test_report))
 
-mimic_train_copy["max_length"] = mimic_train_copy["report"].apply(find_length)
+#mimic_train_copy["max_length"] = mimic_train_copy["report"].apply(find_length)
 #print(mimic_train_copy["max_length"][0])
+
+
+def rewards_function():
+    return 
 
 def full_llm_prompts(model, tokenizer, input_ids: torch.LongTensor, ecg_signals: torch.FloatTensor, attention_mask: torch.Tensor, report):
     if (input_ids is None):
@@ -310,8 +316,20 @@ def collate_fn(batch):
     return {
         'input_ids': input_ids,
         'labels': labels,
-        "attention_mask": attention_mask
-    }
+        "attention_mask": attention_mask    }
+
+
+def rl_collate_fn(batch):
+    input_ids = [item['input_ids'].squeeze(0) for item in batch]
+    attention_mask = [item["attention_mask"].squeeze(0) for item in batch]
+
+    input_ids = pad_sequence(input_ids, batch_first=True, padding_value=tokenizer.pad_token_id)
+    attention_mask = pad_sequence(attention_mask, batch_first=True, padding_value=0)
+
+    return {
+        'input_ids': input_ids,
+        "attention_mask": attention_mask    }
+
 
 class TrainingDataset(Dataset):
 
@@ -330,7 +348,7 @@ class TrainingDataset(Dataset):
           #labels[padding_mask] = -100
 
             self.labels[self.attention_mask == 0] = -100
-       
+               
     #batch size
     def __len__(self):
         return len(self.input_ids)
@@ -340,8 +358,7 @@ class TrainingDataset(Dataset):
     
         item = {
         "input_ids": self.input_ids[index],
-        "labels": self.labels[index]
-    }
+        "labels": self.labels[index]    }
         
         if self.attention_mask is not None:
         
@@ -439,19 +456,16 @@ def rl_prompts(df, model, tokenizer):
     for index, row in df.iterrows():
 
         ecg_signals = row["ECG_signals"]
-        report = row["report"]
 
         prompt_start = tokenizer.encode("Patient ECG reading: ", add_special_tokens=False)
-        prompt_end = tokenizer.encode(" Generate a report.", add_special_tokens=False)
 
         ecg_token_id = tokenizer.convert_tokens_to_ids("<|ecg|>")
-        input_ids_list = prompt_start + [ecg_token_id] + prompt_end
+        input_ids_list = prompt_start + [ecg_token_id]
         input_ids = torch.tensor([input_ids_list])
         attention_mask = torch.ones_like(input_ids)
 
-
-        prompt_components = full_llm_prompts(model, tokenizer, input_ids, ecg_signals, attention_mask, report)
-        attention_mask, input_ids, labels = prompt_components
+        prompt_components = rl_llm_prompts(model, tokenizer, input_ids, ecg_signals, attention_mask)
+        attention_mask, input_ids = prompt_components
 
         input_ids = input_ids.view(-1)
         attention_mask = attention_mask.view(-1)
@@ -469,9 +483,8 @@ def rl_prompts(df, model, tokenizer):
 
 class RLDataset(Dataset):
 
-  def __init__(self, reports, input_ids, attention_mask):
+  def __init__(self, input_ids, attention_mask):
 
-    self.reports = reports
     self.input_ids = input_ids
     self.attention_mask = attention_mask
 
@@ -484,8 +497,6 @@ class RLDataset(Dataset):
 
       "input_ids": self.input_ids[index],
       "attention_mask": self.attention_mask[index],
-      "reports": self.reports[index],
-
     }
 
     return item
@@ -497,23 +508,48 @@ df_sft = df_sft.sample(frac=0.1, random_state=42).reset_index(drop=True)
 df_rl = df_rl.sample(frac=0.1, random_state=42).reset_index(drop=True)
 
 full_input_ids, full_attention_mask, all_labels = creating_full_prompts(df_sft, ecg_model, tokenizer)
+rl_input_ids, rl_attention_mask = rl_prompts(df_rl, ecg_model, tokenizer)
 #print(full_input_ids[0])
+
 
 #turn the tokenized inputs into batches
 dataset_sft = TrainingDataset(full_input_ids, all_labels, full_attention_mask)
+dataset_rl = RLDataset(rl_input_ids, rl_attention_mask)
 
-batch_size = 8
+batch_size = 1
 #make into batches
 dataloader_sft = DataLoader(dataset_sft, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 #print(len(dataloader_sft))
+dataloader_rl = DataLoader(dataset_rl, batch_size=batch_size, shuffle=True, collate_fn=rl_collate_fn)
 
 first_batch = next(iter(dataloader_sft))
-input_ids = first_batch["input_ids"]
-attention_mask = first_batch["attention_mask"]
+input_ids = first_batch["input_ids"][:1]
+attention_mask = first_batch["attention_mask"][:1]
 
-output = ecg_model.forward_ecg(input_ids, attention_mask, tokenizer)
-print(output)
-
-
+#output = ecg_model.forward_ecg(input_ids, attention_mask, tokenizer, max_length)
+#print(output)
 
 
+#bit_ecg_model = model_4bit(ecg_model)
+
+#for name, module in bit_ecg_model.named_modules():
+#    if isinstance(module, bnb.nn.Linear4bit):
+#        print(f"{name} is 4-bit quantized")
+
+lora_config = {
+
+  "r": 16, "lora_alpha": 16, "target_modules": ["q_proj", "v_proj"], "lora_dropout": 0.1, "bias": "none", "task_type": "CAUSAL_LM"}
+
+pipeline_model = Training(reward_model = rewards_function, model = ecg_model, lora_config = lora_config, tokenizer=tokenizer)
+
+#train adapters
+#pipeline_model.train_adapters(dataloader_sft, num_epochs=2, gradient_accumulation_steps=8)
+
+#making the path (does not exist yet)
+adapter_path = "/volume/ECG_tokenizer/models/ECG_adapter_weights"
+
+#save the weights at the path
+#pipeline_model.save_adapter_checkpoint(adapter_path)
+
+reports = pipeline_model.generate_initial_reports(dataloader_rl, adapter_path, max_new_tokens=10)
+#print(reports)

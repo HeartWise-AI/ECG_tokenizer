@@ -13,6 +13,8 @@ import wandb
 from transformers import AutoModelForCausalLM
 #from transformers.optimization import AdamW
 from torch.optim import AdamW
+from torch.cuda.amp import autocast, GradScaler
+
 
 
 def model_4bit(model):
@@ -100,7 +102,7 @@ class Training:
         optimizer = None, 
         learning_rate = None, 
         device = None, 
-        text_tokenizer = None,
+        tokenizer = None,
         weight_decay = None):
 
         self.reward_model = reward_model
@@ -135,16 +137,14 @@ class Training:
         self.optimizer = optimizer
 
         if device == None:
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-            else:
-                device = torch.device("cpu")
+            device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
         
         self.device = device
+        self.model.to(self.device)
         
         self.tokenizer = tokenizer
     
-    def train_adapters(self, dataloader, num_epochs = 2, gradient_accumulation_steps = 8):
+    def train_adapters(self, dataloader, num_epochs = 2, gradient_accumulation_steps = 16):
 
         #Example batch
         #Batch 
@@ -152,14 +152,32 @@ class Training:
         #"labels": torch.LongTensor of shape (batch_size, seq_len),
         #"attention_mask": (optional) torch.LongTensor of shape (batch_size, seq_len)}
         print("Starting train_adapters...")
-        self.model.train()
-        self.model.to(self.device)
 
         #cost function
         #expects number of samples, number of classes (vocab size)
         criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
+        self.model.gradient_checkpointing_disable()
+
+        #for name, param in self.model.named_parameters():
+        #    param.requires_grad = "adapter" in name
+
+        scaler = GradScaler()  # for mixed precision
+
+        for name, param in self.model.named_parameters():
+            if "adapter" in name or "lora" in name:
+                param.requires_grad=True
+
+        self.model.train()
+        self.model.to(self.device)
+
+        trainable_params = [n for n, p in self.model.named_parameters() if p.requires_grad]
+        print(f"Trainable parameter count: {len(trainable_params)}")
+
+
         for epoch in range(num_epochs):
+
+            torch.cuda.empty_cache()
             
             total_loss = 0.0
 
@@ -174,27 +192,31 @@ class Training:
                 attention_mask = batch.get('attention_mask', None)
 
                 if attention_mask is not None:
-                    attention_mask = attention_mask.to(self.device)
-               
-                #forward pass
-                outputs = self.model.forward_ecg(input_ids = input_ids,
+                    attention_mask = attention_mask.to(self.device, non_blocking=True)
+            
+                with autocast(dtype=torch.bfloat16):
+                    #forward pass
+                    outputs = self.model(input_ids = input_ids,
                                                 attention_mask = attention_mask,
-                                                tokenizer = self.tokenizer,
-                                                return_dict = True)
+                                                labels = labels,
+                                                use_cache=False)
 
-                #raw scores
-                #batch size, sequence length, vocab size
-                logits = outputs.logits
 
-                #input: [N, C] scores for C classes for N samples,
-                #target: true classes 
+                    #raw scores
+                    #batch size, sequence length, vocab size
+                    logits = outputs.logits
+
+                    #input: [N, C] scores for C classes for N samples,
+                    #target: true classes 
                
-                reshaped = logits.view(-1, logits.shape[-1]) #batch * seq_len, vocab_size
-                loss = criterion(reshaped, 
-                                labels.view(-1)) #list of labels 1D batch *seq_len
+                    reshaped = logits.view(-1, logits.shape[-1]) #batch * seq_len, vocab_size
+                    reshaped_labels = labels.view(-1)
+
+                    loss = criterion(reshaped, 
+                                reshaped_labels) #list of labels 1D batch *seq_len
                 
-                #normalize loss
-                loss = loss/gradient_accumulation_steps 
+                    #normalize loss
+                    loss = loss/gradient_accumulation_steps 
 
                 #back propogation
                 #accumulating the gradients
@@ -203,10 +225,9 @@ class Training:
                 #print(f"Step {step} logits stats: min={logits.min().item()}, max={logits.max().item()}, mean={logits.mean().item()}")
                 #print(f"Step {step} labels valid count: {(labels != -100).sum().item()}")
                 #print(f"Step {step} loss: {loss.item()}")
-
-
-                loss.backward()
-                
+                scaler.scale(loss).backward()
+              
+            
                 #returns tensor number
                 total_loss += loss.item()
 
@@ -215,9 +236,14 @@ class Training:
                 if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(dataloader):
                     #optimizing step
                   
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                  
-                    self.optimizer.step()
+                    scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                    [p for p in self.model.parameters() if p.requires_grad], max_norm=1.0
+                )
+
+
+                    scaler.step(self.optimizer)
+                    scaler.update()
                     self.optimizer.zero_grad()
             
             avg_loss = total_loss /len(dataloader)
@@ -239,6 +265,8 @@ class Training:
 
         #input saved adapters in the file into base model
         self.model.load_adapter(adapter_path, adapter_name="lora_adapter")
+
+        self.model.set_adapter("lora_adapter")
 
         self.model.to(self.device)
 
@@ -274,7 +302,7 @@ class Training:
                
             #converts each sequence of tokens into string
             #a list
-            reports = self.text_tokenizer.batch_decode(generated_ids, skip_special_tokens = True)
+            reports = self.tokenizer.batch_decode(generated_ids, skip_special_tokens = True)
 
             print(reports)
 
