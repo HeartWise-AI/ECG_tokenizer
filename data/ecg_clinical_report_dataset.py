@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
-from typing import cast, List
+from typing import Optional, cast, List
 from transformers import PreTrainedTokenizerBase
 
 from utils.ddp import DistributedUtils
@@ -22,7 +22,9 @@ class ECGClinicalReportDataset(Dataset):
         ecg_num_leads: int,
         tokenizer: AutoTokenizerT, 
         max_length: int = 512,
-        instruct_mode: bool = False
+        instruct_mode: bool = False,
+        num_ecg_tokens: int = 128,
+        ecg_token_start_id: Optional[int] = None
     ):
         """
         Args:
@@ -43,6 +45,15 @@ class ECGClinicalReportDataset(Dataset):
         self.max_length: int = max_length
         self.signal_path_column: str = signal_path_column
         self.instruct_mode: bool = instruct_mode
+        self.num_ecg_tokens: int = num_ecg_tokens
+        self.ecg_token_start_id: Optional[int] = ecg_token_start_id
+        if self.instruct_mode:
+            if self.ecg_token_start_id is None:
+                raise ValueError("ecg_token_start_id is required in instruct_mode")
+            self.ecg_token_ids = list(range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens))
+        else:
+            self.ecg_token_start_id = 0
+            self.ecg_token_ids = []
         
     def __len__(self):
         return len(self.df)
@@ -100,11 +111,13 @@ class ECGClinicalReportDataset(Dataset):
                 report_text: str = str(row['report'])
 
                 # Construct LLaMA 3.2 chat template with ECG integration
-                # System message for ECG analysis task
-                system_message = "You are a medical expert assistant specialized in ECG analysis. Analyze the provided ECG signal and respond with a clinical report."
+                # System message for ECG analysis task - optimized for concise medical findings
+                system_message = "You are a medical expert specialized in ECG interpretation. Provide a concise list of clinical findings separated by semicolons, similar to standard ECG reports."
                 
-                # User message with ECG placeholder and question
-                user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{question_text}" if question_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nPlease analyze the above ECG signal and provide a clinical report."
+                # User message with ECG placeholder and question - focused on findings format
+                # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{question_text}" if question_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
+                
+                user_content = question_text if question_text else "Analyze this ECG and list the clinical findings."
                 
                 # Create messages for chat template
                 messages_prompt = [
@@ -119,16 +132,16 @@ class ECGClinicalReportDataset(Dataset):
                 ]
                 
                 # Apply chat template
-                prompt_text = self._pt_tokenizer.apply_chat_template(
+                prompt_text = cast(str, self._pt_tokenizer.apply_chat_template(
                     messages_prompt, 
                     tokenize=False, 
                     add_generation_prompt=True
-                )
-                full_text = self._pt_tokenizer.apply_chat_template(
+                ))
+                full_text = cast(str, self._pt_tokenizer.apply_chat_template(
                     messages_full, 
                     tokenize=False, 
                     add_generation_prompt=False
-                )
+                ))
                 
                 # Replace ECG placeholder with special tokens for tokenization
                 # The actual ECG embedding will replace the ECG token during training/inference
@@ -149,28 +162,53 @@ class ECGClinicalReportDataset(Dataset):
                     add_special_tokens=False,  # Chat template already adds special tokens
                     return_tensors=None
                 )
-                
+
                 prompt_ids = prompt_encoding.input_ids
                 full_ids = full_encoding.input_ids
 
-                # Convert to tensors and pad/truncate to max_length  
-                input_ids = torch.tensor(full_ids[:self.max_length], dtype=torch.long)
+                # Build ECG token prefix [ecg_start_id .. ecg_start_id + num_ecg_tokens)
+                if self.ecg_token_start_id is None:
+                    raise ValueError("ecg_token_start_id must be provided in instruct_mode")
+                ecg_prefix = torch.arange(
+                    self.ecg_token_start_id,
+                    self.ecg_token_start_id + self.num_ecg_tokens,
+                    dtype=torch.long
+                )
+
+                # Truncate text so total length fits within max_length after ECG prefix
+                max_text_len = max(0, self.max_length - self.num_ecg_tokens)
+                full_ids_trunc = full_ids[:max_text_len]
+
+                # Construct final input_ids: [ECG x 128] + [full text tokens]
+                input_ids = torch.cat([
+                    ecg_prefix,
+                    torch.tensor(full_ids_trunc, dtype=torch.long)
+                ], dim=0)
+
+                # Create attention mask and pad to max_length
+                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+                # if input_ids.numel() < self.max_length:
+                #     pad_len = self.max_length - input_ids.numel()
+                pad_id_attr = getattr(self._pt_tokenizer, 'pad_token_id', None)
+                eos_attr = getattr(self._pt_tokenizer, 'eos_token_id', None)
+                if isinstance(eos_attr, list):
+                    eos_id = int(eos_attr[0]) if len(eos_attr) > 0 else 0
+                elif eos_attr is None:
+                    eos_id = 0
+                else:
+                    eos_id = int(eos_attr)
+                pad_id = int(pad_id_attr) if pad_id_attr is not None else eos_id
+                # input_ids = F.pad(input_ids, (0, pad_len), value=pad_id)
+                # attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
+
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)
                 if input_ids.numel() < self.max_length:
                     pad_len = self.max_length - input_ids.numel()
-                    pad_id_attr = getattr(self._pt_tokenizer, 'pad_token_id', None)
-                    eos_attr = getattr(self._pt_tokenizer, 'eos_token_id', None) 
-                    if isinstance(eos_attr, list):
-                        eos_id = int(eos_attr[0]) if len(eos_attr) > 0 else 0
-                    elif eos_attr is None:
-                        eos_id = 0
-                    else:
-                        eos_id = int(eos_attr)
-                    pad_id = int(pad_id_attr) if pad_id_attr is not None else eos_id
+                    # Now pad_id is guaranteed to exist
                     input_ids = F.pad(input_ids, (0, pad_len), value=pad_id)
                     attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
 
-                # Prepare prompt-only ids and mask for generation
+                # Prepare prompt-only ids and mask for generation (text-only; no ECG tokens)
                 prompt_input_ids = torch.tensor(prompt_ids[: self.max_length], dtype=torch.long)
                 prompt_attention_mask = torch.ones_like(prompt_input_ids, dtype=torch.long)
                 if prompt_input_ids.numel() < self.max_length:
@@ -179,9 +217,13 @@ class ECGClinicalReportDataset(Dataset):
                     prompt_attention_mask = F.pad(prompt_attention_mask, (0, pad_len), value=0)
 
                 # Create labels: ignore prompt (question + assistant header) and padding
-                prompt_len = min(len(prompt_ids), self.max_length)
+                prompt_len = len(prompt_ids)
+                text_prompt_len = len(prompt_encoding.input_ids)
+                full_prompt_len = self.num_ecg_tokens + text_prompt_len
+                # prompt_len = min(len(prompt_ids), self.max_length)
                 labels = input_ids.clone()
-                labels[:prompt_len] = -100
+                # labels[:prompt_len] = -100
+                labels[:full_prompt_len] = -100
                 labels = labels.masked_fill(attention_mask == 0, -100)
 
                 return {
@@ -230,7 +272,10 @@ def get_clinical_report_dataloader(
         ecg_num_leads=config.ecg_num_leads,
         tokenizer=config.tokenizer, 
         max_length=config.max_length,
-        instruct_mode=getattr(config, 'instruct_mode', False)
+        instruct_mode=getattr(config, 'instruct_mode', False),
+        num_ecg_tokens=config.num_ecg_tokens,
+        ecg_token_start_id=config.ecg_token_start_id
+
     )
     return DataLoader(
         dataset, 
@@ -254,7 +299,10 @@ def get_distributed_clinical_report_dataloader(
     rank: int = 0,
     shuffle: bool = True,
     pin_memory: bool = True,
-    instruct_mode: bool = False
+    instruct_mode: bool = False,
+    num_ecg_tokens: int = 128,
+    ecg_token_start_id: Optional[int] = None
+
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=dataset_path, 
@@ -263,7 +311,9 @@ def get_distributed_clinical_report_dataloader(
         ecg_num_leads=ecg_num_leads,
         tokenizer=tokenizer, 
         max_length=max_token_length,
-        instruct_mode=instruct_mode
+        instruct_mode=instruct_mode,
+        num_ecg_tokens=num_ecg_tokens,
+        ecg_token_start_id=ecg_token_start_id
     )
     
     return DistributedUtils.get_distributed_dataloader(
