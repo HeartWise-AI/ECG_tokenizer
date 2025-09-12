@@ -811,6 +811,14 @@ class ECG_Tokenizer_Quantizer(nn.Module):
             implicit_neural_codebook=True
         )
 
+    @property
+    def codebooks(self):
+        """Expose the underlying quantizer's codebooks"""
+        if hasattr(self.quantizer, 'codebooks'):
+            return getattr(self.quantizer, 'codebooks')
+        else:
+            return None
+
     def forward(
         self, 
         x: torch.Tensor, 
@@ -887,7 +895,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
         use_lora: bool = False,
-        lora_config: Optional[dict[str, Any]] = None
+        lora_config: Optional[dict[str, Any]] = None,
+        tokenizer: Optional[Any] = None,
+        # Attention visualization parameters
+        enable_attention_visualization: bool = False,
+        attention_log_frequency: int = 100
     ):
         """
         Args:
@@ -937,7 +949,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     llm_input_embedding_size=llm_input_embedding_size,
                     quantized_feature_shape=quantized_feature_shape,
                     adapter_name=adapter_name,
-                    adapter_dropout=adapter_dropout
+                    adapter_dropout=adapter_dropout,
+                    quantizer=self.quantizer,  # Pass quantizer for direct codebook access
+                    tokenizer=tokenizer,
+                    enable_attention_visualization=enable_attention_visualization,
+                    attention_log_frequency=attention_log_frequency
                 ))
                 
                 # Apply LoRA to the LLM if requested
@@ -997,8 +1013,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
             r=lora_config.get('r', 16),
-            lora_alpha=lora_config.get('alpha', 32),
-            lora_dropout=lora_config.get('dropout', 0.05),
+            lora_alpha=lora_config.get('lora_alpha', 32),
+            lora_dropout=lora_config.get('lora_dropout', 0.05),
             target_modules=target_modules,
             bias=lora_config.get('bias', 'none')
         )
