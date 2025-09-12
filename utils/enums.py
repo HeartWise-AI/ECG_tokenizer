@@ -97,9 +97,13 @@ class AdapterName(str, Enum):
     GPT2_SEQUENCE_ADAPTER = "GPT2_SequenceAdapter"
     GPT2_EMBEDDING_ADAPTER = "GPT2_EmbeddingAdapter"
     GPT2_SIMPLE_EMBEDDING_ADAPTER = "GPT2_SimpleEmbeddingAdapter"
+    GPT2_SEQUENCE_TOKEN_ADAPTER = "GPT2_SequenceTokenAdapter"
+    GPT2_SIMPLE_TOKEN_ADAPTER = "GPT2_SimpleTokenAdapter"
     LLAMA32_SEQUENCE_ADAPTER = "Llama32_SequenceAdapter"
     LLAMA32_EMBEDDING_ADAPTER = "Llama32_EmbeddingAdapter"
     LLAMA32_SIMPLE_EMBEDDING_ADAPTER = "Llama32_SimpleEmbeddingAdapter"
+    LLAMA32_SEQUENCE_TOKEN_ADAPTER = "Llama32_SequenceTokenAdapter"
+    LLAMA32_SIMPLE_TOKEN_ADAPTER = "Llama32_SimpleTokenAdapter"
     
     def __str__(self):
         return self.value
