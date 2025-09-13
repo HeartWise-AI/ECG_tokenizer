@@ -106,6 +106,7 @@ class LLMFinetuningProject(BaseProject):
             adapter_name=self.config.adapter_name,
             huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
+            tokenizer=tokenizer,
             use_lora=self.config.use_lora,
             lora_config=lora_config
         ).to(self.config.device)
@@ -137,7 +138,9 @@ class LLMFinetuningProject(BaseProject):
             rank=self.config.device,
             shuffle=True, 
             pin_memory=True,
-            instruct_mode=getattr(self.config, 'instruct_mode', False)
+            instruct_mode=getattr(self.config, 'instruct_mode', False),
+            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
         )
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -153,7 +156,9 @@ class LLMFinetuningProject(BaseProject):
             rank=self.config.device,
             shuffle=False, 
             pin_memory=True,
-            instruct_mode=getattr(self.config, 'instruct_mode', False)
+            instruct_mode=getattr(self.config, 'instruct_mode', False),
+            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
         )
 
         # Wrap the model in DDP
@@ -300,6 +305,7 @@ class LLMFinetuningProject(BaseProject):
             adapter_name=pretrained_config.adapter_name,
             huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
             llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
+            tokenizer=self._get_tokenizer(self.config.tokenizer_name),
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': pretrained_config.lora_r if hasattr(pretrained_config, 'lora_r') else 16,
@@ -338,7 +344,10 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False, 
-            pin_memory=True
+            pin_memory=True,
+            instruct_mode=getattr(self.config, 'instruct_mode', False),
+            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
         )
 
         # Wrap the model in DDP
@@ -367,15 +376,32 @@ class LLMFinetuningProject(BaseProject):
 
         if getattr(self.config, 'instruct_mode', False):
         # Override chat template to remove system additions
-            custom_template = """<|begin_of_text|>{% for message in messages %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>
+            # custom_template = """<|begin_of_text|>{% for message in messages %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>
 
-                {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>
+            #     {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>
 
-                {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>
+            #     {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>
 
-                {{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>
+            #     {{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>
 
-                {% endif %}"""
+            #     {% endif %}"""
+
+            custom_template = (
+                "<|begin_of_text|>"
+                "{% for message in messages %}"
+                    "{% if message['role'] == 'system' %}"
+                        "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+                    "{% elif message['role'] == 'user' %}"
+                        "<|start_header_id|>user<|end_header_id|>\n\n"
+                        # Add placeholders for the ECG tokens here
+                        "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens)]) + "<|end_ecg|>\n"
+                        "{{ message['content'] }}<|eot_id|>"
+                    "{% elif message['role'] == 'assistant' %}"
+                        "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+                    "{% endif %}"
+                "{% endfor %}"
+                "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
+            )
             tokenizer.chat_template = custom_template
         
         # Ensure pad token is set - use eos_token if no pad_token exists
@@ -395,6 +421,22 @@ class LLMFinetuningProject(BaseProject):
             num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
             if num_added_tokens > 0 and self.config.is_ref_device:
                 print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
+        
+        # Add 128 position-specific ECG tokens and record their start id
+        if getattr(self.config, 'instruct_mode', False):
+            # Determine if tokens already exist
+            ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]
+            existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
+            if existing_id is None or existing_id == -1:
+                original_vocab_size = len(tokenizer)
+                tokenizer.add_tokens(ecg_tokens, special_tokens=True)
+                self.config.ecg_token_start_id = original_vocab_size
+                if self.config.is_ref_device:
+                    print(f"Added {len(ecg_tokens)} ECG position tokens starting at id {self.config.ecg_token_start_id}")
+            else:
+                self.config.ecg_token_start_id = int(existing_id)
+                if self.config.is_ref_device:
+                    print(f"ECG position tokens already present starting at id {self.config.ecg_token_start_id}")
         
         # Ensure chat template exists for instruction tuning
         if getattr(self.config, 'instruct_mode', False):
