@@ -1,5 +1,5 @@
-from typing import Tuple, Optional
-from dataclasses import dataclass
+from typing import Tuple, Optional, Dict, Any
+from dataclasses import dataclass, field
 
 from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
@@ -37,6 +37,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     # LLM tokenizer parameters
     max_token_length: int
     tokenizer_name: str
+    num_ecg_tokens: int
+    ecg_token_start_id: Optional[int]
 
     # Model parameters
     huggingface_model_name: str
@@ -57,6 +59,13 @@ class LLMFinetuningConfig(HeartWiseConfig):
     ecg_waveform_length: int
     ecg_num_leads: int
     
+    # Sequence token adapter parameters (optional - with defaults)
+    use_cross_attention: bool
+    num_attention_heads: int
+    intermediate_dim: Optional[int]
+    enable_attention_visualization: bool
+    attention_log_frequency: int
+    
     # Instruction tuning
     instruct_mode: bool = False
     
@@ -67,3 +76,19 @@ class LLMFinetuningConfig(HeartWiseConfig):
     lora_dropout: float = 0.05
     lora_target_modules: Optional[list[str]] = None  # Will default to common targets
     lora_bias: str = "none"  # "none", "all", or "lora_only"
+    lora_config: Optional[Dict[str, Any]] = field(default=None)  # Nested LoRA config
+    
+    # Training optimization parameters
+    gradient_accumulation_steps: int = 1
+    dataloader_pin_memory: bool = False
+    max_sequence_length: Optional[int] = None
+    
+    def __post_init__(self):
+        """Process nested lora_config if provided"""
+        if self.lora_config is not None:
+            # Extract individual LoRA parameters from nested config
+            self.lora_r = self.lora_config.get('r', self.lora_r)
+            self.lora_alpha = self.lora_config.get('lora_alpha', self.lora_alpha)
+            self.lora_dropout = self.lora_config.get('lora_dropout', self.lora_dropout)
+            self.lora_target_modules = self.lora_config.get('target_modules', self.lora_target_modules)
+            self.lora_bias = self.lora_config.get('bias', self.lora_bias)
