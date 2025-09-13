@@ -1,4 +1,5 @@
 import os
+import json
 import torch
 import pandas as pd
 from torch.optim.adamw import AdamW
@@ -213,6 +214,13 @@ class LLMFinetuningRunner(BaseRunner):
         
         if mode == RunMode.VALIDATE:
             worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
+            # Initialize JSON file for incremental writing
+            json_path = f"./ECG_tokenizer/val_generations/val_generations_epoch_{epoch}.json"
+            os.makedirs(os.path.dirname(json_path), exist_ok=True)
+            # Initialize with empty dict
+            if self.config.is_ref_device:
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
         
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
@@ -250,6 +258,16 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
+                # Process and append to JSON immediately (only on reference device)
+                if self.config.is_ref_device:
+                    self._append_batch_to_json(
+                        outputs['generated_ids'],
+                        labels,
+                        batch['waveform_name'],
+                        batch.get('prompt_input_ids'),
+                        json_path
+                    )
+                
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
                 metrics.update(
                     # TODO: best_batch_metrics, worst_batch_metrics and random_batch_metrics are computed on the reference device
@@ -339,6 +357,8 @@ class LLMFinetuningRunner(BaseRunner):
                 "val/worst_metrics_html": wandb.Html(worst_html),
                 "val/random_metrics_html": wandb.Html(random_html)
             })
+            
+            # JSON export is done incrementally during validation
         # === End new block ===
                 
         # Normalize the epoch metrics
@@ -453,13 +473,16 @@ class LLMFinetuningRunner(BaseRunner):
                 #     # Note: do not suppress 'assistant' token forms for now
                 # except Exception:
                 #     pass
-
+                
+                # Ensure model is in eval mode for generation
+                self.model.eval()
+                
                 if hasattr(self.model, 'module'):
                     gen_ids_q = self.model.module.generate_report_with_question(
                         ecg_signal,
                         prompt_input_ids=prompt_input_ids,
                         prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length,
+                        max_token_length=150,  # Force longer generation for debugging
                         # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
                     )
                 else:
@@ -467,7 +490,7 @@ class LLMFinetuningRunner(BaseRunner):
                         ecg_signal,
                         prompt_input_ids=prompt_input_ids,
                         prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length,
+                        max_token_length=150,  # Force longer generation for debugging
                         # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
                     )
                 generated_ids = gen_ids_q
@@ -881,3 +904,106 @@ class LLMFinetuningRunner(BaseRunner):
             # Select a random batch index
             random_batch_idx = random.randint(0, len(dataloader) - 1)
             return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx
+
+    def _append_batch_to_json(
+        self,
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+        waveform_names: list[str],
+        prompt_input_ids: torch.Tensor | None,
+        json_path: str
+    ) -> None:
+        """
+        Process a batch and append results to JSON file immediately.
+        
+        Args:
+            generated_ids: Generated token tensor for current batch (B, L)
+            labels: Label tensor for current batch (B, L)  
+            waveform_names: List of waveform names for current batch
+            prompt_input_ids: Prompt input IDs for current batch (B, L) or None
+            json_path: Path to JSON file to append to
+        """
+        try:
+            # Get tokenizer
+            tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
+            
+            # Prepare labels for decoding (replace -100 with pad/eos)
+            pad_token_id = getattr(tokenizer, 'pad_token_id', None)
+            eos_token_id = getattr(tokenizer, 'eos_token_id', None)
+            if isinstance(eos_token_id, list):
+                eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
+            replacement_id = pad_token_id if pad_token_id is not None else eos_token_id
+            
+            labels_for_decode = labels
+            if replacement_id is not None:
+                labels_for_decode = labels.clone()
+                labels_for_decode = torch.where(labels_for_decode == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_decode)
+            
+            # Build batch data
+            batch_data = {}
+            num_ecg_tokens = getattr(self.config, 'num_ecg_tokens', 128)
+            
+            for i in range(generated_ids.size(0)):
+                # Decode generation and reference
+                gen_tokens = generated_ids[i].tolist()
+                ref_tokens = labels_for_decode[i].tolist()
+                
+                # Trim ECG + prompt from generation if in instruct mode
+                # Note: model.generate() returns full sequence (input + generated tokens)
+                # We need to trim the input part to get only the generated response
+                if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
+                    # The issue: model.generate() with inputs_embeds returns only the generated part
+                    # NOT the full sequence (input + generated) as expected
+                    # So gen_tokens already contains ONLY the newly generated tokens!
+                    
+                    print(f"🔍 DEBUG: Sample {waveform_names[i]} - Gen length: {len(gen_tokens)} (pure generation)")
+                    print(f"🔍 DEBUG: Generated tokens: {gen_tokens[:10]}...")
+                    
+                    # No trimming needed - gen_tokens already contains only new generations
+                    # Just keep them as-is
+                
+                # Decode to strings
+                generation = tokenizer.decode(gen_tokens, skip_special_tokens=True)
+                ground_truth = tokenizer.decode(ref_tokens, skip_special_tokens=True)
+                
+                # Get question if available
+                question = ""
+                try:
+                    ds = self.validation_dataloader.dataset  # type: ignore
+                    df = getattr(ds, 'df', None)
+                    if df is not None and 'waveform_name' in df.columns and 'question' in df.columns:
+                        wf_name = waveform_names[i]
+                        question_row = df[df['waveform_name'] == wf_name]
+                        if not question_row.empty and 'question' in question_row.columns:
+                            q_val = question_row['question'].iloc[0]
+                            question = str(q_val) if not pd.isna(q_val) else ""
+                except Exception:
+                    pass
+                
+                # Store in batch data (skip expensive per-sample metrics for speed)
+                patient_id = waveform_names[i]
+                batch_data[patient_id] = {
+                    'Metrics': {},  # Empty for speed - can compute later if needed
+                    'Question': question,
+                    'Generation': generation,
+                    'Ground truth': ground_truth
+                }
+            
+            # Read existing JSON and append
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                existing_data = {}
+            
+            # Merge batch data
+            existing_data.update(batch_data)
+            
+            # Write back to file
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            print(f"❌ Failed to append batch to JSON: {e}")
+            import traceback
+            traceback.print_exc()
