@@ -42,6 +42,47 @@
    wandb login
    ```
 
+## 📊 Dataset Generation
+
+### Generate Q&A Datasets for LLM Fine-tuning
+
+The system can generate comprehensive question-answer datasets from ECG data with multiple prompt types:
+
+```bash
+# Generate datasets with default settings (MIMIC dataset)
+python dataset_generation/generate_train_test_datasets.py
+
+# Generate with specific dataset type
+python dataset_generation/generate_train_test_datasets.py --dataset mimic
+
+# Generate with sample size for testing
+python dataset_generation/generate_train_test_datasets.py --dataset mimic --sample_size 100
+```
+
+### Prompt Types Generated
+
+The dataset generator creates diverse prompts for each ECG:
+
+1. **Interpretation**: Full ECG interpretation with findings
+2. **Classification**: Normal/borderline/pathological classification  
+3. **Category-specific**: Questions about rhythm, conduction, ischemia, etc.
+4. **Localization**: Location-specific findings (Q waves, ST changes, T waves)
+5. **Heart rate**: Heart rate extraction questions
+6. **Demographics**: Age and gender questions
+7. **JSON interpretation**: Structured JSON output of findings
+8. **QRS axis**: Axis deviation detection and classification
+
+### Adding Support for New Datasets
+
+To add support for datasets with different column structures:
+
+1. Edit `dataset_generation/dataset_column_mappings.py`
+2. Add your dataset's column mappings
+3. Register in the `DATASET_MAPPINGS` dictionary
+4. Run generation with `--dataset your_dataset_name`
+
+See `ADDING_NEW_DATASETS.md` for detailed instructions.
+
 ## 💻 How to's
 
 ### Tokenizer training
