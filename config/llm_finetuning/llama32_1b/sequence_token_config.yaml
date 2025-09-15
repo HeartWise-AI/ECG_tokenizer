@@ -10,7 +10,7 @@ pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenize
 # wandb parameters
 wandb_project: !!str "ECG_tokenizer_LLM_finetuning_Llama32_1B_SequenceTokens"
 wandb_entity: !!str "mhi_ai"
-use_wandb: !!bool false
+use_wandb: !!bool true
 # training parameters
 llm_lr: !!float 1e-7 # Lower LR for sequence tokens (more complex)
 adapter_lr: !!float 1e-6 # Same adapter LR
@@ -57,8 +57,8 @@ validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_complete
 prompt_column: !!str "prompt" # Input question/prompt column
 answer_column: !!str "generated_answer" # Expected output/answer column  
 category_column: !!str "prompt_category" # For per-category metrics
-num_workers: !!int 8 # Reduced due to longer sequences
-batch_size: !!int 8 # Reduced batch size due to 128 ECG tokens
+num_workers: !!int 16 # Reduced due to longer sequences
+batch_size: !!int 64 # Reduced batch size due to 128 ECG tokens
 signal_path_column: !!str "waveform_path_psa"
 # ECG parameters
 ecg_waveform_length: !!int 2500

@@ -297,12 +297,13 @@ class SequenceTokenAdapter(nn.Module):
             nn.Dropout(dropout)
         )
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, text_embeddings: torch.Tensor = None) -> torch.Tensor:
         """
-        Convert quantized ECG features to sequence of LLM tokens.
+        Convert quantized ECG features to sequence of LLM tokens with optional cross-modal attention.
         
         Args:
             x: Quantized features [batch, 128, 82] or [batch, 1, 128, 82]
+            text_embeddings: Optional text embeddings [batch, text_len, output_size] for cross-attention
             
         Returns:
             Token embeddings [batch, 128, output_size] - one token per ECG position
@@ -326,13 +327,22 @@ class SequenceTokenAdapter(nn.Module):
         token_embeddings = self.token_projection(x)
         token_embeddings = token_embeddings + self.positional_embedding
         
-        # Optional cross-attention for position refinement
+        # Apply cross-attention with text if provided, otherwise self-attention
         if self.use_cross_attention:
-            attended, attention_weights = self.cross_attention(
-                query=token_embeddings,
-                key=token_embeddings, 
-                value=token_embeddings
-            )
+            if text_embeddings is not None:
+                # Cross-modal attention: ECG queries attend to text keys/values
+                attended, attention_weights = self.cross_attention(
+                    query=token_embeddings,
+                    key=text_embeddings, 
+                    value=text_embeddings
+                )
+            else:
+                # Self-attention among ECG positions
+                attended, attention_weights = self.cross_attention(
+                    query=token_embeddings,
+                    key=token_embeddings, 
+                    value=token_embeddings
+                )
             
             token_embeddings = self.attention_norm(
                 token_embeddings + self.attention_dropout(attended)

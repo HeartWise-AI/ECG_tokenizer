@@ -29,13 +29,23 @@ class WandbWrapper:
         self.config = config
         if initialized:
             if is_ref_device:
-                wandb.init(
+                run = wandb.init(
                     project=config.wandb_project,
                     entity=config.wandb_entity,
                     config=config.to_dict(),
                 )
+                print("="*60)
+                print("🚀 WANDB RUN INITIALIZED")
+                print("="*60)
+                print(f"  Project: {config.wandb_project}")
+                print(f"  Entity: {config.wandb_entity}")
+                print(f"  Run ID: {run.id}")
+                print(f"  Run Name: {run.name}")
+                print(f"  Run URL: {run.url}")
+                print("="*60)
             else:
                 wandb.init(mode="disabled")
+                print("📊 W&B initialized in disabled mode (non-reference device)")
         self.initialized: bool = initialized
         
     def is_initialized(self)->bool:

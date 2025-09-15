@@ -91,8 +91,7 @@ class LLMFinetuningProject(BaseProject):
 
         # Load the tokenizer first (may add special tokens)
         tokenizer_name = self.config.tokenizer_name
-        if getattr(self.config, 'instruct_mode', False) and 'llama' in tokenizer_name.lower() and '-instruct' not in tokenizer_name.lower():
-            tokenizer_name = tokenizer_name + '-Instruct'
+        # No need to append -Instruct since we're using the correct model name directly
         tokenizer = self._get_tokenizer(tokenizer_name)
         
         # Initialize the tokenizer with the appropriate configuration

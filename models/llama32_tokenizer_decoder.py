@@ -256,38 +256,50 @@ class Llama32Decoder(nn.Module):
         if quantized_features is None:
             raise ValueError("quantized_features must be provided for ECG processing")
         
-        # Get ECG embeddings from adapter
-        ecg_embeddings = self.adapter(quantized_features)
+        # Get text embeddings first for cross-attention
+        text_input_ids = input_ids[:, self.num_ecg_tokens:]
+        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
+        
+        # Check if adapter supports cross-modal attention
+        adapter_name_str = self.adapter_name.value if hasattr(self.adapter_name, 'value') else str(self.adapter_name)
+        
+        # Debug logging
+        if self._training_step % 100 == 0:  # Log every 100 steps
+            print(f"[Step {self._training_step}] Adapter: {adapter_name_str}")
+            print(f"  - Has use_cross_attention: {hasattr(self.adapter, 'use_cross_attention')}")
+            if hasattr(self.adapter, 'use_cross_attention'):
+                print(f"  - use_cross_attention value: {self.adapter.use_cross_attention}")
+            print(f"  - Has text_embeddings param: {'text_embeddings' in self.adapter.forward.__code__.co_varnames if hasattr(self.adapter, 'forward') else False}")
+            print(f"  - Text embeddings shape: {text_embeddings.shape}")
+        
+        if 'CrossModal' in adapter_name_str or (hasattr(self.adapter, 'use_cross_attention') and self.adapter.use_cross_attention):
+            # Pass text embeddings for cross-attention if adapter supports it
+            if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
+                if self._training_step % 100 == 0:
+                    print(f"  ✅ Using CROSS-ATTENTION between ECG and text tokens!")
+                ecg_embeddings = self.adapter(quantized_features, text_embeddings=text_embeddings)
+            else:
+                # Fallback for adapters without cross-attention support
+                if self._training_step % 100 == 0:
+                    print(f"  ⚠️ Adapter doesn't support text_embeddings parameter, using self-attention")
+                ecg_embeddings = self.adapter(quantized_features)
+        else:
+            # Standard adapter without cross-attention
+            if self._training_step % 100 == 0:
+                print(f"  ❌ Adapter doesn't support cross-attention, using standard processing")
+            ecg_embeddings = self.adapter(quantized_features)
+        
         if ecg_embeddings.dim() == 2:
             ecg_embeddings = ecg_embeddings.unsqueeze(1)
         
-        # # Extract text input_ids (skip prepended ECG tokens)
-        # num_ecg_tokens_actual = min(self.num_ecg_tokens, input_ids.size(1))
-        # text_input_ids = input_ids[:, num_ecg_tokens_actual:]  # Text portion
-        
-        # # Embed text tokens only
-        # text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
-
-        # # Ensure dtype alignment with model
-        # model_dtype = self.llm_model.get_input_embeddings().weight.dtype
-        # if ecg_embeddings.dtype != model_dtype:
-        #     ecg_embeddings = ecg_embeddings.to(model_dtype)
-        # if text_embeddings.dtype != model_dtype:
-        #     text_embeddings = text_embeddings.to(model_dtype)
-        
-        # # Concatenate ECG embeddings (override) with text embeddings
-        # input_embedding = torch.cat([ecg_embeddings[:, :num_ecg_tokens_actual, :], text_embeddings], dim=1)
-        
-        # # Align lengths if needed (truncate embedding to mask)
-        # seq_len = attention_mask.size(1)
-        # if input_embedding.size(1) > seq_len:
-        #     input_embedding = input_embedding[:, :seq_len, :]
-        
-        text_input_ids = input_ids[:, self.num_ecg_tokens:]
-        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
+        # Ensure dtype alignment with model
         model_dtype = self.llm_model.get_input_embeddings().weight.dtype
         if ecg_embeddings.dtype != model_dtype:
             ecg_embeddings = ecg_embeddings.to(model_dtype)
+        if text_embeddings.dtype != model_dtype:
+            text_embeddings = text_embeddings.to(model_dtype)
+        
+        # Concatenate ECG embeddings with text embeddings
         input_embeddings = torch.cat([ecg_embeddings, text_embeddings], dim=1)
         # Forward through Llama 3.2
         outputs = self.llm_model(

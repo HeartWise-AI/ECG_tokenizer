@@ -52,7 +52,7 @@ class CategoryMetricsCalculator:
         
         if "rouge" in metric_names:
             self.metrics["rouge"] = ROUGEScore(
-                rouge_keys=rouge_variants,
+                rouge_keys=tuple(rouge_variants),  # Convert to tuple
                 normalizer="nltk",
                 tokenizer="nltk"
             ).to(self.device)
