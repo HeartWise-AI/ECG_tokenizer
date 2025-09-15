@@ -18,3 +18,5 @@ coverage.xml
 .coverage
 embeddings
 path/
+DeepECG_Preprocess/
+output/

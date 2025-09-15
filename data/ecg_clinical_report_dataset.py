@@ -24,13 +24,25 @@ class ECGClinicalReportDataset(Dataset):
         max_length: int = 512,
         instruct_mode: bool = False,
         num_ecg_tokens: int = 128,
-        ecg_token_start_id: Optional[int] = None
+        ecg_token_start_id: Optional[int] = None,
+        prompt_column: str = "question",
+        answer_column: str = "report",
+        category_column: str = "prompt_category"
     ):
         """
         Args:
             dataset_path (str): Path to the dataset.
+            signal_path_column (str): Column name for ECG signal path.
+            ecg_waveform_length (int): Length of ECG waveform.
+            ecg_num_leads (int): Number of ECG leads.
             tokenizer (PreTrainedTokenizer): Tokenizer for the clinical reports.
             max_length (int): Maximum token length for the reports.
+            instruct_mode (bool): Whether to use instruction tuning mode.
+            num_ecg_tokens (int): Number of ECG tokens.
+            ecg_token_start_id (Optional[int]): Starting ID for ECG tokens.
+            prompt_column (str): Column name for input prompts/questions.
+            answer_column (str): Column name for expected outputs/answers.
+            category_column (str): Column name for prompt categories.
         """
         try:
             self.df: pd.DataFrame = pd.read_parquet(dataset_path)
@@ -47,6 +59,11 @@ class ECGClinicalReportDataset(Dataset):
         self.instruct_mode: bool = instruct_mode
         self.num_ecg_tokens: int = num_ecg_tokens
         self.ecg_token_start_id: Optional[int] = ecg_token_start_id
+        
+        # Column configuration
+        self.prompt_column: str = prompt_column
+        self.answer_column: str = answer_column
+        self.category_column: str = category_column
         if self.instruct_mode:
             if self.ecg_token_start_id is None:
                 raise ValueError("ecg_token_start_id is required in instruct_mode")
@@ -78,10 +95,10 @@ class ECGClinicalReportDataset(Dataset):
             # Get the row
             row = self.df.iloc[idx]
             
-            # Check if the waveform path or report is missing
-            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row['report']):
-                print(f"Missing waveform_path or report for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get(self.signal_path_column)}, report: {row.get('report')}")
+            # Check if the waveform path or answer is missing
+            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row[self.answer_column]):
+                print(f"Missing waveform_path or answer for index {idx}, skipping sample. "
+                      f"waveform_path: {row.get(self.signal_path_column)}, answer: {row.get(self.answer_column)}")
                 return self.__getitem__((idx + 1) % len(self))
 
             # Load the waveform
@@ -105,19 +122,19 @@ class ECGClinicalReportDataset(Dataset):
             
             # Tokenization logic
             if self.instruct_mode:
-                question_text: str = ""
-                if 'question' in self.df.columns and not pd.isnull(row['question']):
-                    question_text = str(row['question'])
-                report_text: str = str(row['report'])
+                prompt_text: str = ""
+                if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
+                    prompt_text = str(row[self.prompt_column])
+                answer_text: str = str(row[self.answer_column])
 
                 # Construct LLaMA 3.2 chat template with ECG integration
                 # System message for ECG analysis task - optimized for concise medical findings
                 system_message = "You are a medical expert specialized in ECG interpretation. Provide a concise list of clinical findings separated by semicolons, similar to standard ECG reports."
                 
-                # User message with ECG placeholder and question - focused on findings format
-                # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{question_text}" if question_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
+                # User message with ECG placeholder and prompt - focused on findings format
+                # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{prompt_text}" if prompt_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
                 
-                user_content = question_text if question_text else "Analyze this ECG and list the clinical findings."
+                user_content = prompt_text if prompt_text else "Analyze this ECG and list the clinical findings."
                 
                 # Create messages for chat template
                 messages_prompt = [
@@ -128,16 +145,16 @@ class ECGClinicalReportDataset(Dataset):
                 messages_full = [
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_content},
-                    {"role": "assistant", "content": report_text}
+                    {"role": "assistant", "content": answer_text}
                 ]
                 
                 # Apply chat template
-                prompt_text = cast(str, self._pt_tokenizer.apply_chat_template(
+                prompt_template_text = cast(str, self._pt_tokenizer.apply_chat_template(
                     messages_prompt, 
                     tokenize=False, 
                     add_generation_prompt=True
                 ))
-                full_text = cast(str, self._pt_tokenizer.apply_chat_template(
+                full_template_text = cast(str, self._pt_tokenizer.apply_chat_template(
                     messages_full, 
                     tokenize=False, 
                     add_generation_prompt=False
@@ -148,17 +165,17 @@ class ECGClinicalReportDataset(Dataset):
                 ecg_token_placeholder = "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>"
                 ecg_token_replacement = "<|start_ecg|><|end_ecg|>"  # Simplified to just the boundary tokens
                 
-                prompt_text = prompt_text.replace(ecg_token_placeholder, ecg_token_replacement)
-                full_text = full_text.replace(ecg_token_placeholder, ecg_token_replacement)
+                prompt_template_text = prompt_template_text.replace(ecg_token_placeholder, ecg_token_replacement)
+                full_template_text = full_template_text.replace(ecg_token_placeholder, ecg_token_replacement)
                 
                 # Tokenize both
                 prompt_encoding = self._pt_tokenizer.encode_plus(
-                    prompt_text,
+                    prompt_template_text,
                     add_special_tokens=False,  # Chat template already adds special tokens
                     return_tensors=None
                 )
                 full_encoding = self._pt_tokenizer.encode_plus(
-                    full_text,
+                    full_template_text,
                     add_special_tokens=False,  # Chat template already adds special tokens
                     return_tensors=None
                 )
@@ -226,7 +243,8 @@ class ECGClinicalReportDataset(Dataset):
                 labels[:full_prompt_len] = -100
                 labels = labels.masked_fill(attention_mask == 0, -100)
 
-                return {
+                # Add category information if available
+                sample_data = {
                     'signal': np.transpose(waveform, (1, 0)),
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
@@ -235,10 +253,16 @@ class ECGClinicalReportDataset(Dataset):
                     'labels': labels,
                     'waveform_name': row['waveform_name']
                 }
+                
+                # Add category information for per-category metrics
+                if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
+                    sample_data['prompt_category'] = str(row[self.category_column])
+                    
+                return sample_data
             else:
-                # Tokenize the report only (legacy behavior)
+                # Tokenize the answer only (legacy behavior)
                 encoding: BatchEncoding = self._pt_tokenizer.encode_plus(
-                    row['report'],
+                    row[self.answer_column],
                     add_special_tokens=True,
                     max_length=self.max_length,
                     padding='max_length',
@@ -248,12 +272,19 @@ class ECGClinicalReportDataset(Dataset):
                 input_ids = cast(torch.Tensor, encoding['input_ids']).squeeze()
                 attention_mask = cast(torch.Tensor, encoding['attention_mask']).squeeze()
 
-                return {
+                # Add category information if available
+                sample_data = {
                     'signal': np.transpose(waveform, (1, 0)),
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
                     'waveform_name': row['waveform_name']
                 }
+                
+                # Add category information for per-category metrics
+                if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
+                    sample_data['prompt_category'] = str(row[self.category_column])
+                    
+                return sample_data
             
         except Exception as e:
             print(f"Error processing index {idx}: {e}")
@@ -274,8 +305,10 @@ def get_clinical_report_dataloader(
         max_length=config.max_length,
         instruct_mode=getattr(config, 'instruct_mode', False),
         num_ecg_tokens=config.num_ecg_tokens,
-        ecg_token_start_id=config.ecg_token_start_id
-
+        ecg_token_start_id=config.ecg_token_start_id,
+        prompt_column=getattr(config, 'prompt_column', 'question'),
+        answer_column=getattr(config, 'answer_column', 'report'),
+        category_column=getattr(config, 'category_column', 'prompt_category')
     )
     return DataLoader(
         dataset, 
@@ -301,8 +334,10 @@ def get_distributed_clinical_report_dataloader(
     pin_memory: bool = True,
     instruct_mode: bool = False,
     num_ecg_tokens: int = 128,
-    ecg_token_start_id: Optional[int] = None
-
+    ecg_token_start_id: Optional[int] = None,
+    prompt_column: str = "question",
+    answer_column: str = "report",
+    category_column: str = "prompt_category"
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=dataset_path, 
@@ -313,7 +348,10 @@ def get_distributed_clinical_report_dataloader(
         max_length=max_token_length,
         instruct_mode=instruct_mode,
         num_ecg_tokens=num_ecg_tokens,
-        ecg_token_start_id=ecg_token_start_id
+        ecg_token_start_id=ecg_token_start_id,
+        prompt_column=prompt_column,
+        answer_column=answer_column,
+        category_column=category_column
     )
     
     return DistributedUtils.get_distributed_dataloader(

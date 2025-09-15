@@ -26,6 +26,7 @@ from utils.metrics.llm_metrics import (
     update_worst_metric,
     update_random_batch_metric
 )
+from utils.metrics.category_metrics import CategoryMetricsCalculator
 from runners.base_runner import BaseRunner
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 
@@ -75,6 +76,14 @@ class LLMFinetuningRunner(BaseRunner):
         self.scheduler: LRScheduler | None = scheduler
         self.scaler: GradScaler | None = scaler
         self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
+        
+        # Initialize category metrics calculator if enabled
+        self.category_metrics_calculator = None
+        if getattr(self.config, 'compute_category_metrics', False):
+            self.category_metrics_calculator = CategoryMetricsCalculator(
+                metric_names=getattr(self.config, 'category_metrics', ['rouge', 'bleu', 'meteor']),
+                device=self.config.device
+            )
         
     def execute(
         self, 
@@ -221,6 +230,10 @@ class LLMFinetuningRunner(BaseRunner):
             if self.config.is_ref_device:
                 with open(json_path, 'w', encoding='utf-8') as f:
                     json.dump({}, f)
+            
+            # Reset category metrics calculator for this validation epoch
+            if self.category_metrics_calculator is not None:
+                self.category_metrics_calculator.reset()
         
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
@@ -269,19 +282,17 @@ class LLMFinetuningRunner(BaseRunner):
                     )
                 
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
-                metrics.update(
-                    # TODO: best_batch_metrics, worst_batch_metrics and random_batch_metrics are computed on the reference device
-                    # TODO: we need to gather them across all GPUs
-                    self._compute_metrics( # this function returns mean metrics for the current batch
-                        outputs,
-                        labels,
-                        dataloader,
-                        best_batch_metrics, # parsed and updated by reference object - not returned
-                        worst_batch_metrics, # parsed and updated by reference object - not returned
-                        random_batch_metrics, # parsed and updated by reference object - not returned
-                        random_batch=random_batch_idx == batch_idx
-                    )
-                )                  
+                batch_metrics = self._compute_metrics( # this function returns mean metrics for the current batch
+                    outputs,
+                    labels,
+                    dataloader,
+                    best_batch_metrics, # parsed and updated by reference object - not returned
+                    worst_batch_metrics, # parsed and updated by reference object - not returned
+                    random_batch_metrics, # parsed and updated by reference object - not returned
+                    random_batch=random_batch_idx == batch_idx,
+                    batch=batch  # Pass batch for category information
+                )
+                metrics.update(batch_metrics)                  
             
             # Gather and average loss across all GPUs
             gathered_metrics: dict[str, float] = {}
@@ -352,10 +363,49 @@ class LLMFinetuningRunner(BaseRunner):
             best_html = create_html_table(best_batch_metrics, "Best Metrics")
             worst_html = create_html_table(worst_batch_metrics, "Worst Metrics")
             random_html = create_html_table(random_batch_metrics, "Random Metrics")
+            
+            # Compute and log category metrics
+            category_log_dict = {}
+            if self.category_metrics_calculator is not None:
+                try:
+                    category_results = self.category_metrics_calculator.compute_category_metrics()
+                    overall_results = self.category_metrics_calculator.compute_overall_metrics()
+                    
+                    # Format for logging
+                    category_log_dict = self.category_metrics_calculator.format_results_for_logging(
+                        category_results, overall_results, "val"
+                    )
+                    
+                    # Print category statistics
+                    stats = self.category_metrics_calculator.get_category_statistics()
+                    print(f"\n=== Category Metrics Summary (Epoch {epoch}) ===")
+                    for category, category_stats in stats.items():
+                        print(f"{category}: {category_stats['n_samples']} samples")
+                    
+                    print(f"\nOverall Metrics:")
+                    for metric, score in overall_results.items():
+                        print(f"  {metric}: {score:.4f}")
+                    
+                    print(f"\nPer-Category Metrics (Top 3 categories):")
+                    sorted_categories = sorted(category_results.items(), 
+                                             key=lambda x: stats[x[0]]['n_samples'], 
+                                             reverse=True)[:3]
+                    for category, metrics in sorted_categories:
+                        print(f"  {category} ({stats[category]['n_samples']} samples):")
+                        for metric, score in metrics.items():
+                            print(f"    {metric}: {score:.4f}")
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to compute category metrics: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Log everything to wandb
             self.wandb_wrapper.log({
                 "val/best_metrics_html": wandb.Html(best_html),
                 "val/worst_metrics_html": wandb.Html(worst_html),
-                "val/random_metrics_html": wandb.Html(random_html)
+                "val/random_metrics_html": wandb.Html(random_html),
+                **category_log_dict
             })
             
             # JSON export is done incrementally during validation
@@ -799,6 +849,7 @@ class LLMFinetuningRunner(BaseRunner):
         worst_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch: bool = False,
+        batch: dict = None,
     ) -> dict[str, float]:
         """
         Compute metrics for validation and update best/worst batch metrics.
@@ -828,6 +879,45 @@ class LLMFinetuningRunner(BaseRunner):
         if replacement_id is not None:
             labels_for_metrics = labels.clone()
             labels_for_metrics = torch.where(labels_for_metrics == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_metrics)
+
+        # Decode predictions and references for category metrics
+        batch_predictions = []
+        batch_references = []
+        batch_categories = []
+        
+        if self.category_metrics_calculator is not None and batch is not None:
+            generated_ids = outputs['generated_ids']
+            
+            for i in range(generated_ids.size(0)):
+                # Decode generated text
+                gen_tokens = generated_ids[i].tolist()
+                ref_tokens = labels_for_metrics[i].tolist()
+                
+                # Skip ECG tokens if in instruct mode
+                if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
+                    # In instruct mode, generation might already be trimmed or we need to handle it
+                    # For now, just decode as-is since the generation should be clean
+                    pass
+                
+                # Decode to strings
+                prediction = tokenizer.decode(gen_tokens, skip_special_tokens=True)
+                reference = tokenizer.decode(ref_tokens, skip_special_tokens=True)
+                
+                # Get category if available
+                category = ""
+                if 'prompt_category' in batch and i < len(batch['prompt_category']):
+                    category = batch['prompt_category'][i] if batch['prompt_category'][i] is not None else ""
+                
+                batch_predictions.append(prediction)
+                batch_references.append(reference)
+                batch_categories.append(category)
+            
+            # Add to category metrics calculator
+            self.category_metrics_calculator.add_batch(
+                predictions=batch_predictions,
+                references=batch_references,
+                categories=batch_categories
+            )
 
         for metric in self.config.metrics:
             registered_metrics: Union[
