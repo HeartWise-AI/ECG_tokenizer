@@ -130,6 +130,9 @@ class Llama32Decoder(nn.Module):
         
         self.num_ecg_tokens = num_ecg_tokens
         
+        # Store reference to LLM for phase-based training
+        self.llm = self.llm_model
+        
         # Ensure ECG position tokens exist on shared tokenizer and get start id
         ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(num_ecg_tokens)]
         first_ecg_id = self.tokenizer.convert_tokens_to_ids(ecg_tokens[0])  # type: ignore[attr-defined]
@@ -177,26 +180,35 @@ class Llama32Decoder(nn.Module):
         # Include multiple Llama 3.2 stop tokens for robust generation control
         self.eos_token_ids = [
             128009,  # <|eot_id|> - primary end of turn token
-            128008,  # <|eom_id|> - end of message token  
             128001,  # <|end_of_text|> - end of text token
-            128007,  # <|end_header_id|> - end of header token
+        ]
+        
+        # Tokens to suppress at the beginning of generation
+        # This prevents the model from generating header tokens
+        self.begin_suppress_tokens = [
+            128006,  # <|start_header_id|> - should never start with this
+            128007,  # <|end_header_id|> - should never start with this  
+            128008,  # <|eom_id|> - should never start with this
+            128009,  # <|eot_id|> - should never start with this at the beginning
         ]
         
         # Configure generation parameters after token IDs are set
         self.default_generation_params = {
             # Use sampling for more natural medical text
             "do_sample": True,
-            "temperature": 0.6,  # Low temperature for consistent medical language
+            "temperature": 0.7,  # Slightly higher for more variation
             "top_p": 0.9,  # Nucleus sampling for quality
             # Length controls optimized for medical findings format
             "max_new_tokens": 100,  # Reasonable length for medical reports
             # Moderate repetition control to allow medical terminology repetition
-            "repetition_penalty": 1.15,  # Moderate penalty
+            "repetition_penalty": 1.1,  # Reduced penalty
             "no_repeat_ngram_size": 3,  # Allow some medical phrase repetition
             # Proper stopping behavior
             "early_stopping": False,  # Let it finish naturally
             "pad_token_id": self.pad_token_id,
             "eos_token_id": self.eos_token_ids,
+            # Suppress header tokens at the beginning
+            "begin_suppress_tokens": self.begin_suppress_tokens,
         }
         
         # Initialize attention visualization components
@@ -212,6 +224,42 @@ class Llama32Decoder(nn.Module):
             # Register hook on final transformer layer
             self.attention_hook.register(self.llm_model)
             print(f"✅ Attention visualization enabled (logging every {attention_log_frequency} steps)")
+    
+    def enable_lora_adapters(self):
+        """Enable LoRA adapters if configured."""
+        # This would be called from the runner when transitioning to phase 2
+        # If using PEFT/LoRA, the adapter would be enabled here
+        pass
+    
+    def freeze_llm_parameters(self):
+        """Freeze all LLM parameters (for phase 1 training)."""
+        for param in self.llm_model.parameters():
+            param.requires_grad = False
+        print("❄️ Froze LLM parameters for alignment phase")
+    
+    def unfreeze_llm_parameters(self):
+        """Unfreeze LLM parameters (for phase 2 training)."""
+        for param in self.llm_model.parameters():
+            param.requires_grad = True
+        print("🔥 Unfroze LLM parameters for fine-tuning phase")
+    
+    def get_trainable_components(self) -> Dict[str, nn.Module]:
+        """Get trainable ECG-specific components."""
+        components = {}
+        
+        # Add adapter
+        if hasattr(self, 'adapter'):
+            components['adapter'] = self.adapter
+        
+        # Add ECG embeddings (part of LLM embeddings)
+        if hasattr(self.llm_model, 'get_input_embeddings'):
+            components['ecg_embeddings'] = self.llm_model.get_input_embeddings()
+        
+        # Add cross-attention if available (part of adapter for SequenceTokenAdapter)
+        if hasattr(self.adapter, 'cross_attention'):
+            components['cross_attention'] = self.adapter.cross_attention
+        
+        return components
 
     def _initialize_ecg_tokens_semantically(self, original_vocab_size: int, num_ecg_tokens: int):
         """
@@ -518,6 +566,13 @@ class Llama32Decoder(nn.Module):
         # Override max_new_tokens if explicitly provided
         if max_token_length != 256:  # Default value check
             generation_params["max_new_tokens"] = max_token_length
+        
+        # Debug: Log first few prompt tokens to verify chat template
+        if hasattr(self, '_training_step') and self._training_step % 100 == 0:
+            prompt_text = self.tokenizer.decode(prompt_input_ids[0][:50], skip_special_tokens=False)
+            print(f"[Generation Debug] Prompt text (first 50 tokens): {prompt_text}")
+            print(f"[Generation Debug] Last 5 prompt token IDs: {prompt_input_ids[0][-5:].tolist()}")
+            print(f"[Generation Debug] Suppressing tokens: {generation_params.get('begin_suppress_tokens', [])}")
         
         with torch.inference_mode():
             result = self.llm_model.generate(

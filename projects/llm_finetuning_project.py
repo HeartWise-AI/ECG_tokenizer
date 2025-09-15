@@ -3,7 +3,7 @@ import torch
 from typing import Any
 from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
-from torch.amp.grad_scaler import GradScaler
+from torch.cuda.amp import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import AutoTokenizer
@@ -139,7 +139,10 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True,
             instruct_mode=getattr(self.config, 'instruct_mode', False),
             num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
-            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+            prompt_column=self.config.prompt_column,
+            answer_column=self.config.answer_column,
+            category_column=self.config.category_column
         )
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -157,7 +160,10 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True,
             instruct_mode=getattr(self.config, 'instruct_mode', False),
             num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
-            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+            prompt_column=self.config.prompt_column,
+            answer_column=self.config.answer_column,
+            category_column=self.config.category_column
         )
 
         # Wrap the model in DDP
@@ -346,7 +352,10 @@ class LLMFinetuningProject(BaseProject):
             pin_memory=True,
             instruct_mode=getattr(self.config, 'instruct_mode', False),
             num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
-            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None)
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+            prompt_column=self.config.prompt_column,
+            answer_column=self.config.answer_column,
+            category_column=self.config.category_column
         )
 
         # Wrap the model in DDP

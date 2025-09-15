@@ -94,6 +94,12 @@ class LLMFinetuningConfig(HeartWiseConfig):
     dataloader_pin_memory: bool = False
     max_sequence_length: Optional[int] = None
     
+    # Two-stage training configuration (with defaults)
+    training_phases: Optional[Dict[str, Any]] = None
+    
+    # Debug and monitoring configuration (with defaults)
+    debug_config: Optional[Dict[str, Any]] = None
+    
     def __post_init__(self):
         """Process nested lora_config if provided"""
         if self.lora_config is not None:

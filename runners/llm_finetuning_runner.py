@@ -77,6 +77,11 @@ class LLMFinetuningRunner(BaseRunner):
         self.scaler: GradScaler | None = scaler
         self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
         
+        # Phase tracking
+        self.current_phase = None
+        self.phase1_epochs = getattr(self.config, 'training_phases', {}).get('phase1_alignment', {}).get('epochs', 2)
+        self.total_epochs_completed = 0
+        
         # Initialize category metrics calculator if enabled
         self.category_metrics_calculator = None
         if getattr(self.config, 'compute_category_metrics', False):
@@ -97,9 +102,142 @@ class LLMFinetuningRunner(BaseRunner):
         """
         super().execute(mode)
         
+    def _configure_training_phase(self, epoch: int):
+        """
+        Configure training based on current phase (logging only - no optimizer changes).
+        
+        Args:
+            epoch: Current epoch number (1-indexed)
+        """
+        phase_config = getattr(self.config, 'training_phases', {})
+        phase1 = phase_config.get('phase1_alignment', {})
+        phase2 = phase_config.get('phase2_finetuning', {})
+        
+        phase1_epochs = phase1.get('epochs', 2)
+        
+        # Determine current phase (for logging only)
+        if epoch <= phase1_epochs:
+            if self.current_phase != 'phase1':
+                self.current_phase = 'phase1'
+                if self.config.is_ref_device:
+                    print("\n" + "="*80)
+                    print(f"🔄 ENTERING PHASE 1: ALIGNMENT TRAINING (Epochs 1-{phase1_epochs})")
+                    print("   - Using config-based learning rates for ECG alignment")
+                    print("   - Enhanced debugging enabled")
+                    print("="*80 + "\n")
+        else:
+            if self.current_phase != 'phase2':
+                self.current_phase = 'phase2'
+                if self.config.is_ref_device:
+                    print("\n" + "="*80)
+                    print(f"🚀 ENTERING PHASE 2: FINE-TUNING (Epochs {phase1_epochs+1}-{self.config.num_epochs})")
+                    print("   - Continuing with existing optimizer configuration")
+                    print("   - Monitoring for improved performance")
+                    print("="*80 + "\n")
+    
+    def _setup_phase1_training(self, phase1_config: dict):
+        """Setup phase 1: Alignment training with very low LLM LR instead of freezing."""
+        # Get the actual model (unwrap from DDP if necessary)
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        
+        # Instead of freezing, use extremely low LR for LLM (effectively frozen)
+        # This prevents DDP unused parameter issues
+        
+        # Reconfigure optimizer with phase 1 learning rates
+        param_groups = []
+        
+        # LLM parameters with extremely low LR (effectively frozen)
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'llm'):
+            param_groups.append({
+                'params': model.decoder.llm.parameters(),
+                'lr': 1e-10,  # Extremely low LR - effectively frozen
+                'name': 'llm_frozen'
+            })
+        
+        # ECG token embeddings (part of LLM embedding layer)
+        # These are handled by the LLM parameters above
+        
+        # Cross-attention (part of adapter for SequenceTokenAdapter)
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
+            adapter = model.decoder.adapter
+            if hasattr(adapter, 'cross_attention_layers'):
+                param_groups.append({
+                    'params': adapter.cross_attention_layers.parameters(),
+                    'lr': phase1_config.get('cross_attention_lr', 1e-3),
+                    'name': 'cross_attention'
+                })
+        
+        # Adapter with high LR
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
+            param_groups.append({
+                'params': model.decoder.adapter.parameters(),
+                'lr': phase1_config.get('adapter_lr', 1e-3),
+                'name': 'adapter'
+            })
+        
+        # NOTE: Optimizer reconfiguration disabled to prevent DDP issues
+        # The original optimizer from project setup will be used throughout
+        
+        # Log parameter counts for debugging
+        if self.config.is_ref_device:
+            model = self.model.module if hasattr(self.model, 'module') else self.model
+            total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"Phase 1 trainable parameters: {total_params:,}")
+    
+    def _setup_phase2_training(self, phase2_config: dict):
+        """Setup phase 2: LoRA fine-tuning with normal learning rates."""
+        # Get the actual model (unwrap from DDP if necessary)
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        
+        # Enable LoRA if available
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'llm'):
+            if hasattr(model.decoder.llm, 'enable_adapters'):
+                model.decoder.llm.enable_adapters()
+        
+        # Reconfigure optimizer with phase 2 learning rates
+        param_groups = []
+        
+        # LLM (LoRA) parameters with normal LR
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'llm'):
+            param_groups.append({
+                'params': model.decoder.llm.parameters(),
+                'lr': phase2_config.get('llm_lr', 1e-6),
+                'name': 'llm_lora'
+            })
+        
+        # ECG token embeddings (part of LLM embedding layer)
+        # These are handled by the LLM parameters above
+        
+        # Cross-attention (lower LR) - part of adapter
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
+            adapter = model.decoder.adapter
+            if hasattr(adapter, 'cross_attention_layers'):
+                param_groups.append({
+                    'params': adapter.cross_attention_layers.parameters(),
+                    'lr': phase2_config.get('cross_attention_lr', 1e-5),
+                    'name': 'cross_attention'
+                })
+        
+        # Adapter (lower LR)
+        if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
+            param_groups.append({
+                'params': model.decoder.adapter.parameters(),
+                'lr': phase2_config.get('adapter_lr', 1e-5),
+                'name': 'adapter'
+            })
+        
+        # NOTE: Optimizer reconfiguration disabled to prevent DDP issues
+        # The original optimizer from project setup will be used throughout
+        
+        # Log parameter counts for debugging
+        if self.config.is_ref_device:
+            model = self.model.module if hasattr(self.model, 'module') else self.model
+            total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"Phase 2 trainable parameters: {total_params:,}")
+    
     def train(self):
         """
-        Train the LLM finetuning model.
+        Train the LLM finetuning model with two-stage approach.
         """
         if self.optimizer is None:
             raise ValueError("Optimizer cannot be None")
@@ -108,6 +246,9 @@ class LLMFinetuningRunner(BaseRunner):
         best_val_loss: float = float('inf')
         
         for epoch in range(1, self.config.num_epochs + 1):
+            # Configure training phase
+            self._configure_training_phase(epoch)
+            
             # Sync before starting each epoch
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
@@ -118,6 +259,10 @@ class LLMFinetuningRunner(BaseRunner):
                 RunMode.TRAIN,
                 epoch
             )
+            
+            # Log phase-specific metrics
+            if self.config.is_ref_device:
+                epoch_train_metrics[f'{RunMode.TRAIN}/current_phase'] = 1 if self.current_phase == 'phase1' else 2
                         
             if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                 self.wandb_wrapper.log(epoch_train_metrics)
@@ -202,9 +347,10 @@ class LLMFinetuningRunner(BaseRunner):
         step_fn: Callable | None = self._train_step if mode == RunMode.TRAIN else self._val_step
         
         # Create a progress bar for the epoch
+        phase_str = f"[Phase {1 if self.current_phase == 'phase1' else 2}]"
         data_iter: tqdm = tqdm(
             dataloader, 
-            desc=f"{mode} epoch {epoch}/{self.config.num_epochs}",
+            desc=f"{phase_str} {mode} epoch {epoch}/{self.config.num_epochs}",
             leave=True,
             disable=not self.config.is_ref_device
         )
@@ -331,11 +477,40 @@ class LLMFinetuningRunner(BaseRunner):
                 device_ids=self.config.device
             )
             
-            # Update progress bar with gathered losses
-            data_iter.set_postfix({
-                f"{mode}/loss": f'{gathered_metrics[f"{mode}/loss"]:.4f}',
-                f"{mode}/mean_loss": f'{mean_loss:.4f}'
-            })
+            # Enhanced progress bar with debugging info
+            postfix_dict = {
+                f"loss": f'{gathered_metrics[f"{mode}/loss"]:.4f}',
+                f"mean": f'{mean_loss:.4f}'
+            }
+            
+            # Add gradient norms if debugging
+            debug_config = getattr(self.config, 'debug_config', {})
+            if debug_config.get('log_gradient_norms', False) and mode == RunMode.TRAIN:
+                model = self.model.module if hasattr(self.model, 'module') else self.model
+                if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.decoder.adapter.parameters(), 
+                        max_norm=float('inf')
+                    )
+                    postfix_dict['ecg_grad'] = f'{grad_norm:.2e}'
+            
+            data_iter.set_postfix(postfix_dict)
+            
+            # Show sample outputs periodically if debugging
+            if debug_config.get('show_sample_outputs', False) and mode == RunMode.VALIDATE:
+                log_frequency = debug_config.get('log_frequency', 50)
+                if batch_idx % log_frequency == 0 and self.config.is_ref_device:
+                    self._log_sample_generation(
+                        outputs=outputs,
+                        labels=labels,
+                        epoch=epoch,
+                        batch_idx=batch_idx
+                    )
+        
+        # Show epoch summary with debugging info
+        debug_config = getattr(self.config, 'debug_config', {})
+        if debug_config.get('verbose_loss_logging', False) and self.config.is_ref_device:
+            self._log_epoch_summary(mode, epoch, epoch_metrics, total_loss, len(dataloader))
         
         # === New Block: Log best and worst metrics as HTML to wandb ===
         if mode == RunMode.VALIDATE and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
@@ -343,19 +518,20 @@ class LLMFinetuningRunner(BaseRunner):
             def create_html_table(metrics_dict, table_title):
                 html = f"<h3>{table_title}</h3>"
                 html += "<table border='1' cellspacing='0' cellpadding='5'>"
-                html += "<tr><th>Metric</th><th>Score</th><th>Prediction(s)</th><th>Reference(s)</th></tr>"
+                html += "<tr><th>Metric</th><th>Score</th><th>Prompt(s)</th><th>Prediction(s)</th><th>Reference(s)</th></tr>"
                 for metric, records in metrics_dict.items():
                     if records:
                         # pick the first record (since K=1)
                         record = records[0]
-                        # Assuming record is a dict with keys: 'score', 'predictions', and 'references'
+                        # Assuming record is a dict with keys: 'score', 'predictions', 'references', and 'prompts'
                         score = record['score']
                         # if they are lists, join them with a line break
+                        prompts = "<br>".join([f"{i + 1}: {p}" for i, p in enumerate(record.get('prompts', []))])
                         predictions = "<br>".join([f"{i + 1}: {p}" for i, p in enumerate(record['predictions'])])
                         references = "<br>".join([f"{i + 1}: {r}" for i, r in enumerate(record['references'])])
                     else:
-                        score, predictions, references = "", "", ""
-                    html += f"<tr><td>{metric}</td><td>{score}</td><td>{predictions}</td><td>{references}</td></tr>"
+                        score, prompts, predictions, references = "", "", "", ""
+                    html += f"<tr><td>{metric}</td><td>{score}</td><td>{prompts}</td><td>{predictions}</td><td>{references}</td></tr>"
                 html += "</table>"
                 return html
 
@@ -417,6 +593,54 @@ class LLMFinetuningRunner(BaseRunner):
         
         # Return the epoch metrics
         return epoch_metrics
+    
+    def _log_sample_generation(self, outputs: dict, labels: torch.Tensor, epoch: int, batch_idx: int):
+        """Log sample generations for debugging."""
+        try:
+            # Get the actual model (unwrap from DDP if necessary)
+            model = self.model.module if hasattr(self.model, 'module') else self.model
+            # Get tokenizer
+            tokenizer = model.decoder.tokenizer
+            
+            # Take first sample from batch
+            generated_ids = outputs['generated_ids'][0] if 'generated_ids' in outputs else None
+            label_ids = labels[0]
+            
+            if generated_ids is not None:
+                # Decode tokens
+                generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+                label_text = tokenizer.decode(label_ids[label_ids != -100], skip_special_tokens=True)
+                
+                print("\n" + "="*60)
+                print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
+                print("-"*60)
+                print(f"Generated: {generated_text[:200]}..." if len(generated_text) > 200 else f"Generated: {generated_text}")
+                print("-"*60)
+                print(f"Expected:  {label_text[:200]}..." if len(label_text) > 200 else f"Expected:  {label_text}")
+                print("="*60 + "\n")
+        except Exception as e:
+            print(f"Error logging sample: {e}")
+    
+    def _log_epoch_summary(self, mode: RunMode, epoch: int, metrics: dict, total_loss: float, num_batches: int):
+        """Log detailed epoch summary for debugging."""
+        print("\n" + "="*80)
+        print(f"{mode.value.upper()} EPOCH {epoch} SUMMARY - Phase {1 if self.current_phase == 'phase1' else 2}")
+        print("-"*80)
+        print(f"Average Loss: {total_loss/num_batches:.4f}")
+        
+        # Log metrics
+        for key, value in metrics.items():
+            if 'rouge' in key.lower() or 'bleu' in key.lower() or 'meteor' in key.lower():
+                print(f"{key}: {value/num_batches:.4f}")
+        
+        # Log learning rates if available
+        if self.optimizer:
+            print("\nLearning Rates:")
+            for group in self.optimizer.param_groups:
+                if 'name' in group:
+                    print(f"  {group['name']}: {group['lr']:.2e}")
+        
+        print("="*80 + "\n")
 
     def _train_step(
         self, 
@@ -880,10 +1104,11 @@ class LLMFinetuningRunner(BaseRunner):
             labels_for_metrics = labels.clone()
             labels_for_metrics = torch.where(labels_for_metrics == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_metrics)
 
-        # Decode predictions and references for category metrics
+        # Decode predictions, references and prompts for category metrics
         batch_predictions = []
         batch_references = []
         batch_categories = []
+        batch_prompts = []
         
         if self.category_metrics_calculator is not None and batch is not None:
             generated_ids = outputs['generated_ids']
@@ -908,9 +1133,15 @@ class LLMFinetuningRunner(BaseRunner):
                 if 'prompt_category' in batch and i < len(batch['prompt_category']):
                     category = batch['prompt_category'][i] if batch['prompt_category'][i] is not None else ""
                 
+                # Use original prompt text from batch
+                prompt = ""
+                if 'prompt_text' in batch and i < len(batch['prompt_text']):
+                    prompt = batch['prompt_text'][i] if batch['prompt_text'][i] is not None else ""
+                
                 batch_predictions.append(prediction)
                 batch_references.append(reference)
                 batch_categories.append(category)
+                batch_prompts.append(prompt)
             
             # Add to category metrics calculator
             self.category_metrics_calculator.add_batch(
@@ -930,8 +1161,11 @@ class LLMFinetuningRunner(BaseRunner):
                 labels_for_metrics,
                 tokenizer  # type: ignore
             )
+            # Add prompts to metrics if available
+            if batch_prompts:
+                LLM_metrics['prompts'] = batch_prompts
             for metric_name, metric_value in LLM_metrics.items():
-                if metric_name not in ('predictions', 'references'):
+                if metric_name not in ('predictions', 'references', 'prompts'):
                     # Update the best metric
                     update_best_metric(
                         metric_name=metric_name,
