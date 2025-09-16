@@ -3,12 +3,12 @@ pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 run_mode: !!str "train"
-num_epochs: !!int 10
+num_epochs: !!int 30  # Reduced to avoid overfitting in late epochs
 seed: !!int 42
 # Two-stage training configuration
 training_phases:
   phase1_alignment:
-    epochs: !!int 2 # Alignment phase (ECG components only)
+    epochs: !!int 4 # Alignment phase (ECG components only)
     freeze_llm: !!bool true
     use_lora: !!bool false
     ecg_embedding_lr: !!float 1e-3 # High LR for ECG embeddings
@@ -17,13 +17,13 @@ training_phases:
     warmup_steps: !!int 100
     log_frequency: !!int 10 # Frequent logging for debugging
   phase2_finetuning:
-    epochs: !!int 8 # Remaining epochs for LoRA fine-tuning
+    epochs: !!int 26 # Epochs 3-7 for controlled fine-tuning
     freeze_llm: !!bool false
     use_lora: !!bool true
-    llm_lr: !!float 1e-6 # Lower LR for LoRA
-    ecg_embedding_lr: !!float 1e-5 # Lower LR for ECG
-    adapter_lr: !!float 1e-5 # Lower LR for adapter
-    cross_attention_lr: !!float 1e-5 # Lower LR for cross-attention
+    llm_lr: !!float 5e-7 # Reduced for stability
+    ecg_embedding_lr: !!float 5e-6 # Reduced for stability
+    adapter_lr: !!float 5e-6 # Reduced for stability
+    cross_attention_lr: !!float 5e-6 # Reduced for stability
     warmup_steps: !!int 50
     log_frequency: !!int 50
 # Debug and monitoring settings
@@ -41,7 +41,7 @@ wandb_entity: !!str "mhi_ai"
 use_wandb: !!bool true
 # training parameters (balanced for two-stage dynamics)
 llm_lr: !!float 1e-7 # Very low LR creates phase 1 alignment effect
-adapter_lr: !!float 1e-4 # Higher LR for ECG components
+adapter_lr: !!float 3e-5 # Reduced from 1e-4 to prevent late-epoch overfitting
 llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
 scheduler_type: !!str "cosine_with_warmup"

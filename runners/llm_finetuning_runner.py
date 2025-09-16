@@ -756,7 +756,7 @@ class LLMFinetuningRunner(BaseRunner):
                         ecg_signal,
                         prompt_input_ids=prompt_input_ids,
                         prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=150,  # Force longer generation for debugging
+                        max_token_length=self.config.max_token_length
                         # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
                     )
                 else:
@@ -764,7 +764,7 @@ class LLMFinetuningRunner(BaseRunner):
                         ecg_signal,
                         prompt_input_ids=prompt_input_ids,
                         prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=150,  # Force longer generation for debugging
+                        max_token_length=self.config.max_token_length
                         # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
                     )
                 generated_ids = gen_ids_q
@@ -1280,8 +1280,7 @@ class LLMFinetuningRunner(BaseRunner):
                     # NOT the full sequence (input + generated) as expected
                     # So gen_tokens already contains ONLY the newly generated tokens!
                     
-                    print(f"🔍 DEBUG: Sample {waveform_names[i]} - Gen length: {len(gen_tokens)} (pure generation)")
-                    print(f"🔍 DEBUG: Generated tokens: {gen_tokens[:10]}...")
+                    # Debug output removed - was causing console spam
                     
                     # No trimming needed - gen_tokens already contains only new generations
                     # Just keep them as-is

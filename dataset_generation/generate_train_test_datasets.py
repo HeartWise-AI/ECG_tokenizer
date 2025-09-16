@@ -6,6 +6,7 @@ Drops the existing question column and generates new comprehensive Q&A pairs.
 
 import pandas as pd
 import sys
+import json
 from ecg_prompt_maker import ECGPromptMaker
 from ecg_answer_generator import ECGAnswerGenerator
 
@@ -61,18 +62,109 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
             available = df_merged[col].notna().sum()
             print(f"   {col}: {available}/{len(df_merged)} ({100*available/len(df_merged):.1f}%)")
     
-    # 4. Take sample if specified
-    if sample_size and len(df_merged) > sample_size:
-        print(f"\n   Taking sample of {sample_size} records for testing...")
-        df_sample = df_merged.head(sample_size).copy()
+    # 3a. Generate ecg_type column based on deepecg.json
+    print(f"\n2a. Generating ecg_type column based on pathological/limit classifications...")
+    
+    # Load deepecg dictionary
+    with open('/volume/ECG_tokenizer/dictionary/deepecg.json', 'r') as f:
+        deepecg = json.load(f)['deepecg']
+    
+    pathological_cols = deepecg['pathological']
+    limit_cols = deepecg['limit']
+    
+    # Initialize ecg_type as normal
+    df_merged['ecg_type'] = 'normal'
+    
+    # Check for pathological conditions
+    for col in pathological_cols:
+        if col in df_merged.columns:
+            # Mark as pathological if any pathological column >= 1
+            df_merged.loc[df_merged[col] >= 1, 'ecg_type'] = 'pathological'
+    
+    # Check for borderline conditions (only if not already pathological)
+    for col in limit_cols:
+        if col in df_merged.columns:
+            # Mark as borderline if any limit column >= 1 and not already pathological
+            df_merged.loc[(df_merged[col] >= 1) & (df_merged['ecg_type'] == 'normal'), 'ecg_type'] = 'borderline'
+    
+    # Report ecg_type distribution
+    ecg_type_counts = df_merged['ecg_type'].value_counts()
+    print(f"   ECG type distribution:")
+    for ecg_type, count in ecg_type_counts.items():
+        print(f"     {ecg_type}: {count} ({100*count/len(df_merged):.1f}%)")
+    
+    # 4. Calculate how many ECGs we need for the target number of questions
+    # Average ~6 questions per ECG, so we need approximately sample_size/6 ECGs
+    if sample_size:
+        target_ecgs = max(int(sample_size / 6), 1)  # Assuming ~6 questions per ECG
+        print(f"\n3. Selecting ECGs to generate exactly {sample_size:,} questions...")
+        print(f"   Target: ~{target_ecgs:,} ECGs (expecting ~6 questions per ECG)")
+        
+        # Separate by ecg_type
+        df_normal = df_merged[df_merged['ecg_type'] == 'normal'].copy()
+        df_borderline = df_merged[df_merged['ecg_type'] == 'borderline'].copy()
+        df_pathological = df_merged[df_merged['ecg_type'] == 'pathological'].copy()
+        
+        print(f"   Available ECGs by type:")
+        print(f"     Normal: {len(df_normal):,}")
+        print(f"     Borderline: {len(df_borderline):,}")
+        print(f"     Pathological: {len(df_pathological):,}")
+        
+        # Calculate ECG targets based on 3% normal distribution
+        target_normal = int(target_ecgs * 0.03)  # 3% of ECGs should be normal
+        remaining = target_ecgs - target_normal
+        
+        # Prioritize pathological over borderline (70% pathological, 30% borderline of non-normal)
+        target_pathological = min(len(df_pathological), int(remaining * 0.7))
+        target_borderline = min(len(df_borderline), remaining - target_pathological)
+        
+        # Adjust if not enough pathological/borderline
+        if target_pathological + target_borderline < remaining:
+            target_pathological = len(df_pathological)
+            target_borderline = len(df_borderline)
+            target_normal = min(len(df_normal), sample_size - target_pathological - target_borderline)
+        
+        # Sample from each category
+        samples = []
+        
+        if target_normal > 0 and len(df_normal) > 0:
+            normal_sample = df_normal.sample(n=min(target_normal, len(df_normal)), random_state=42)
+            samples.append(normal_sample)
+            print(f"\n   Sampled {len(normal_sample):,} normal ECGs")
+        
+        if target_borderline > 0 and len(df_borderline) > 0:
+            borderline_sample = df_borderline.sample(n=min(target_borderline, len(df_borderline)), random_state=42)
+            samples.append(borderline_sample)
+            print(f"   Sampled {len(borderline_sample):,} borderline ECGs")
+        
+        if target_pathological > 0 and len(df_pathological) > 0:
+            pathological_sample = df_pathological.sample(n=min(target_pathological, len(df_pathological)), random_state=42)
+            samples.append(pathological_sample)
+            print(f"   Sampled {len(pathological_sample):,} pathological ECGs")
+        
+        # Combine and shuffle
+        df_sample = pd.concat(samples, ignore_index=True)
+        df_sample = df_sample.sample(frac=1, random_state=42).reset_index(drop=True)  # Shuffle
+        
+        print(f"\n   Selected ECG composition:")
+        final_counts = df_sample['ecg_type'].value_counts()
+        for ecg_type, count in final_counts.items():
+            print(f"     {ecg_type}: {count:,} ECGs ({100*count/len(df_sample):.1f}%)")
+        print(f"     Total: {len(df_sample):,} ECGs")
     else:
-        print(f"\n   Processing full dataset ({len(df_merged)} records)...")
+        print(f"\n   Processing full dataset ({len(df_merged):,} records)...")
         df_sample = df_merged.copy()
     
     # 5. Generate prompts
-    print(f"\n3. Generating prompts...")
+    print(f"\n4. Generating prompts...")
     prompt_maker = ECGPromptMaker(dataset=dataset_type)
     df_with_prompts = prompt_maker.process_dataframe(df_sample, max_prompts_per_ecg=6)
+    
+    # If we have a target sample size, trim to exactly that many questions
+    if sample_size and len(df_with_prompts) > sample_size:
+        print(f"   Trimming from {len(df_with_prompts):,} to exactly {sample_size:,} questions...")
+        df_with_prompts = df_with_prompts.sample(n=sample_size, random_state=42)
+        df_with_prompts = df_with_prompts.reset_index(drop=True)
     
     # Get statistics
     stats = prompt_maker.get_prompt_statistics(df_with_prompts)
@@ -87,7 +179,7 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
         print(f"     {ptype}: {count} ({percentage:.1f}%)")
     
     # 6. Generate answers
-    print(f"\n4. Generating answers...")
+    print(f"\n5. Generating answers...")
     answer_gen = ECGAnswerGenerator(dataset=dataset_type)
     
     # Calculate heart rate if not already present
@@ -115,7 +207,7 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
         df_with_answers['original_report'] = df_with_answers['report']
     
     # 7. Show sample outputs
-    print(f"\n5. Sample outputs:")
+    print(f"\n6. Sample outputs:")
     print(f"{'='*60}")
     
     # Show examples from each category
@@ -133,7 +225,7 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
                 print(f"   Answer: {example['generated_answer']}")
     
     # 8. Save results
-    print(f"\n6. Saving results...")
+    print(f"\n7. Saving results...")
     print(f"   Output: {output_path}")
     
     # Ensure demographic columns are preserved
@@ -158,11 +250,18 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
     return df_with_answers
 
 
-def main(dataset_type: str = 'mimic'):
-    """Main function to process both train and test datasets"""
+def main(dataset_type: str = 'mimic', train_samples: int = 200000, test_samples: int = 10000):
+    """Main function to process both train and test datasets
+    
+    Args:
+        dataset_type: Type of dataset ('mimic' or 'ptbxl')
+        train_samples: Number of training samples to generate
+        test_samples: Number of test/validation samples to generate
+    """
     
     print("GENERATING TRAIN AND TEST DATASETS")
     print("=" * 80)
+    print(f"Target sizes: Train={train_samples:,}, Test={test_samples:,}")
     
     # Define paths
     test_input = '/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated_with_questions.parquet'
@@ -173,10 +272,10 @@ def main(dataset_type: str = 'mimic'):
     
     try:
         # Process test dataset first (smaller)
-        test_df = process_dataset(test_input, test_output, "test", sample_size=1000, dataset_type=dataset_type)  # Sample for testing
+        test_df = process_dataset(test_input, test_output, "test", sample_size=test_samples, dataset_type=dataset_type)
         
         # Process train dataset 
-        train_df = process_dataset(train_input, train_output, "train", sample_size=5000, dataset_type=dataset_type)  # Sample for testing
+        train_df = process_dataset(train_input, train_output, "train", sample_size=train_samples, dataset_type=dataset_type)
         
         # Final summary
         print(f"\n{'='*80}")
@@ -209,6 +308,18 @@ if __name__ == "__main__":
         choices=["mimic", "ptbxl"],  # Add more as supported
         help="Dataset type for column mappings"
     )
+    parser.add_argument(
+        "--train_samples",
+        type=int,
+        default=200000,
+        help="Number of training samples to generate (default: 200,000)"
+    )
+    parser.add_argument(
+        "--test_samples",
+        type=int,
+        default=10000,
+        help="Number of test/validation samples to generate (default: 10,000)"
+    )
     
     args = parser.parse_args()
-    main(dataset_type=args.dataset)
+    main(dataset_type=args.dataset, train_samples=args.train_samples, test_samples=args.test_samples)
