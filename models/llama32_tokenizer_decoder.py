@@ -150,7 +150,7 @@ class Llama32Decoder(nn.Module):
         self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, num_ecg_tokens)
         
         # Set ECG token ID range
-        print(f"✅ Added {num_ecg_tokens} ECG tokens to vocabulary (start ID: {self.ecg_token_start_id})")
+        # ECG tokens added to vocabulary
         print(f"   ECG token ID range: [{self.ecg_token_start_id}, {self.ecg_token_start_id + num_ecg_tokens - 1}]")
         print(f"   New vocabulary size: {len(self.llm_model.get_input_embeddings().weight)}")
         
@@ -223,7 +223,7 @@ class Llama32Decoder(nn.Module):
             self.attention_hook = AttentionHook()
             # Register hook on final transformer layer
             self.attention_hook.register(self.llm_model)
-            print(f"✅ Attention visualization enabled (logging every {attention_log_frequency} steps)")
+            # Attention visualization enabled
     
     def enable_lora_adapters(self):
         """Enable LoRA adapters if configured."""
@@ -283,6 +283,7 @@ class Llama32Decoder(nn.Module):
         attention_mask: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
         quantized_features: Optional[torch.Tensor] = None,  # NEW: Explicit for ECG embeddings
+        prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without answer leakage
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
@@ -304,37 +305,48 @@ class Llama32Decoder(nn.Module):
         if quantized_features is None:
             raise ValueError("quantized_features must be provided for ECG processing")
         
-        # Get text embeddings first for cross-attention
-        text_input_ids = input_ids[:, self.num_ecg_tokens:]
-        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
+        # Get text embeddings for cross-attention (prompt only, no answers)
+        if prompt_input_ids is not None:
+            # Use prompt-only tokens to prevent answer leakage in cross-attention
+            # Remove padding tokens (pad_token_id is typically 128001 for Llama)
+            pad_token_id = getattr(self.tokenizer, 'pad_token_id', 128001)
+            text_embeddings_list = []
+            for i in range(batch_size):
+                # Get non-padding prompt tokens
+                valid_mask = prompt_input_ids[i] != pad_token_id
+                valid_prompt_ids = prompt_input_ids[i][valid_mask]
+                if len(valid_prompt_ids) > 0:
+                    prompt_embeds = self.llm_model.get_input_embeddings()(valid_prompt_ids)
+                else:
+                    # Fallback to empty embedding if no valid prompt
+                    prompt_embeds = torch.zeros((1, self.llm_model.config.hidden_size), 
+                                               device=prompt_input_ids.device, 
+                                               dtype=self.llm_model.dtype)
+                text_embeddings_list.append(prompt_embeds)
+            # For cross-attention, we need consistent shapes, so we'll use the mean
+            # This preserves prompt semantics without leaking answer information
+            text_embeddings = torch.stack([emb.mean(dim=0) for emb in text_embeddings_list])
+            text_embeddings = text_embeddings.unsqueeze(1)  # Add sequence dimension
+        else:
+            # Fallback to original behavior (but this should be avoided)
+            text_input_ids = input_ids[:, self.num_ecg_tokens:]
+            text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
         
         # Check if adapter supports cross-modal attention
         adapter_name_str = self.adapter_name.value if hasattr(self.adapter_name, 'value') else str(self.adapter_name)
         
-        # Debug logging
-        if self._training_step % 100 == 0:  # Log every 100 steps
-            print(f"[Step {self._training_step}] Adapter: {adapter_name_str}")
-            print(f"  - Has use_cross_attention: {hasattr(self.adapter, 'use_cross_attention')}")
-            if hasattr(self.adapter, 'use_cross_attention'):
-                print(f"  - use_cross_attention value: {self.adapter.use_cross_attention}")
-            print(f"  - Has text_embeddings param: {'text_embeddings' in self.adapter.forward.__code__.co_varnames if hasattr(self.adapter, 'forward') else False}")
-            print(f"  - Text embeddings shape: {text_embeddings.shape}")
+        # Debug logging removed for cleaner output
         
         if 'CrossModal' in adapter_name_str or (hasattr(self.adapter, 'use_cross_attention') and self.adapter.use_cross_attention):
             # Pass text embeddings for cross-attention if adapter supports it
             if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
-                if self._training_step % 100 == 0:
-                    print(f"  ✅ Using CROSS-ATTENTION between ECG and text tokens!")
+                # Using cross-attention between ECG and text tokens
                 ecg_embeddings = self.adapter(quantized_features, text_embeddings=text_embeddings)
             else:
                 # Fallback for adapters without cross-attention support
-                if self._training_step % 100 == 0:
-                    print(f"  ⚠️ Adapter doesn't support text_embeddings parameter, using self-attention")
                 ecg_embeddings = self.adapter(quantized_features)
         else:
             # Standard adapter without cross-attention
-            if self._training_step % 100 == 0:
-                print(f"  ❌ Adapter doesn't support cross-attention, using standard processing")
             ecg_embeddings = self.adapter(quantized_features)
         
         if ecg_embeddings.dim() == 2:
@@ -567,12 +579,7 @@ class Llama32Decoder(nn.Module):
         if max_token_length != 256:  # Default value check
             generation_params["max_new_tokens"] = max_token_length
         
-        # Debug: Log first few prompt tokens to verify chat template
-        if hasattr(self, '_training_step') and self._training_step % 100 == 0:
-            prompt_text = self.tokenizer.decode(prompt_input_ids[0][:50], skip_special_tokens=False)
-            print(f"[Generation Debug] Prompt text (first 50 tokens): {prompt_text}")
-            print(f"[Generation Debug] Last 5 prompt token IDs: {prompt_input_ids[0][-5:].tolist()}")
-            print(f"[Generation Debug] Suppressing tokens: {generation_params.get('begin_suppress_tokens', [])}")
+        # Debug output removed for cleaner logs
         
         with torch.inference_mode():
             result = self.llm_model.generate(

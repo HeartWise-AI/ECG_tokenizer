@@ -1300,7 +1300,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         # Additional parameters for LLM mode
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None
+        labels: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
+        **kwargs
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
         Args:
@@ -1335,7 +1337,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     quantized_features=quantized,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    labels=labels
+                    labels=labels,
+                    prompt_input_ids=prompt_input_ids  # Pass for cross-attention
                 )
 
                 if isinstance(decoder_output, dict):

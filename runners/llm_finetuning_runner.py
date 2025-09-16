@@ -389,14 +389,15 @@ class LLMFinetuningRunner(BaseRunner):
             labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
             
             # Run the step function
-            if mode == RunMode.VALIDATE and getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
-                outputs = self._val_step(
+            if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
+                # Pass prompt_input_ids for both train and validate to prevent answer leakage
+                outputs = step_fn(
                     ecg_signal=ecg_signal,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
                     prompt_input_ids=batch['prompt_input_ids'].to(self.config.device),
-                    prompt_attention_mask=batch['prompt_attention_mask'].to(self.config.device)
+                    prompt_attention_mask=batch['prompt_attention_mask'].to(self.config.device) if 'prompt_attention_mask' in batch else None
                 )
             else:
                 outputs = step_fn(
@@ -487,12 +488,28 @@ class LLMFinetuningRunner(BaseRunner):
             debug_config = getattr(self.config, 'debug_config', {})
             if debug_config.get('log_gradient_norms', False) and mode == RunMode.TRAIN:
                 model = self.model.module if hasattr(self.model, 'module') else self.model
+                
+                # Calculate gradient norms for different components
+                grad_norms = {}
                 if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                    adapter_grad = torch.nn.utils.clip_grad_norm_(
                         model.decoder.adapter.parameters(), 
                         max_norm=float('inf')
                     )
-                    postfix_dict['ecg_grad'] = f'{grad_norm:.2e}'
+                    grad_norms['adapter_grad_norm'] = adapter_grad.item() if torch.is_tensor(adapter_grad) else adapter_grad
+                    postfix_dict['adapter_grad'] = f'{adapter_grad:.2e}'
+                
+                if hasattr(model, 'decoder') and hasattr(model.decoder, 'cross_attention_layers'):
+                    cross_attn_grad = torch.nn.utils.clip_grad_norm_(
+                        model.decoder.cross_attention_layers.parameters(),
+                        max_norm=float('inf')
+                    )
+                    grad_norms['cross_attn_grad_norm'] = cross_attn_grad.item() if torch.is_tensor(cross_attn_grad) else cross_attn_grad
+                    postfix_dict['cross_grad'] = f'{cross_attn_grad:.2e}'
+                
+                # Add to epoch metrics for wandb logging
+                for key, value in grad_norms.items():
+                    epoch_metrics[f"{mode}/{key}"] = value
             
             data_iter.set_postfix(postfix_dict)
             
@@ -647,7 +664,9 @@ class LLMFinetuningRunner(BaseRunner):
         ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        labels: torch.Tensor
+        labels: torch.Tensor,
+        prompt_input_ids: torch.Tensor | None = None,
+        prompt_attention_mask: torch.Tensor | None = None
     ) -> dict[str, torch.Tensor]:
         """
         Train a single step of the model.
@@ -672,7 +691,8 @@ class LLMFinetuningRunner(BaseRunner):
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=labels
+                labels=labels,
+                prompt_input_ids=prompt_input_ids  # Pass for cross-attention
             )
             loss: torch.Tensor = outputs['loss']
 
@@ -729,7 +749,8 @@ class LLMFinetuningRunner(BaseRunner):
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=labels
+                labels=labels,
+                prompt_input_ids=prompt_input_ids  # Pass for cross-attention
             )
             loss: torch.Tensor = outputs['loss']
             
@@ -1284,6 +1305,7 @@ class LLMFinetuningRunner(BaseRunner):
                     
                     # No trimming needed - gen_tokens already contains only new generations
                     # Just keep them as-is
+                    pass  # Explicitly do nothing - gen_tokens is already correct
                 
                 # Decode to strings
                 generation = tokenizer.decode(gen_tokens, skip_special_tokens=True)

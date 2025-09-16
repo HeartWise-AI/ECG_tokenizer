@@ -196,6 +196,7 @@ def update_best_metric(
     score = llm_metrics[metric_name]
     predictions = llm_metrics["predictions"]
     references = llm_metrics["references"]
+    prompts = llm_metrics.get("prompts", [])
     
     assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
     assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
@@ -204,7 +205,8 @@ def update_best_metric(
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 
         "predictions": predictions, 
-        "references": references
+        "references": references,
+        "prompts": prompts
     }
     # Get or create the list for the metric
     best_list: list[dict[str, Union[float, list[str]]]] = best_metrics.setdefault(metric_name, [])
@@ -235,6 +237,7 @@ def update_worst_metric(
     score = llm_metrics[metric_name]
     predictions = llm_metrics["predictions"]
     references = llm_metrics["references"]
+    prompts = llm_metrics.get("prompts", [])
     
     assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
     assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
@@ -243,7 +246,8 @@ def update_worst_metric(
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 
         "predictions": predictions, 
-        "references": references
+        "references": references,
+        "prompts": prompts
     }
     worst_list = worst_metrics.setdefault(metric_name, [])
     
@@ -271,6 +275,7 @@ def update_random_batch_metric(
     score = llm_metrics[metric_name]
     predictions = llm_metrics["predictions"]
     references = llm_metrics["references"]
+    prompts = llm_metrics.get("prompts", [])
     
     assert isinstance(score, float), f"Expected float for {metric_name}, got {type(score)}"
     assert isinstance(predictions, list), f"Expected list for predictions, got {type(predictions)}"
@@ -279,7 +284,8 @@ def update_random_batch_metric(
     entry: dict[str, Union[float, list[str]]] = {
         "score": score, 
         "predictions": predictions, 
-        "references": references
+        "references": references,
+        "prompts": prompts
     }
     
     # Get or create the list for the metric

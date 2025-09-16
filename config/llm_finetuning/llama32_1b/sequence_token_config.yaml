@@ -3,21 +3,21 @@ pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 run_mode: !!str "train"
-num_epochs: !!int 30  # Reduced to avoid overfitting in late epochs
+num_epochs: !!int 30 # Reduced to avoid overfitting in late epochs
 seed: !!int 42
 # Two-stage training configuration
 training_phases:
   phase1_alignment:
-    epochs: !!int 4 # Alignment phase (ECG components only)
+    epochs: !!int 2 # Alignment phase (ECG components only)
     freeze_llm: !!bool true
     use_lora: !!bool false
-    ecg_embedding_lr: !!float 1e-3 # High LR for ECG embeddings
-    adapter_lr: !!float 1e-3 # High LR for adapter
-    cross_attention_lr: !!float 1e-3 # High LR for cross-attention
+    ecg_embedding_lr: !!float 1e-4 # Reduced LR for stability
+    adapter_lr: !!float 1e-4 # Reduced LR for stability
+    cross_attention_lr: !!float 1e-4 # Reduced LR for stability
     warmup_steps: !!int 100
     log_frequency: !!int 10 # Frequent logging for debugging
   phase2_finetuning:
-    epochs: !!int 26 # Epochs 3-7 for controlled fine-tuning
+    epochs: !!int 28 # Remaining epochs for fine-tuning
     freeze_llm: !!bool false
     use_lora: !!bool true
     llm_lr: !!float 5e-7 # Reduced for stability
@@ -29,10 +29,10 @@ training_phases:
 # Debug and monitoring settings
 debug_config:
   show_sample_outputs: !!bool true # Show sample generations
-  samples_per_epoch: !!int 3 # Number of samples to show
-  log_attention_weights: !!bool true # Log attention patterns
-  log_gradient_norms: !!bool true # Monitor gradient flow
-  verbose_loss_logging: !!bool true # Detailed loss breakdown
+  samples_per_epoch: !!int 2 # Number of samples to show
+  log_attention_weights: !!bool false # Skip attention patterns for now
+  log_gradient_norms: !!bool true # Monitor gradient flow - important!
+  verbose_loss_logging: !!bool false # Skip detailed loss breakdown
 base_checkpoint_path: !!str "checkpoints"
 pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
 # wandb parameters
@@ -79,14 +79,14 @@ lora_config:
   target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
   bias: "none"
 # Dataset parameters
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_complete_qa_dataset.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_complete_qa_dataset.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_qa_200k.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_qa_10k.parquet"
 # Dataset column configuration
 prompt_column: !!str "prompt" # Input question/prompt column
 answer_column: !!str "generated_answer" # Expected output/answer column  
 category_column: !!str "prompt_category" # For per-category metrics
 num_workers: !!int 16 # Reduced due to longer sequences
-batch_size: !!int 40 # Reduced for stability during alignment phase
+batch_size: !!int 64 # Reduced for stability during alignment phase
 signal_path_column: !!str "waveform_path_psa"
 # ECG parameters
 ecg_waveform_length: !!int 2500

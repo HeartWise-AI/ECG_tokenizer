@@ -129,7 +129,7 @@ class ECGClinicalReportDataset(Dataset):
 
                 # Construct LLaMA 3.2 chat template with ECG integration
                 # System message for ECG analysis task - optimized for concise medical findings
-                system_message = "You are a medical expert specialized in ECG interpretation. Provide a concise list of clinical findings separated by semicolons, similar to standard ECG reports."
+                system_message = "You are DeepECG, an electrocardiogram analysis and question answering tool"
                 
                 # User message with ECG placeholder and prompt - focused on findings format
                 # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{prompt_text}" if prompt_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
@@ -251,7 +251,8 @@ class ECGClinicalReportDataset(Dataset):
                     'prompt_input_ids': prompt_input_ids,
                     'prompt_attention_mask': prompt_attention_mask,
                     'labels': labels,
-                    'waveform_name': row['waveform_name']
+                    'waveform_name': row['waveform_name'],
+                    'prompt_text': prompt_text  # Add original prompt for metrics display
                 }
                 
                 # Add category information for per-category metrics
