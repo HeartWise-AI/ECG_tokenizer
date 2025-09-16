@@ -78,13 +78,21 @@ class LLMFinetuningProject(BaseProject):
         # Set codebook_size to the pretrained codebook_size -> otherwise the codebook_size is not saved in the checkpoint
         self.config.codebook_size = pretrained_config.codebook_size
         
-        # Prepare LoRA config if enabled
+        # Determine whether any training phase requests LoRA even if globally disabled
+        training_phases = getattr(self.config, 'training_phases', {}) or {}
+        phase_requests_lora = any(
+            isinstance(phase_cfg, dict) and phase_cfg.get('use_lora', False)
+            for phase_cfg in training_phases.values()
+        )
+
+        # Prepare LoRA config if enabled globally or requested by a training phase
         lora_config = None
-        if self.config.use_lora:
+        if self.config.use_lora or phase_requests_lora:
+            self.config.use_lora = True
             lora_config = {
                 'r': self.config.lora_r,
-                'alpha': self.config.lora_alpha,
-                'dropout': self.config.lora_dropout,
+                'lora_alpha': self.config.lora_alpha,
+                'lora_dropout': self.config.lora_dropout,
                 'target_modules': self.config.lora_target_modules,
                 'bias': self.config.lora_bias
             }
@@ -169,25 +177,74 @@ class LLMFinetuningProject(BaseProject):
         # Wrap the model in DDP
         ecg_tokenizer = DistributedUtils.DDP(
             ecg_tokenizer,
-            device_ids=[self.config.device]
+            device_ids=[self.config.device],
+            find_unused_parameters=True
         )
-        
+
+        decoder_module = ecg_tokenizer.module.decoder
+        adapter_module = decoder_module.adapter
+
+        llm_params = list(self._get_llm_parameters(decoder_module))
+        embedding_param = None
+        if hasattr(decoder_module, 'llm_model'):
+            embedding_param = decoder_module.llm_model.get_input_embeddings().weight
+            llm_params = [p for p in llm_params if p is not embedding_param]
+
+        adapter_params = list(adapter_module.parameters())
+        cross_attention_params = []
+        if hasattr(adapter_module, 'cross_attention_layers'):
+            for layer in adapter_module.cross_attention_layers:
+                cross_attention_params.extend(list(layer.parameters()))
+        elif hasattr(adapter_module, 'cross_attention'):
+            cross_attention_params.extend(list(adapter_module.cross_attention.parameters()))
+            if hasattr(adapter_module, 'attention_norm'):
+                cross_attention_params.extend(list(adapter_module.attention_norm.parameters()))
+            if hasattr(adapter_module, 'attention_dropout'):
+                cross_attention_params.extend(list(adapter_module.attention_dropout.parameters()))
+
+        unique_cross = []
+        seen_ids = set()
+        for param in cross_attention_params:
+            pid = id(param)
+            if pid not in seen_ids:
+                unique_cross.append(param)
+                seen_ids.add(pid)
+        cross_attention_params = unique_cross
+        cross_param_ids = {id(p) for p in cross_attention_params}
+        adapter_core_params = [p for p in adapter_params if id(p) not in cross_param_ids]
+
         # Get the parameter groups
-        param_groups = [
-            {
-                "params": self._get_llm_parameters(ecg_tokenizer.module.decoder),
+        param_groups = []
+        if llm_params:
+            param_groups.append({
+                "params": llm_params,
                 "lr": self.config.llm_lr,
                 "weight_decay": self.config.llm_weight_decay,
                 "name": "llm"
-            },
-            {
-                "params": ecg_tokenizer.module.decoder.adapter.parameters(),
+            })
+        if embedding_param is not None:
+            param_groups.append({
+                "params": [embedding_param],
+                "lr": self.config.llm_lr,
+                "weight_decay": self.config.llm_weight_decay,
+                "name": "ecg_embeddings"
+            })
+        if adapter_core_params:
+            param_groups.append({
+                "params": adapter_core_params,
                 "lr": self.config.adapter_lr,
                 "weight_decay": self.config.adapter_weight_decay,
                 "name": "adapter"
-            }
-        ]
-        
+            })
+        if cross_attention_params:
+            param_groups.append({
+                "params": cross_attention_params,
+                "lr": getattr(self.config, 'cross_attention_lr', self.config.adapter_lr),
+                "weight_decay": self.config.adapter_weight_decay,
+                "name": "cross_attention"
+            })
+
+
         # Get the optimizer
         optimizer_class = getattr(torch.optim, self.config.optimizer)
         optimizer: Optimizer = optimizer_class(param_groups)
@@ -361,7 +418,8 @@ class LLMFinetuningProject(BaseProject):
         # Wrap the model in DDP
         ecg_tokenizer = DistributedUtils.DDP(
             ecg_tokenizer,
-            device_ids=[self.config.device]
+            device_ids=[self.config.device],
+            find_unused_parameters=True
         )
         
         return {

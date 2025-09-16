@@ -115,10 +115,11 @@ class LLMFinetuningRunner(BaseRunner):
         
         phase1_epochs = phase1.get('epochs', 2)
         
-        # Determine current phase (for logging only)
+        # Determine current phase and apply phase-specific settings
         if epoch <= phase1_epochs:
             if self.current_phase != 'phase1':
                 self.current_phase = 'phase1'
+                self._apply_phase_settings('phase1', phase1)
                 if self.config.is_ref_device:
                     print("\n" + "="*80)
                     print(f"🔄 ENTERING PHASE 1: ALIGNMENT TRAINING (Epochs 1-{phase1_epochs})")
@@ -128,6 +129,7 @@ class LLMFinetuningRunner(BaseRunner):
         else:
             if self.current_phase != 'phase2':
                 self.current_phase = 'phase2'
+                self._apply_phase_settings('phase2', phase2)
                 if self.config.is_ref_device:
                     print("\n" + "="*80)
                     print(f"🚀 ENTERING PHASE 2: FINE-TUNING (Epochs {phase1_epochs+1}-{self.config.num_epochs})")
@@ -135,6 +137,108 @@ class LLMFinetuningRunner(BaseRunner):
                     print("   - Monitoring for improved performance")
                     print("="*80 + "\n")
     
+    def _apply_phase_settings(self, phase_name: str, phase_config: dict | None):
+        """Apply freezing, LoRA, and learning-rate tweaks for the active phase."""
+        phase_config = phase_config or {}
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+
+        freeze_llm = phase_config.get('freeze_llm')
+        llm_module = self._get_llm_module(model)
+        if freeze_llm is True and llm_module is not None:
+            if hasattr(model.decoder, 'freeze_llm_parameters'):
+                model.decoder.freeze_llm_parameters()
+            else:
+                for param in llm_module.parameters():
+                    param.requires_grad = False
+        elif freeze_llm is False and llm_module is not None:
+            if hasattr(model.decoder, 'unfreeze_llm_parameters'):
+                model.decoder.unfreeze_llm_parameters()
+            else:
+                for param in llm_module.parameters():
+                    param.requires_grad = True
+
+        if 'use_lora' in phase_config:
+            self._set_lora_training_state(model, bool(phase_config['use_lora']))
+
+        if self.optimizer is not None:
+            if 'llm_lr' in phase_config:
+                self._set_param_group_lr('llm', float(phase_config['llm_lr']))
+            elif freeze_llm is True:
+                self._set_param_group_lr('llm', 0.0)
+            if 'adapter_lr' in phase_config:
+                self._set_param_group_lr('adapter', float(phase_config['adapter_lr']))
+            if 'cross_attention_lr' in phase_config:
+                self._set_param_group_lr('cross_attention', float(phase_config['cross_attention_lr']))
+            if 'ecg_embedding_lr' in phase_config:
+                self._set_param_group_lr('ecg_embeddings', float(phase_config['ecg_embedding_lr']))
+            elif freeze_llm is True:
+                self._set_param_group_lr('ecg_embeddings', 0.0)
+
+        if self.config.is_ref_device:
+            log_bits = []
+            if freeze_llm is True:
+                log_bits.append('LLM frozen')
+            elif freeze_llm is False:
+                log_bits.append('LLM unfrozen')
+            if 'use_lora' in phase_config:
+                log_bits.append(f"LoRA {'enabled' if phase_config['use_lora'] else 'disabled'}")
+            if 'llm_lr' in phase_config:
+                log_bits.append(f"llm_lr={float(phase_config['llm_lr']):.2e}")
+            if 'adapter_lr' in phase_config:
+                log_bits.append(f"adapter_lr={float(phase_config['adapter_lr']):.2e}")
+            if 'cross_attention_lr' in phase_config:
+                log_bits.append(f"cross_attention_lr={float(phase_config['cross_attention_lr']):.2e}")
+            if 'ecg_embedding_lr' in phase_config:
+                log_bits.append(f"ecg_embedding_lr={float(phase_config['ecg_embedding_lr']):.2e}")
+            if log_bits:
+                print(f"   - Phase settings ({phase_name}): " + ', '.join(log_bits))
+
+    def _get_llm_module(self, model):
+        """Return the underlying LLM module if available."""
+        decoder = getattr(model, 'decoder', None)
+        if decoder is None:
+            return None
+        if hasattr(decoder, 'llm_model'):
+            return decoder.llm_model
+        if hasattr(decoder, 'llm'):
+            return decoder.llm
+        return None
+
+    def _set_param_group_lr(self, group_name: str, lr: float):
+        """Update the learning rate for a named optimizer group, if present."""
+        if self.optimizer is None:
+            return
+        for group in self.optimizer.param_groups:
+            if group.get('name') == group_name:
+                group['lr'] = lr
+
+    def _set_lora_training_state(self, model, enable: bool):
+        """Enable or disable LoRA adapter training parameters."""
+        if not getattr(model, 'use_lora', False):
+            return
+        llm_module = self._get_llm_module(model)
+        if llm_module is None:
+            return
+
+        toggle_pairs = [
+            ('enable_adapter_layers', 'disable_adapter_layers'),
+            ('enable_adapters', 'disable_adapters'),
+            ('enable_adapter', 'disable_adapter'),
+        ]
+        for enable_name, disable_name in toggle_pairs:
+            enable_fn = getattr(llm_module, enable_name, None)
+            disable_fn = getattr(llm_module, disable_name, None)
+            if enable and callable(enable_fn):
+                enable_fn()
+                break
+            if not enable and callable(disable_fn):
+                disable_fn()
+                break
+
+        for name, param in llm_module.named_parameters():
+            if 'lora' in name.lower():
+                param.requires_grad = enable
+
     def _setup_phase1_training(self, phase1_config: dict):
         """Setup phase 1: Alignment training with very low LLM LR instead of freezing."""
         # Get the actual model (unwrap from DDP if necessary)
@@ -692,7 +796,8 @@ class LLMFinetuningRunner(BaseRunner):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
-                prompt_input_ids=prompt_input_ids  # Pass for cross-attention
+                prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
+                prompt_attention_mask=prompt_attention_mask
             )
             loss: torch.Tensor = outputs['loss']
 
@@ -750,7 +855,8 @@ class LLMFinetuningRunner(BaseRunner):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
-                prompt_input_ids=prompt_input_ids  # Pass for cross-attention
+                prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
+                prompt_attention_mask=prompt_attention_mask
             )
             loss: torch.Tensor = outputs['loss']
             
@@ -840,7 +946,9 @@ class LLMFinetuningRunner(BaseRunner):
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=labels
+                labels=labels,
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask
             )
             loss: torch.Tensor = outputs['loss']
             

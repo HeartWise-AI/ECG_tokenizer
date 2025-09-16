@@ -92,19 +92,21 @@ class CrossModalSequenceTokenAdapter(nn.Module):
         self.attention_weights = []
         
     def forward(
-        self, 
+        self,
         x: torch.Tensor,
         text_embeddings: Optional[torch.Tensor] = None,
+        text_attention_mask: Optional[torch.Tensor] = None,
         return_attention: bool = False
     ) -> Tuple[torch.Tensor, Optional[list]]:
         """
         Convert ECG features to tokens with optional cross-modal attention.
-        
+
         Args:
             x: ECG quantized features [batch, 128, 82]
             text_embeddings: Optional text token embeddings [batch, text_len, output_size]
+            text_attention_mask: Optional attention mask [batch, text_len] (1 = keep)
             return_attention: Whether to return attention weights
-            
+
         Returns:
             - ECG token embeddings [batch, 128, output_size]
             - Optional attention weights if return_attention=True
@@ -112,16 +114,24 @@ class CrossModalSequenceTokenAdapter(nn.Module):
         # Handle 4D input
         if x.dim() == 4 and x.size(1) == 1:
             x = x.squeeze(1)
-        
+
         batch_size, seq_len, feature_dim = x.shape
-        
+
         # Project ECG features to embedding space
         ecg_embeddings = self.token_projection(x)
-        
+
         # Add positional and modal embeddings
         ecg_embeddings = ecg_embeddings + self.ecg_positional_embedding
         ecg_embeddings = ecg_embeddings + self.ecg_modal_embedding
-        
+
+        key_padding_mask = None
+        if text_attention_mask is not None:
+            if text_attention_mask.dim() == 1:
+                text_attention_mask = text_attention_mask.unsqueeze(0)
+            if text_attention_mask.dim() != 2:
+                raise ValueError("text_attention_mask must be [batch, seq] if provided")
+            key_padding_mask = ~text_attention_mask.bool()
+
         # Apply cross-attention layers if text embeddings are provided
         attention_weights = []
         if self.use_cross_attention and text_embeddings is not None:
@@ -129,18 +139,19 @@ class CrossModalSequenceTokenAdapter(nn.Module):
                 ecg_embeddings, attn_weights = layer(
                     query=ecg_embeddings,
                     key_value=text_embeddings,
+                    key_padding_mask=key_padding_mask,
                     return_attention=return_attention
                 )
                 if return_attention:
                     attention_weights.append(attn_weights)
-        
+
         # Final refinement
         ecg_embeddings = self.final_refinement(ecg_embeddings)
-        
+
         # Store attention weights for visualization
         if return_attention:
             self.attention_weights = attention_weights
-        
+
         return ecg_embeddings, attention_weights if return_attention else None
     
     def get_sequence_length(self) -> int:
@@ -196,16 +207,18 @@ class CrossAttentionLayer(nn.Module):
         self,
         query: torch.Tensor,
         key_value: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
         return_attention: bool = False
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Apply cross-attention between query and key-value tensors.
-        
+
         Args:
             query: Query tensor [batch, query_len, embed_dim]
             key_value: Key and value tensor [batch, kv_len, embed_dim]
+            key_padding_mask: Optional mask where True marks positions to ignore
             return_attention: Whether to return attention weights
-            
+
         Returns:
             - Updated query tensor [batch, query_len, embed_dim]
             - Optional attention weights [batch, num_heads, query_len, kv_len]
@@ -213,28 +226,30 @@ class CrossAttentionLayer(nn.Module):
         # Cross-attention with residual connection
         residual = query
         query = self.norm1(query)
-        
+
         if return_attention:
             attended, attn_weights = self.cross_attention(
                 query=query,
                 key=key_value,
                 value=key_value,
                 need_weights=True,
-                average_attn_weights=False  # Keep per-head weights
+                average_attn_weights=False,  # Keep per-head weights
+                key_padding_mask=key_padding_mask
             )
         else:
             attended, attn_weights = self.cross_attention(
                 query=query,
                 key=key_value,
                 value=key_value,
-                need_weights=False
+                need_weights=False,
+                key_padding_mask=key_padding_mask
             ), None
-        
+
         query = residual + attended
-        
+
         # Feedforward with residual connection
         residual = query
         query = self.norm2(query)
         query = residual + self.ffn(query)
-        
+
         return query, attn_weights

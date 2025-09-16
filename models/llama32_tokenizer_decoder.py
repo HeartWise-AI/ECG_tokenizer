@@ -284,93 +284,78 @@ class Llama32Decoder(nn.Module):
         labels: Optional[torch.Tensor] = None,
         quantized_features: Optional[torch.Tensor] = None,  # NEW: Explicit for ECG embeddings
         prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without answer leakage
+        prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for training: Prepends ECG embeddings to text embeddings.
-        
+
         Args:
             input_ids: (B, L) with prepended ECG token IDs + text tokens.
             attention_mask: (B, L) full sequence mask.
             labels: (B, L) shifted for causal LM (ignores ECG + prompt).
             quantized_features: (B, 1, 128, 82) or (B, 128, 82) for adapter.
-            
+
         Returns:
             Dict with 'loss' and 'logits'.
         """
         batch_size = input_ids.size(0)
-        
-        # Debug prints (as in original)
-        
+
         if quantized_features is None:
             raise ValueError("quantized_features must be provided for ECG processing")
-        
-        # Get text embeddings for cross-attention (prompt only, no answers)
+
+        prompt_text_embeddings = None
+        prompt_mask = None
         if prompt_input_ids is not None:
-            # Use prompt-only tokens to prevent answer leakage in cross-attention
-            # Remove padding tokens (pad_token_id is typically 128001 for Llama)
-            pad_token_id = getattr(self.tokenizer, 'pad_token_id', 128001)
-            text_embeddings_list = []
-            for i in range(batch_size):
-                # Get non-padding prompt tokens
-                valid_mask = prompt_input_ids[i] != pad_token_id
-                valid_prompt_ids = prompt_input_ids[i][valid_mask]
-                if len(valid_prompt_ids) > 0:
-                    prompt_embeds = self.llm_model.get_input_embeddings()(valid_prompt_ids)
-                else:
-                    # Fallback to empty embedding if no valid prompt
-                    prompt_embeds = torch.zeros((1, self.llm_model.config.hidden_size), 
-                                               device=prompt_input_ids.device, 
-                                               dtype=self.llm_model.dtype)
-                text_embeddings_list.append(prompt_embeds)
-            # For cross-attention, we need consistent shapes, so we'll use the mean
-            # This preserves prompt semantics without leaking answer information
-            text_embeddings = torch.stack([emb.mean(dim=0) for emb in text_embeddings_list])
-            text_embeddings = text_embeddings.unsqueeze(1)  # Add sequence dimension
-        else:
-            # Fallback to original behavior (but this should be avoided)
-            text_input_ids = input_ids[:, self.num_ecg_tokens:]
-            text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
-        
-        # Check if adapter supports cross-modal attention
-        adapter_name_str = self.adapter_name.value if hasattr(self.adapter_name, 'value') else str(self.adapter_name)
-        
-        # Debug logging removed for cleaner output
-        
-        if 'CrossModal' in adapter_name_str or (hasattr(self.adapter, 'use_cross_attention') and self.adapter.use_cross_attention):
-            # Pass text embeddings for cross-attention if adapter supports it
-            if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
-                # Using cross-attention between ECG and text tokens
-                ecg_embeddings = self.adapter(quantized_features, text_embeddings=text_embeddings)
+            prompt_text_embeddings = self.llm_model.get_input_embeddings()(prompt_input_ids)
+            if prompt_attention_mask is not None:
+                prompt_mask = prompt_attention_mask.to(dtype=torch.bool)
             else:
-                # Fallback for adapters without cross-attention support
+                prompt_mask = (prompt_input_ids != self.pad_token_id)
+
+        text_input_ids = input_ids[:, self.num_ecg_tokens:]
+        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
+        text_mask = None
+        if attention_mask is not None:
+            text_mask = attention_mask[:, self.num_ecg_tokens:].to(dtype=torch.bool)
+
+        adapter_name_str = self.adapter_name.value if hasattr(self.adapter_name, 'value') else str(self.adapter_name)
+
+        cross_attn_text_emb = prompt_text_embeddings if prompt_text_embeddings is not None else text_embeddings
+        cross_attn_mask = prompt_mask if prompt_mask is not None else text_mask
+        if cross_attn_mask is not None and cross_attn_mask.dtype != torch.bool:
+            cross_attn_mask = cross_attn_mask.to(dtype=torch.bool)
+
+        if 'CrossModal' in adapter_name_str or (hasattr(self.adapter, 'use_cross_attention') and self.adapter.use_cross_attention):
+            if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
+                ecg_embeddings = self.adapter(
+                    quantized_features,
+                    text_embeddings=cross_attn_text_emb,
+                    text_attention_mask=cross_attn_mask
+                )
+            else:
                 ecg_embeddings = self.adapter(quantized_features)
         else:
-            # Standard adapter without cross-attention
             ecg_embeddings = self.adapter(quantized_features)
-        
+
         if ecg_embeddings.dim() == 2:
             ecg_embeddings = ecg_embeddings.unsqueeze(1)
-        
-        # Ensure dtype alignment with model
+
         model_dtype = self.llm_model.get_input_embeddings().weight.dtype
         if ecg_embeddings.dtype != model_dtype:
             ecg_embeddings = ecg_embeddings.to(model_dtype)
         if text_embeddings.dtype != model_dtype:
             text_embeddings = text_embeddings.to(model_dtype)
-        
-        # Concatenate ECG embeddings with text embeddings
+
         input_embeddings = torch.cat([ecg_embeddings, text_embeddings], dim=1)
-        # Forward through Llama 3.2
         outputs = self.llm_model(
             inputs_embeds=input_embeddings,
             attention_mask=attention_mask,
             labels=labels
         )
-        
-        # Log attention patterns if enabled
+
         self._log_attention_if_enabled(input_ids)
-        
+
         
         return outputs
 
@@ -399,36 +384,29 @@ class Llama32Decoder(nn.Module):
     ) -> Union[GenerateOutput, torch.Tensor]:
         """
         Generate clinical report from quantized ECG features (ECG-only mode with default prompt).
-        
+
         Args:
             quantized_features: Quantized ECG features (batch, channels, seq_len).
             max_token_length: Maximum length of generated tokens.
             **generate_kwargs: Additional generation parameters.
-            
+
         Returns:
             Generated token IDs or GenerateOutput object.
         """
-        # Handle both 2D and 3D inputs
         if quantized_features.dim() == 2:
-            # Add sequence dimension for 2D inputs: (batch, features) -> (batch, 1, features)
             adapter_input = quantized_features.unsqueeze(1)
         else:
             adapter_input = quantized_features
-            
-        ecg_embedding: torch.Tensor = self.adapter(adapter_input)
-        
-        # Determine if we're using sequence tokens
-        is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
-        batch_size: int = ecg_embedding.size(0)
-        
-        if is_sequence_tokens:
-            num_ecg_tokens = ecg_embedding.size(1)
-        else:
-            num_ecg_tokens = 1
-            if ecg_embedding.dim() == 3:
-                ecg_embedding = ecg_embedding.squeeze(1)
-        
-        # Create minimal text prompt using chat template
+
+        batch_size: int = adapter_input.size(0)
+        device = adapter_input.device
+
+        num_ecg_tokens_hint = getattr(self.adapter, 'num_tokens', 1)
+        try:
+            num_ecg_tokens_hint = int(num_ecg_tokens_hint)
+        except (TypeError, ValueError):
+            num_ecg_tokens_hint = 1
+
         system_message = "You are a medical expert specialized in ECG interpretation. Provide a concise list of clinical findings separated by semicolons, similar to standard ECG reports."
         default_user_content = "Analyze this ECG and list the clinical findings."
         messages_prompt = [
@@ -446,65 +424,80 @@ class Llama32Decoder(nn.Module):
             return_tensors=None
         )
         prompt_ids = prompt_encoding.input_ids
-        
-        # Prepend ECG token IDs to prompt
-        ecg_token_list = list(range(self.ecg_token_start_id, self.ecg_token_start_id + num_ecg_tokens))
-        full_prompt_ids_list = ecg_token_list + prompt_ids[: (max_token_length - num_ecg_tokens)]
-        full_prompt_ids = torch.tensor(
-            full_prompt_ids_list, 
-            dtype=torch.long, 
-            device=ecg_embedding.device
-        ).unsqueeze(0).expand(batch_size, -1)
-        
-        # For sequence: ecg_token_ids already handled via arange
-        if is_sequence_tokens:
-            ecg_token_ids = torch.arange(
-                self.ecg_token_start_id, 
-                self.ecg_token_start_id + num_ecg_tokens,
-                dtype=torch.long,
-                device=ecg_embedding.device
-            ).unsqueeze(0).expand(batch_size, -1)
-        else:
-            ecg_token_ids = torch.full(
-                (batch_size, 1),
-                self.ecg_token_start_id,
-                dtype=torch.long,
-                device=ecg_embedding.device
+
+        def build_prompt_tensors(num_ecg_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+            max_text_len = max(0, max_token_length - num_ecg_tokens)
+            trimmed = prompt_ids[:max_text_len] if max_text_len > 0 else []
+            mask_value = 1
+            if len(trimmed) == 0:
+                trimmed = [self.pad_token_id]
+                mask_value = 0
+            prompt_tensor = torch.tensor(trimmed, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
+            prompt_mask = torch.full_like(prompt_tensor, mask_value, dtype=torch.long)
+            return prompt_tensor, prompt_mask
+
+        prompt_tensor, prompt_mask = build_prompt_tensors(num_ecg_tokens_hint)
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_tensor)
+        ecg_embedding: torch.Tensor = self.adapter(
+            adapter_input,
+            text_embeddings=prompt_embeddings,
+            text_attention_mask=prompt_mask
+        )
+
+        is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+        num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+        if not is_sequence_tokens and ecg_embedding.dim() == 3:
+            ecg_embedding = ecg_embedding.squeeze(1)
+
+        if num_ecg_tokens != num_ecg_tokens_hint:
+            prompt_tensor, prompt_mask = build_prompt_tensors(num_ecg_tokens)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_tensor)
+            ecg_embedding = self.adapter(
+                adapter_input,
+                text_embeddings=prompt_embeddings,
+                text_attention_mask=prompt_mask
             )
-        
-        # Create attention mask for full prompt
-        attention_mask = torch.ones_like(full_prompt_ids, dtype=torch.long, device=ecg_embedding.device)
-        
-        # Get embeddings for text tokens only and concatenate with ECG embeddings
-        text_input_ids = full_prompt_ids[:, num_ecg_tokens:]
-        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
-        # Align dtype
+            is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+            if not is_sequence_tokens and ecg_embedding.dim() == 3:
+                ecg_embedding = ecg_embedding.squeeze(1)
+            num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+
+        if ecg_embedding.dim() == 2:
+            ecg_embedding = ecg_embedding.unsqueeze(1)
+
+        ecg_token_ids = torch.arange(
+            self.ecg_token_start_id,
+            self.ecg_token_start_id + num_ecg_tokens,
+            dtype=torch.long,
+            device=device
+        ).unsqueeze(0).expand(batch_size, -1)
+        full_prompt_ids = torch.cat([ecg_token_ids, prompt_tensor], dim=1)
+        attention_mask = torch.cat([torch.ones_like(ecg_token_ids, dtype=torch.long), prompt_mask], dim=1)
+
+        text_embeddings = prompt_embeddings
         model_dtype = self.llm_model.get_input_embeddings().weight.dtype
         if ecg_embedding.dtype != model_dtype:
             ecg_embedding = ecg_embedding.to(model_dtype)
         if text_embeddings.dtype != model_dtype:
             text_embeddings = text_embeddings.to(model_dtype)
         input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
-        
-        # Set generation parameters
+
         generation_params = generate_kwargs.copy()
         generation_params.setdefault("attention_mask", attention_mask)
         generation_params.setdefault("use_cache", True)
-        
-        # Apply default parameters (includes pad_token_id and eos_token_id)
+
         for key, value in self.default_generation_params.items():
             generation_params.setdefault(key, value)
-        
-        # Override max_new_tokens if explicitly provided
-        if max_token_length != 256:  # Default value check
+
+        if max_token_length != 256:
             generation_params["max_new_tokens"] = max_token_length
-        
+
         with torch.inference_mode():
             result = self.llm_model.generate(
                 inputs_embeds=input_embedding,
                 **generation_params
             )
-        
+
         return result
 
     @torch.no_grad()
@@ -519,46 +512,78 @@ class Llama32Decoder(nn.Module):
         """Question-conditioned generation using provided prompt_input_ids (text-only).
         Prepends ECG token IDs and embeddings.
         """
-        # Handle both 2D and 3D inputs
         if quantized_features.dim() == 2:
             adapter_input = quantized_features.unsqueeze(1)
         else:
             adapter_input = quantized_features
 
-        ecg_embedding: torch.Tensor = self.adapter(adapter_input)
+        batch_size: int = adapter_input.size(0)
+        device = adapter_input.device
 
-        # Use provided prompt ids/mask (text-only)
-        batch_size: int = ecg_embedding.size(0)
-        input_ids = prompt_input_ids
+        num_ecg_tokens_hint = getattr(self.adapter, 'num_tokens', 1)
+        try:
+            num_ecg_tokens_hint = int(num_ecg_tokens_hint)
+        except (TypeError, ValueError):
+            num_ecg_tokens_hint = 1
+
         if prompt_attention_mask is None:
-            prompt_attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+            prompt_attention_mask = torch.ones_like(prompt_input_ids, dtype=torch.long)
 
-        # Determine sequence length
+        prompt_input_ids = prompt_input_ids.to(device)
+        prompt_attention_mask = prompt_attention_mask.to(device)
+
+        def trim_prompt(num_ecg_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+            max_text_len = max(0, max_token_length - num_ecg_tokens)
+            if max_text_len > 0:
+                trimmed_ids = prompt_input_ids[:, :max_text_len]
+                trimmed_mask = prompt_attention_mask[:, :max_text_len]
+            else:
+                trimmed_ids = prompt_input_ids[:, :0]
+                trimmed_mask = prompt_attention_mask[:, :0]
+            if trimmed_ids.size(1) == 0:
+                trimmed_ids = torch.full((batch_size, 1), self.pad_token_id, dtype=torch.long, device=device)
+                trimmed_mask = torch.zeros_like(trimmed_ids, dtype=torch.long)
+            return trimmed_ids, trimmed_mask
+
+        prompt_trimmed, mask_trimmed = trim_prompt(num_ecg_tokens_hint)
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_trimmed)
+        ecg_embedding: torch.Tensor = self.adapter(
+            adapter_input,
+            text_embeddings=prompt_embeddings,
+            text_attention_mask=mask_trimmed
+        )
+
         is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
-        if is_sequence_tokens:
-            num_ecg_tokens = ecg_embedding.size(1)
-        else:
-            num_ecg_tokens = 1
-            if ecg_embedding.dim() == 3:
+        num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+        if not is_sequence_tokens and ecg_embedding.dim() == 3:
+            ecg_embedding = ecg_embedding.squeeze(1)
+
+        if num_ecg_tokens != num_ecg_tokens_hint:
+            prompt_trimmed, mask_trimmed = trim_prompt(num_ecg_tokens)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_trimmed)
+            ecg_embedding = self.adapter(
+                adapter_input,
+                text_embeddings=prompt_embeddings,
+                text_attention_mask=mask_trimmed
+            )
+            is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+            if not is_sequence_tokens and ecg_embedding.dim() == 3:
                 ecg_embedding = ecg_embedding.squeeze(1)
-        
-        # Prepend ECG token IDs to input sequence
+            num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+
+        if ecg_embedding.dim() == 2:
+            ecg_embedding = ecg_embedding.unsqueeze(1)
+
         ecg_token_tensor = torch.arange(
-            self.ecg_token_start_id, 
+            self.ecg_token_start_id,
             self.ecg_token_start_id + num_ecg_tokens,
-            dtype=torch.long, 
-            device=input_ids.device
+            dtype=torch.long,
+            device=device
         ).unsqueeze(0).expand(batch_size, -1)
-        input_ids = torch.cat([ecg_token_tensor, input_ids], dim=1)
-        
-        # Adjust attention mask for ECG tokens
-        ecg_mask = torch.ones((batch_size, num_ecg_tokens), device=prompt_attention_mask.device, dtype=prompt_attention_mask.dtype)
-        attention_mask = torch.cat([ecg_mask, prompt_attention_mask], dim=1)
-        
-        # Get embeddings for text tokens only and concatenate with ECG embeddings
-        text_input_ids = input_ids[:, num_ecg_tokens:]
-        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
-        # Align dtype
+        input_ids = torch.cat([ecg_token_tensor, prompt_trimmed], dim=1)
+        attention_mask = torch.cat([torch.ones_like(ecg_token_tensor, dtype=torch.long), mask_trimmed], dim=1)
+
+        text_embeddings = prompt_embeddings
         model_dtype = self.llm_model.get_input_embeddings().weight.dtype
         if ecg_embedding.dtype != model_dtype:
             ecg_embedding = ecg_embedding.to(model_dtype)
@@ -566,21 +591,16 @@ class Llama32Decoder(nn.Module):
             text_embeddings = text_embeddings.to(model_dtype)
         input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
 
-        # Set generation parameters
         generation_params = generate_kwargs.copy()
         generation_params.setdefault("attention_mask", attention_mask)
         generation_params.setdefault("use_cache", True)
 
-        # Apply default parameters (includes pad_token_id and eos_token_id)
         for key, value in self.default_generation_params.items():
             generation_params.setdefault(key, value)
 
-        # Override max_new_tokens if explicitly provided
-        if max_token_length != 256:  # Default value check
+        if max_token_length != 256:
             generation_params["max_new_tokens"] = max_token_length
-        
-        # Debug output removed for cleaner logs
-        
+
         with torch.inference_mode():
             result = self.llm_model.generate(
                 inputs_embeds=input_embedding,

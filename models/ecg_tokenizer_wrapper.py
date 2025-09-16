@@ -1302,6 +1302,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
+        prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
@@ -1338,7 +1339,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
-                    prompt_input_ids=prompt_input_ids  # Pass for cross-attention
+                    prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
+                    prompt_attention_mask=prompt_attention_mask
                 )
 
                 if isinstance(decoder_output, dict):

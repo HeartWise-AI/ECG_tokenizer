@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import Optional
 from utils.registry import ModelRegistry
 from utils.enums import AdapterName
 
@@ -297,24 +298,30 @@ class SequenceTokenAdapter(nn.Module):
             nn.Dropout(dropout)
         )
         
-    def forward(self, x: torch.Tensor, text_embeddings: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        text_embeddings: Optional[torch.Tensor] = None,
+        text_attention_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
         Convert quantized ECG features to sequence of LLM tokens with optional cross-modal attention.
-        
+
         Args:
             x: Quantized features [batch, 128, 82] or [batch, 1, 128, 82]
             text_embeddings: Optional text embeddings [batch, text_len, output_size] for cross-attention
-            
+            text_attention_mask: Optional mask [batch, text_len] indicating valid tokens
+
         Returns:
             Token embeddings [batch, 128, output_size] - one token per ECG position
         """
         # Handle 4D input from some decoder configurations
         if x.dim() == 4 and x.size(1) == 1:
             x = x.squeeze(1)  # Remove singleton dimension
-        
+
         if x.dim() != 3:
             raise ValueError(f"Expected 3D input [batch, seq_len, features], got {x.shape}")
-        
+
         batch_size, seq_len, feature_dim = x.shape
 
         if seq_len != self.seq_len or feature_dim != self.feature_dim:
@@ -322,34 +329,43 @@ class SequenceTokenAdapter(nn.Module):
                 f"Input shape mismatch. Expected [{batch_size}, {self.seq_len}, {self.feature_dim}], "
                 f"got [{batch_size}, {seq_len}, {feature_dim}]"
             )
-        
+
         # Project each position independently: [batch, 128, 82] -> [batch, 128, output_size]
         token_embeddings = self.token_projection(x)
         token_embeddings = token_embeddings + self.positional_embedding
-        
+
+        key_padding_mask = None
+        if text_attention_mask is not None:
+            if text_attention_mask.dim() == 1:
+                text_attention_mask = text_attention_mask.unsqueeze(0)
+            if text_attention_mask.dim() != 2:
+                raise ValueError("text_attention_mask must be [batch, seq] if provided")
+            key_padding_mask = ~text_attention_mask.bool()
+
         # Apply cross-attention with text if provided, otherwise self-attention
         if self.use_cross_attention:
             if text_embeddings is not None:
                 # Cross-modal attention: ECG queries attend to text keys/values
                 attended, attention_weights = self.cross_attention(
                     query=token_embeddings,
-                    key=text_embeddings, 
-                    value=text_embeddings
+                    key=text_embeddings,
+                    value=text_embeddings,
+                    key_padding_mask=key_padding_mask
                 )
             else:
                 # Self-attention among ECG positions
                 attended, attention_weights = self.cross_attention(
                     query=token_embeddings,
-                    key=token_embeddings, 
+                    key=token_embeddings,
                     value=token_embeddings
                 )
-            
+
             token_embeddings = self.attention_norm(
                 token_embeddings + self.attention_dropout(attended)
             )
-        
+
         token_embeddings = self.final_refinement(token_embeddings)
-        
+
         return token_embeddings  # [batch, 128, output_size]
     
     def get_sequence_length(self) -> int:

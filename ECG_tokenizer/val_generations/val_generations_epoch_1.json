@@ -1,0 +1,1802 @@
+{
+  "47506658.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " Loài of cardiac abnormalities (I, II, III, aVR): Tachycardia",
+    "Ground truth": "Yes - Diffuse ST segment downslopping; Monomorph QRS complexes"
+  },
+  "43282083.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / & &/ to, :& on / a to of,  to / a /:\n\n, a to, in /, in/ to/ a, to,, / in a, see, to & / and, in, a /: / to include a, for, to / in / to make, a, y to / / to,,, to a, /, to do & / to : a, b, a a& : to, a & / a :\n\n to, / to ( to / to a & a,, a ( a&, / a, A / to & a / a && a / but of /, : a the / a on, a: / of a, & to /, / at / to / ( to.\n\n& a, a it / a  to : : to a / to including / a\n\na to, and & a/ to & & to a to /, to / as / to to a : & a // a : on to / with : to / : to to / an a /, true a to ke / to  to a a of a / / a a / on / to the to / &, a plan / to of a on a to & of ( a : to! to a of / to be / to on / of to a the a to. to to ( / to and of a to a ; to / W / a c& a all / : / to w to /  a to/a / to see, / ( a /  : / / included a of “ a to ” a to : / a t / to planning / / : a / A / / hard a / : on a / aid to / D to : to & to : according / to” a : / : : a to b : a/ : a\n\n a to à, to : and a / the / on a :",
+    "Ground truth": "Yes - t wave in inferior leads II, III, aVF"
+  },
+  "47521355.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " CBC (80-99%)",
+    "Ground truth": "81 bpm"
+  },
+  "46515324.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,, to /,&,,/D to,,/wa &//,, on,, further, &b &#,/itional,, /,,:, /itional, / to &// /&, the,/, to,va, to:,,b:,st,, a,, in, &, / /, /& /, to& &,& to :, to a, / and, & &, to-do,, &:, a /, &�, / D,,D, to/dive, / da, & to,& /a, planning, &&, b,, : /, of, / && to /&: /, aD,,&r, /va,//, to da /it,,itional, to/t, to do,& (to &g,, da,& & to /b, toalth, to : & & /&la,, as /, the /& & /, :, /bast,, hard, to & :,,,, / : /&b,,// to, /w,, b&r, / W / & &: a &,,va / / to, toD, /  / / /b&b/ to : / & / true / :// / /nil, : &: //va/ / of/ : &, including,, for &: d&, // /,/., / //, /: : to /: / /: to / / :, : a: / &:mate / : to,// : /to, /sted/ to &, // to / : a, to include, to/:, to/D, : to : tova /,g /,/a& to, & /a/ &, : b, /:\n\n:D,, // : /",
+    "Ground truth": "Yes - t wave in inferior leads II, III, aVF"
+  },
+  "44106872.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " TAS on patient is not mentioned in this question set.",
+    "Ground truth": "64 bpm"
+  },
+  "45383776.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ";\n\nPuls - T : FR = R - FRE S-T",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "41268582.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "; *",
+    "Ground truth": "Yes - ST elevation (anterior - V3-V4); ST elevation (lateral leads- I, aVL, V5-V6); ST depression (lateral leads - I, avL, V5-V6); Acute Myocardial Infarction; ST elevation (inferior leads - II, III, aVF); ST depression (inferior leads- II, III, aVF)"
+  },
+  "41099940.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /,&, && of,/b,va,,,ast,,&& a,&g, further, /st,, as&&r, /&,& &sted,&//,, to,//itional planning,&#,&:&, hard,,a&,,: /&&, / / /,,:\n\n,,c//&& /& &&&b,, / on / &,&la,,/D,,#, a, /b,fa,& a/ planning&,�,&ata &/&,//,&.\n\n&&//c, / a&: & a,,itional, /art /& /d/./b:D,, include & &, /D, #&, to& /o,, it,&to / /&g#&va, &#,, a&, true,, & a& Dust &&, a /,/& a/D, and &// /, :& & /b && /balth, toio& / &/techn,, b /,C& & &&/D,&a & : planning /, / //a, &/ / &&c, including, a/.,& to & &/b/,&/d/ : /b/t,& / true a :&,/vice / to& to,& the& &b&//ad& a#al ///,va a & /a, /:& a&&&#& &, & / a&r / / a,#c,&sted, /va, a &&a,, including/ /&bata, a/D/bida, to / /a / /c, a a,//&, t && a /&c/c,,/t/ &,//la",
+    "Ground truth": "Yes - Early repolarization; ST upslopping"
+  },
+  "41647697.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / & to: of,  : /,&, &,, including, a, /b:D,& on, and,: to / to / / / &don, / /.\n\n, do, to : d /&: :, da, /, /:, to &b: & & of, but,/ to /d, &&: to,, to / & : t,,, &: the, & & a, to, &//, da /, a & to /, on to /: to de, &/b/., to include : to the, tova, /& to / a, with / & & : / to, to ; / to D, & / /:\n\n&, to ke to & : to a & the: in / : to& to a / to de a & & to :  & & the & to, / a : to, a: to : to / as & to & toitional / :/ to a: W& to, the to & a: : to & &a /, & to/ to : on /& &: to/d & &, to: & to the / to &: / to: /, to de : / &, a : of / to of to / the / A : a / / a /:wa, / the& : to on / to : / b /, further, / :& /, of / of / : /& / to a, : a: on / a true /, according / to ( to : a : : to, / : : & to to / :, &\" to / true / / to to: to & / a to : : a & : : b : / / : of a, and / a &, / to the a, U, of &: : : / : a to a/ to to :to",
+    "Ground truth": "72 bpm"
+  },
+  "41459807.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## hemoglobin ASH% -20%\nECG non-specific finding.",
+    "Ground truth": "Yes - Left anterior fascicular block"
+  },
+  "42947245.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{Pulse < 100 bpm} non-specific ECG\n\n",
+    "Ground truth": "Yes - 1st degree AV block"
+  },
+  "41849156.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/D/&c,, &,,, /aD//, /b planning,&/,,/, &g,//,#& further, to�,,&#//,,/,&,&, /C, /,&b,&&st, /va,, to, and,&.\n\n,,b,, true, to&&:, hard,va,/st,&//, //itional,, the&/true, & /b, &c, &:,& /D,, including,, a &, / /, b,,// /,va/w, planning, &/ata,&ing,,&r to, a/.,, c,,ake, as /a,,/c,&/a,&day,& & & a,,a / /wa/ &&/C,,alth, & a/,& on,& far, /ack,,ast,va& to/ast,& to,&:#,,va to include, / planning,, of,,/dio,,/t, &//, &:\n\n&,//b /it, &b//, to /la, &&, &/D, /& &/C /b /a /,, build,,/D, hard /&sted,,c,&&r / hard,, further,// & && /itional / &/stand, / &, : c,&a&&b&,,C&, further of, & to &, toitional / to& && to a, / of/ to/la && & /, / hard/& a /t/r,/& c, : /, a,& mak,& da,, la, & &, & ana,& Dust,, it, /i&c: /b// to",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "48366843.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,&&, / to/, &,, on,,, a,&, on /&,&b/.,b, on a,,/,, /&.\n\n/,, including, b,/ &, a/ further, planning, &&,, ///,&itional, &: to, /b,, & &, & to,,/, a/a/ /&:\n\nb,& a, & on, on/,, a / to, &,/, &.\n\n,, b&r, /, the, / a, / / /,, and,, to /, b/, to:,, in, to&,  / to&& && for, / on, to &, to, to/d, / &, / (,, // to, an,, as,, but / /a &, hard, a&/&, & b, to/ & a, to include, to : /& a/ive &, on/ a, but to, a &,/ to, with,, true, / da, a/d/ of, /; &, main, &/& &, the /, /:, & :, & a / &don / /bast, & / &:\n\n&&/ to /: the, &/,,, d//&, plan, // on / &//, /a /: & /&/, / hard,, planning /&to, / as,& / to /&& to /a,& (, /#, & include, / \"g&, a : /, &:/, / ;, /! /,& & / to & /, toal /, on/:, to-day, / the,, W, &b, to-do,&:, /all / & /, &,: &,&",
+    "Ground truth": "57 bpm"
+  },
+  "44505046.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "* normal",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF)"
+  },
+  "46299508.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "hlas = 100%",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Left axis deviation"
+  },
+  "48220312.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / to,b / && a planning,,/va,,&,,,//, a,, a/ further,,la,&/ of,, &:& /b, to,,ast / /st,&c,, and,, to&, /, &,, hard, & &,itional, /i,//////b,//b//a/.&oD,&#/D,&// /ata,, /it to, &:\n\n, /�, & a,//a & a /, a / /c, & as,, include, b/r,/,, &&,& & on, / a,& /,//true &sted /&, #C# /, to /, true, //la//fa, ///day,, c /art,,� /a&, &#,, included,,d,,anka/va &, to de, a/c,, see, / as, & / /& /st /a, /d, &sted && &&va, /b &,b/,va,& the / a&& &,Dio,&&, /// /g /,& a / : /,va / &va /, / &a,& as /& a, : to /ack,&:,,va &: &, / / & to,&&r, to vou, /C, /&&& :b/c, to:+, /citional,, of //b&va &&&: & a& &/ // /,wa, /sted, /itional, &C /&//b /b /, planning & to /t,//al//, /:c,//va /b/ :&, a to, and/#&va /&don,//",
+    "Ground truth": "78 bpm"
+  },
+  "43555546.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", &&fa a/ : /&b,stand,,,//va/c, / on/&d,&.\n\n&a, /b&&, &/build,,va,&, to, / the /it /r, a, /&, /, /fa,/D, to: /b, a/ata of a & a,itional,&sted, & aD/a,& /wa, /a / / to/aste, a to,, / &b, &a, &to a/Plan, / to / hard, /g &/,, to b/d, &, in,/ and &:\n\n& a, but /&/ W, / va, / a, it /c &b /& a/ planning, & & a&, a &, &fa, & / / a & including &sh,& a&do / &/w /,&: D, & to & /a & a:bast&,&& as /&// &don / to a&/building /g to/a&,, true/ & &&va, b&/ha &: / to, a /b a&g, /t, &:&b //b, to/t,b & &, a& b, /v : /b: & a / a: / & &/s/&/ to /& :&:& :a,va /a, a/a, / /, of / a&&b/va & /bva to a / to-do /b/. &/b :/ to, to /, a/Ditional, /�, to/ a//fa : / & a ; /a/Don, / : to /b & / & : a& a / /va,/ a&b & a/crown, a/doal, / main",
+    "Ground truth": "69 bpm"
+  },
+  "45312856.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/ /a,banc of a to &c#.\n\n&don, the a,age of / a, on /itional/it /a/cing/a/t,a, and /a cshitia &a/d, &a,&aizdonit t,a/stand of a/c, &calth /w/Wa/it/ aall/alth,a&a &a//ccl,is, a/.a/ tola/ a, to, to /a/ a /stds/. to a,a /a &/fit &c&a, toalness,dallitat a &a &bandonc /a to &a/althitional a.\n\na/ke,w,a/New, &bisc/, a.\n\nA, & &aition a/a,a/dir,to/ha a &y aitional,bcl/:\n\na,shfa, &/b, to &t, &&a/age acl/a,day&a/ra& &a&age/alth/ to a /b/alth / to /c/altha &&b,wa&a/wa: to/turna to /itional a &/a,a/a/tcance of a &c,dish of /a #a, a/ta /&a; toa a /csh,a c &a c?c#a, on,shc/ toa/ital a d&gha&a/ to cib/a/ a to /  to a :a &cclitation ;ccl &a/a, toa / a / to a/ to include, &dW &a/.a& a /a&nck &a+sh, to a,b a /w, tost &a /,a & to,a to a & toa, & to c, &",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "45225319.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "хови heart rate: 52.0 bpm",
+    "Ground truth": "55 bpm"
+  },
+  "44381629.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "RSS - 10- min. - V5, V6, V7, V8, V9",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "49564836.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\"High RBB\" - Sinus bradycardia\n\n",
+    "Ground truth": "58 bpm"
+  },
+  "42344527.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM, sinus tachycardia",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, Previous anterior (V3-V4) Myocardial Infarction, 1st degree AV block"
+  },
+  "48602571.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​: ventricular tachycardia (90-100 bpm); normal heart rate: 64-80 bpm",
+    "Ground truth": "64 bpm"
+  },
+  "40235915.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\n. : (1). e &<  and:\n\n:\n: 2025,&n / (b).=} - #T 1: {#} 7:  for, 1 : a\n$ [8} T:!  |(1) - $1:  the (e) \n\n: 10: D 2}, and  :&/ 1{\"; 3}$ - :\n\n: / 2020:?!t 2nd\"! | 201:” to$ (a? }d\n\n1):}}. 3}e  |$}: (ealth. 1 ( 15$:\n\n        U 2024$: = |:\n\n:slc : 1} ;ealth  :force &  “$} 11“:}eckage (hence :|“&:’ 6: A &e}at :&a&se : 11”=sh s“ :ease ˀ  |”easily of? ead$}”eprance, ertspal} {e”ealthance$}a 1) ;ace “e”...a “A”re:” 1#: insh uly} }s” ighte&d : “!}” (i  |!ebr. :e& :a #£ 202}{e:  :a’d} e: “e} 1;ealth £ 1st :}e: “} :rall 202 :e.g{ }#eekslf}  -1“#l”e” “a ndersee:“s” }& : “e. eisland, |}e”  e:” “eplence” |,&ealth of”}ed “eighth :eš:“",
+    "Ground truth": "92 bpm"
+  },
+  "43782882.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&#/,//,,, /b,,& / &,#,,anka,&c,�, / / ava,,a,&sted,st && /, as,/ata, to /#&,&,,/ast, of planning,, & to,//:,, include,&.\n\nD, /o,,b/. /, &/a// /C,, keva,&/D,,itional,,&r&#, /, planning, to,,////, including /&, &&alth a, on,, and / &/D,,day//a,/&&, / &to,//va:\n\n, & planning,//g&,/, /: &/it/& Dust /, aDio, /a, /&& &,, a/ &,//&,//a//, / further,, to/va, &, a, /fa & &,&&& /D/, & &&& : to, ///, toal, /d / / /,& & &i, /G,&: /& a / &a to /&ake / /: /#//b/,, of /w / / to a /c /, //& /b/b, hard /b /, /ad / &&,D/d / & /& :&&//b/a, // : /itional, &// to /st / of / &//&&/& & /,b, /c, / planning / & true / /va /,st /c/r : : /& / /&e planning, planning& a&& b, & / / &b, & aD,&/ke /wa//&a&, to a/ /, included, / to/# /",
+    "Ground truth": "55 bpm"
+  },
+  "41975089.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "RSS is likely due to coronary artery disease or myocardial infarction.",
+    "Ground truth": "Yes - ECG shows significant abnormalities: Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "43292588.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ": pulse rate = 30 beats; time to detect = 5 minutes",
+    "Ground truth": "Yes - Right bundle branch block"
+  },
+  "47474479.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,, /&//, planning,,/:/itional,//, as& &#,///D&,,//b,,bio,,Dast, / ///c/&b, /, /d, a,#&,va,&st,,anka,&&:la,, to include, /#,&,& /,#,,a,,va&,a/cast,&a&, /�itional,,/t/,&to,,& &&//&,:&ast,//la,ata,,st,//sfa,&///c,,C /va,,�,&:\n\n, planning /#la, to,, #stedb,&r,, kea,/g, // /,&o, to /,, da/, true,,ast /,//fa,,/a planning,&b&,b /fa, as /a,/////c, /don,,it ///, to/ &c,/D/d,,:D,,&r /a&#, /va&alth,, : /b,&day,, &/,/&, planning of /b&&/D////fa&,// /bfa, on,, hard, /a/b,va/,, aast / a,/&&ad, / a//a /, c,, b//a, /b/ata of/ further, :al,& to,/true& a, /w &a/.,/st&& /a: & /b://&b:la /, &/D/& /&, true/re,&e /&b/,/, hard / /b /&a /a/a:,//&/D, & a planning//b/&//a",
+    "Ground truth": "1st degree AV block"
+  },
+  "41129969.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\nSinus node 2. (Lateral T-wave) \nAtrial fibrillation supraventricular 1st and/or 2nd degree\nMonomorph monitor 3rd and 4th degree",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous inferior wall MI, Bradycardia, Left anterior fascicular block"
+  },
+  "43949614.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /,,&,/va :c,//, &&,, /fa, to,#,, &,,,/a,//va, &st: /, a, & /d,&//b,, on/D,& further,, b,D&#, to//va&r:\n\n&,&# of,,/, planning ///,, as,,b/cata/d,,#b&, a &&/.& &, / /a /o,, a/D,itional,ast, /la,# &,/D,, include,, to /to/,, planning, /&, / true, including,.\n\n& c,,// && &&//,&b&/ & & to,,sted/ata,,/.&, & to ///&, de/ to /, /b& planning,, /// &//, to&&//a/. /itional, /:,& /b, // /&/g/ /,//b:, / da&:,, further / to /& &c &&:a, / to a, /st// /a/ planning / &c /&b & /&&&,//&& planning /, c&: /itional & / to & &/&b,////&//st/d//, /// : /b /ad:D/ / planning / /:/, / a, to a to /G //& & &//b//, a&, //c, toitional,&: and /va / / /c:D /,&&alth, / :& &/.&& /, planning /#sted, /al /,itional && / : / /& to, /A, to&r, & & /,/ a /&a, hard /& /&mate",
+    "Ground truth": "Yes - st depression in inferior leads II, III, aVF; anterior leads V3-V4"
+  },
+  "46524745.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ rate: 80 bpm",
+    "Ground truth": "68 bpm"
+  },
+  "47739973.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (c:shelf a\n\n\n:Delive : in\n\nre-sh:\n\n-): £/ deif: to of = to, e:\n\n:5 – “:\n&:pre shell in:\n\n– and | :  the:\n\nand in an : “=sh out:\n\nD:\n\nPentence draw $:\n\n: &: is def:area of:\n\nin detail that a cross;\n\n: for!!\n\n#15 to; “:\nout:\n\nfor :\n\nis:\n\ndevlet:\n\na:\n\n#15 a” &:\n\n##edge &:\n\nto :\n\nany; A’d & so /d:\n\n24:\n\nyou’ve,\nf: day\ne:\n“find a: W\n\nshould call\n\nfor;\n\nthe force\n\na ; final:\n\n#;\n\nresult,\n\nmay\n\n$draw! out;\n\nMay #key:\n\nindef\nit & find “land:\n\n#:\n\n13:\n\n& do:\n\n## of:\n\nfor availability\n\nforage “\n\nA not:\n\nd : they are\n\n#;\n\n# shall be had:\n\n# t\n\nyou’reg: “a “;\n\n#;\n\nthat;\nhas:\n\n“ a “so you’relimate:\n\n$: “\nand most;\n\n$do responsibility;\n\n# of\nfor: potential “a:\n\nmay\n\nnot only “th:\n\ncan\n#&: it see on “\n\n##:\n\n# of land “$W\nfor\n\ndecal “may:complete:\n\nfor “,\n\n#; is \nyou “,\n#:\n\n# may:\n\n£:\n\nyou “:\n\n##may “,\n\nfor : end of production. major\n\nonland :ecl dele &: for “ a “\n\n#:\n\nelse; find, main: is\n\n#force “may “\n\nand “.\n\nareage:\n\nisland: “get:\n\nthe ultimate “: don’t show; \n\n# of “air:\n\nthe;\n\n# have a “ the D: “:\n\nthe force: “: is:\n\n#de: “;\n\n",
+    "Ground truth": "Left axis deviation (-30° to -90°)"
+  },
+  "42673480.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-150bps}\\\\ECG_no_clamp_value_120_bps\nECG_is_within_normal_limits}\n MCC_recommendation:if ECG is outside normal limits, monitor and treat patient appropriately",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous inferior wall MI, Complete left bundle branch block, Right bundle branch block"
+  },
+  "49485462.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## T wave abnormality;\n\nAbnormal t wave: T wave is positive",
+    "Ground truth": "Yes - t wave in lateral leads I, aVL, V5, V6"
+  },
+  "45266067.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "hlas de potassium",
+    "Ground truth": "Yes - Early repolarization; ST upslopping"
+  },
+  "42906089.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " -score =  + ECG management \nwith regards : \n-SCORE = \non \nof the \" Class D/ \nwith regarding \n- \n\n(drm) \nfor \n of \n- ECG \nwith \n- \nof \n-",
+    "Ground truth": "No - prompt follow-up recommended; Previous anterior (V3-V4) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Atrial tachycardia (>= 100 BPM)"
+  },
+  "47701297.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "isposable of your ECG: 1-Cardiomegal heart rate, Sinus and atrial arrhythmias",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF)"
+  },
+  "46718051.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1. \"Monitored by: J. Lee, M.D. cardiology} \n\nAgeskabe EKG-Protokoll:\n\nErfolgreif für die Verordnung der nachgeladen EKG-Figur bei 15-jähriger Mann mit Hypertension und Herz-Kreislauf-Dysfunktion.\n\nGründe für die EKG-Monitore:\n- Chronische Bluthypomycin (Hypertrophie)\n- Infektionskrankheit (insbesondere das Abdomens-Tumor)\n- Angesünd Blutdruck-Erkrankung\n\nAnmerkungen:\n- Atemwirbel: Monomorphic Hypertrophies (Abdomens -Tumor) - Mit Hypertrophy\n- Herz-Schlag: 130 bpm",
+    "Ground truth": "Sinus bradycardia with interpolated PVC(s) (HR: 59.1 bpm);Rightward axis;Anteroseptal infarct - age undetermined;Inferior/lateral ST-T changes are nonspecific;Abnormal ECG"
+  },
+  "43791149.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " premiolar cardiac syndrome",
+    "Ground truth": "74 bpm"
+  },
+  "44052453.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (c)",
+    "Ground truth": "Left axis deviation (-30° to -90°)"
+  },
+  "47318298.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, &,b,,,&, &&, /,,st, / &, a, &#, & tova, / planning,,/ and,,D, to, ///,va,,ata,,itional,& /&,&,d,,C,, da /it,, true, a&,, as,,/.&&,c, / as,/,,, planning, / /,sted, & c,, to /,&r, to ke &, /&&/D,, /fa,,bast,, : /, further,,la,,va:,, a/c,,d, & & & /a,& &,,�,, including,&:\n\n,,#, to &/b, to/t,&alth, on, /techn/ &, &.\n\n& /,&:, a &, as of&, t, /itional, & a,& Dust,,/D, /c, & the&:mate /, /a &,//& a,, but /, & /,/D&r,: to / /to a:, &itional,,:,&&:ast, tovaD, /va,&b:, /:D & / /:, D&, a /, as && //a /& true,, vou, / on /,/ / //true, to see a& a / /b, /true, &:st,, //, & cand /& to, a// / of,&//va / / / true/b &, da:, planning of / & & b/Db /, a a, / a /ast : / &c,,c to,, included, / hard, /day,& a & / a &&: /, planning /,ast, /:",
+    "Ground truth": "99 bpm"
+  },
+  "49651133.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​: 1st degree supravensory tachycardia",
+    "Ground truth": "No - no abnormalities in this category"
+  },
+  "42908713.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "EMPLABILITY: 64-65 ; HR: 40-45; QRS Stenosis in anterior leads; ST Depression in lateral leads; T wave not visible.",
+    "Ground truth": "60 bpm"
+  },
+  "44688801.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (5) - 1#... [4]...",
+    "Ground truth": "93 bpm"
+  },
+  "46160972.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "Caption: Angina pectoris",
+    "Ground truth": "Yes - t wave in lateral leads I, aVL, V5, V6"
+  },
+  "44256693.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ - y   25-50 C (Grade II) - y 50-100 C (grade III)",
+    "Ground truth": "Yes - Monomorph QRS complexes"
+  },
+  "49757998.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "onasal QRS ST depression. Lateral T wave inversion.",
+    "Ground truth": "Yes - Acute Myocardial Infarction"
+  },
+  "45150192.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /b &&c, / a &,a//st#,/:\n\n/D�,# && /ata to,,//,la,//&,ast&&//, /, including of /va&b,&/.\n\n,/., a, to&st /,&,/,&c&, / / && planning,&anka, & &,&:&b�fa,&b /, /&C,,&& / /&//& /i / /,,,/&sted planning, to,&///g, &, a& &,, /va, &o, as a/ditional, to/.a &, to /, & a /, further,& /b, /Dast//b &a & /,//b,, c,wa, //b&vice,& to/c& &#/,& &d, /a//, &&,&va,, hard, / to,/ /& / to/d&mate a&r, /g//va,//day /b /d/, &a :b / /a/w / /D/la & /b/&, & /&&,b: /,�/a�, /don /&,a ///,& a/t / / /#,a/ && &b/, tofa & a:& true,, & Dust,& :/a/ack, /itional&& further /c a&&& &//&&c /, b&//G//b /& && to /&:it /va /stitional& a, and &/b /st / /bida /, toal,& of /a /, planning &c,//#c, &//a/ /#a&&alth, /v&&b/la//",
+    "Ground truth": "70 bpm"
+  },
+  "43855566.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\nthe best is \":\n\n  :\nand so the best &< pro - a  |&r\nthebest in \nwith this best 6D:? life, “. are “the #best with  / :\n\nThe Best Price of...\n  : “<gl” (as “thebest “/ and “here’sbest “at the best\nfor the “...\n[if\nor “best of “the “this would”Best Ballard Pro/” on its best\nat it’s the most “Gav” :\nThe [ “you’re “that” for “on the...\nbest “I’m\nit’s “there’s out ” as ““you’ll “a” the “best\n\n:\nthey “are “a “a’s Best\n\nat least “as “ “they’ve\nfor “a’best “of course “...\nif you’re”\n\nand “a best “the best’s best\nas “be “so what’t or “how best” see &mry, that they should\n\nany “ “the Best”\n\nfor an the better the more “an “a”, they’ll” if\nbe “of the best of the best \n\nlast “of all so “true best”\ntope\nnow “ “a really “best “\nwith any “the have, so “here “the right “\nin most of “ “that be\nand “\nyou “\nof gold “so “that\nmore just “that those best.\n\nto you “...\nthen “ “all “:\nresult. the best “so.\nyou “say\nfor their “is “\nhave a\na “ best “\nYou’re so “make “\ntold “\nany “the greatest of “\nso “ “so” then “ “\nand also “they’re\nso said “at “ the best\n\n# “your know\n\na “the last “so\nso go “",
+    "Ground truth": "90 bpm"
+  },
+  "49845916.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/&b,, to, &, /&b///ing, /a,c/a:,//,&&/#&, /�,& planning,itional, /c &&/s,/D/ /&, as, and, further, to /itional,#,& & &/,/&,wa,,st/to/d, /it / &,//&&//& to/, /#,,/ast,,//itional, planning /& of /,&day,/ / /bsted,,b, & /d, including a& &,/ &c, /,bata,&, to&r, to & &&,,&b/D,, /b,/c,,, including, on/, &/& /, & : to, /t, / & &,&.\n\nC,, & to,,vice, & b/. &b/ /, /itional & /, a, /va, /g,,/a,/age to& //b&& & /la/c,//D/,& to,&/D,&/b/&&& /a/w /a/�,/,/all, / to/& &&& ://& /b/ #&,/Db, //&w,, the& /&&,//a / /&#fa, /alth, &b,&//, /o planning, /w/d &&b/r /,///&/,, of &b /& /va/la /, planning,&a /a & c, / /to/& :b/ :&&itional,& /don, / a/ true, /st/D & /b//b & /&a, /: && a /, to,d, /D,&/,b",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "47105092.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-100}ECG analyse;Due to the patient's age (75 years) the ECG is normal. \n\nTachycardia (RR 120-124 bpm);Supraventricular tachycardiac (SV-T) tachy;Pre-miocardial infarction;No other signs of ischemia\n\nTachypnea (47.9%)",
+    "Ground truth": "Female"
+  },
+  "48539238.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{\"D pQRS T wave 0.3-1. (V5-V6, V2-V3)\"; \"F. brad\"}\n\nT wave inversion:\n \nT wave abnormalities: Non-specific\n\n",
+    "Ground truth": "48 bpm"
+  },
+  "41485194.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "́ T wave is the right axis deviation, not a regular r-wave.",
+    "Ground truth": "ST elevation (septal - V1-V2)"
+  },
+  "44680335.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /,&,,,/Dva:,& &,,/ /,#, a/c,&/ to,va,b,, of, &,///,,itional, &&&, a /&,c,,/,,, & &,&//, further,, to,,& a,&&r,a,, assted &, &don,/ &#, /a, / hard &d, / planning,�,, / / /C#:\n\n,, cva,,ast,//,,�va/la,, #/, /b, and,&&/,/.b /c:,//:&b////&, /day, &:\n\n, to,d,,//va, b,//b:ast a /,, a, /:b, &ata,&#/& to, to/&c, / to /, vou,&ing,b&: /&va&/fa &, /&# : to /&& /, / &b/ /# /,// & /wa,b /va/, & /&:, /////,st,& to#,, further:/D, /it &&/astmate/,va//,& / /balth/d,& on::, a& /b/r,b:& &b, /d/ hardb /& / & /,� / &&,&d& /g, /c &//b/.& &a, to /b& further /& a&//i, /al,&e, /va &b/add /,b &,/&/D#b//&b &b/w,, see//,/adition, /nil, /t,//G, / da & / & && /a planning, &",
+    "Ground truth": "72 bpm"
+  },
+  "40480848.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", & a /  : to\n\n&, / in & / &a/ &,& & && /, & (ion &: / on &:\n\n&a / & the /&, & & a # main //& & / A&&&// &,, &/ planning (don / &: &, &: a &:\n\n&&age,&& &y, a / Titional, &...:\n\n&, A & /alva a&, in, && &&, a, to& / & & &a (sh, to be & &land / && (a&& 10 a / &, keep &a & a/ (ha & &: don &, but & &, a & &y to a/ & (a & &… &,:\n\n& a && a&&: && da &, to &&& plan /&& burt a/ to & a&a/ to& to & & (b: & & y&/ a /& & ( &/&/ & & :\n\na/: & A#&&a &, in & &d/ & a: a& (&& a/&a to / (a/:\n\n&/ : & &> && Plan &&la/ & /& a / to :/ A&set & / : &&/ ( && plan &&back / a/ :& &:oral &&al a & (& & include /& /& to (& a:don / ( & & to &: to / & (key& & a+... &&: a/wh (to & &alition&/ to /: &...& to/&…&&\" && to /& ; & &back&& to: / a& &a& &…& (time&&...& & D:",
+    "Ground truth": "Right bundle branch block; 1st degree AV block"
+  },
+  "41557513.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "isposable - 1.5 cm heart rate - 60 bpm; inferior lobe T wave inversion; non-specific ECG",
+    "Ground truth": "Yes - ST elevation (inferior leads - II, III, aVF)"
+  },
+  "48675160.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "assistant\nCardiac response rate: 74.0%: percentage in men;\nRate: 69%\n\nIHR: 67.8%; Percentage with standing: 66%.\n\nRate:80%. Percentage with exercise : 79%\n\nRate:78%, Percentage exercise=64%\n\nRate:\nNormal\n90-100\n\nEuropean\nEpidemiological guidelines for coronary risk",
+    "Ground truth": "67 bpm"
+  },
+  "45191429.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "EqualityComparer of the information. No abnormality is present",
+    "Ground truth": "Yes - ST elevation (anterior - V3-V4); ST elevation (septal - V1-V2); ST elevation (inferior leads - II, III, aVF); T wave inversion (septal- V1-V2); T wave inversion (lateral - I, aVL, V5-V6)"
+  },
+  "44692221.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,bata, /,//,&,/&, &,&/stand,,, /va:,ha, &don /gast,&b,, to,&/ditat, on a, / &/b,st/a,/.,,&&, /b&&.\n\n,//a,itional, & &&,,/wa,// a,//va, toitional,va, & a, &b,/, &&/, &&&ard, a, to&alth, &a, hard a&&/ a,, of,b&,& &, &//, & /b,/ : to/ true/ a&, a:, butal,, &/&/#,,,,& /,, b,, the, &g&& a, true,, an, /la/,&,/, to&r, & de, &fa, / to, /don, &/w,&�,&,d, /&,:, a/ planning,& :fa,, : a, main/&tosted,,true,, further / to &b& & a& &va,, on,,: a&a, &ack/ & /a,, W/b/,, true &,//: of,,//d/bfa, &st,& to / to :a& /b/g,b/., to /&&&//, /c, &:it, to/ of/b &,, a/ditional && /all,,building & /:&& && &// /a/. to / a&b:&va & (a, a&set /&/& a /, to:& a&:&, c/ to:itional to the, as &, / hard& & to, da",
+    "Ground truth": "62 bpm"
+  },
+  "49836691.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{140. - Tachycardia (PR interval):Regular rhythm, 80-99 bpm}\n\nTachycardiac (TCA) rhythm:Possible tachycards but no specific TCA identified\n\nMonophasic R wave pattern in leads I and V\nMonopalmondeol R wave with a slight PR interval\n\nUnpredictable QRS complex tachycaidaire",
+    "Ground truth": "102 bpm"
+  },
+  "49252705.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-150 bpm} non-specific ECG.",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Atrial flutter, Ventricular Rhythm"
+  },
+  "46368876.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ") -  (Dose:cardiac complications} - of the : 10 Kardiaor}",
+    "Ground truth": "Yes - ST elevation (lateral leads- I, aVL, V5-V6)"
+  },
+  "47135850.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "хови your ecg: 50.0-100. bpm",
+    "Ground truth": "67 bpm"
+  },
+  "44416101.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## ecg_unsafe;\nECG unclassified; Hypertension; Myocardial infarction; Cardiac amygdala dysfunction.",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction, Ectopic atrial rhythm (< 100 BPM)"
+  },
+  "45591992.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "omid stimulations: 2; ST segment depression left and inferior",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "40385254.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " -!# &/  |{\" (on -  - : and) {=$/:\neuroe the\n\n5 & : D&D= -! / (knight:,< 1- (ealthy and\n, 4+ ( # 10+ \"D\n\nBillion (b) - 9: $\\item} :hence$ -age in 10:! BAC:\n\n# -eclipse\n& ( 5\nE) ## -{ | |:\ndollar: \n      !:\n-:\nspid# - 1: {\na: on - (a)! /re:ed, | - /# a#; |  |\ns - (Tall -nate! d / a - # 1!&:\neconomy! - (d\nA! - 15: (a# -: \na&a :hseal, a#... #set?:\nCrisat:sh! -lateral 3! # -}{! /ecl t\nDomec -e: (the! :& :arlandia# 2020: A!/ / -# | -t : (SSE: {\n: |:! - AAD:spare\n# (aureance:  - a)...:\nT  - 8: to!# USDT\nease: e/ (a:!hast of the! -# ( - (HISHA: +$<eager>! a)...\n# - (USAA: CASH forage! -?/ :& |: ;e/  - #shelf:!: \n! - (Mack/turne:acel  | -:G:\nelev -!/ -  !&-:\n# -!e: All - 7themish; - #: A (inland|",
+    "Ground truth": "49 bpm"
+  },
+  "43549829.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "(compare to: American Heart Model); Normal ECG.",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, Left axis deviation"
+  },
+  "45832910.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM - Sinus rhythm with a rate of 60 bpm; Normal ECG",
+    "Ground truth": "Female"
+  },
+  "49093257.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "країan heart rate: 78 bpm",
+    "Ground truth": "104 bpm"
+  },
+  "40157298.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,&,: &,,/ /,,,va/D,,b/ditional / / / &, and,/a/r, &&//stand/,, of, & &, of&, to include,& &b,, a /b, &/itional,, an, a,,/D/a, /a, b /, /,/,/ing,, &, &don, &d,, / /, & a,/ :, &/a,, including,/ha,,/main/, a& & /, of & planning & a /, the,, on/a/dition / /y,, and/ / : a&,, planning,  :,, & (c, & / main/,dla,&#,,/,/, &:,, :,,sted/&: to / a,/D#, to/&day, &faio,& /,&/ / a / / a/t / a :a /,/. ://,, the/,& a, /wa, / of /&,/w/ a/, /&/ : /b/ hard/:\n\n,&& / / of/a : to /b & / :,&b,& of /: & / /: a/ W, /: /b: / of &, a : / : /, to /& &/alth & & /: :&// / & /a/ / /a /a& a/ :/a /, a a/ to/, the / : to&, / :al, toitional, the & / a& / a/ & :& /: of / & : to & / de / & & & : / a/ral /&/: & &: & a/itional / && : / & a :, to a /:!, / to",
+    "Ground truth": "81 bpm"
+  },
+  "47512664.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&/ &va /aast,:D,//,bata,b/r,building,&/D,&sted,wa,,,& to,#, /it, to, & /va,va, including,, further,, on &, / /, /c,to/va, a, and, planning,, a&,/D,,/a, /g,,d/, /,&b, a#,va/c, of,# to,st/d, /b, to /, include,la, /,, toast,,  to,, &b, /i,�,b, &,, b/r, to/ :fa, &&, / &,b,d/ing, / : /to/true, to &,bao, &a, a/&, a : /o,#&, & da /b/D, / a /C, // a& /,w/.,b /, as,, /ack, /&a,,/, /a,/// /cvice, /d, /r /, to see /bva, /tova/itional/itional, hard /wa,:/,,//&,,ke/day, tobuild,: & a,&&&,//va /b/, c//w/tva,: /,/b/the/&//,&, to :b,,b/ /a/alth, /s:b//b //vall / /b/r / a,/ &don /bstand//d, a&r,/ to /&b/r &d,/ : :&& a, a/D, b: /b / to / &g, / of, / the, tova,c/d,, and a, c /to, a /a to /sted",
+    "Ground truth": "No - no evidence of pre-excitation"
+  },
+  "44181377.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "RSS indicates a rate of 40-49 bpm, with 47% ventricular.",
+    "Ground truth": "73 bpm"
+  },
+  "46927780.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ModelError - Clinical characteristics for a 30-year male patient; MONO - 20 events",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "40743164.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "hlas = \"Atrial flc\"; \nMonoterial (non-therapeutic) - clinical classification.",
+    "Ground truth": "92 bpm"
+  },
+  "40843647.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ")){%Total heart rate: 76.8 bpm}\n\nHeart rate = 76 bpm; Heart rate < 100 bpm; QRS complexes are normal.\n}\\text{abnormalize}{ECG_abnormality}.",
+    "Ground truth": "Left axis deviation"
+  },
+  "49953252.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",& &,, &/ /,//, &&,,, to &,:\n\n& /, of,&, /a, as,,/,,&&sted&: /,b,, /, / and,// to,& further,,//&, planning,itional,& /a/ /D#,, a,, including, / / & a /.\n\nva /, a /:,&st/. / &, /&, //, to, //D,&/D,,  /& & / /,/�, /d,&/g,,Far, a&, &, &:, to/ &,& b, /D/D//,, on, & /#//,/ to/itional, &&r, /b& /b,/stand /,& to ://a &/,& the, /fa / a, /: /&o,&/a&, : /toalth /, planning / /c,, the /, to /,,building /bio,&b && /&:, &fa, / to, & to /:build/&,&:&,/Data / a /b : &b /,wa, / on,,D / /& /: &&& & : / /: true, / & & /&sted, / : /, & :, /////, to of /:it && hard to/ / /b & / :,, cand: / of, / of / / to / / / of :,& : /a to /ast& / to a/ &&b /b/r & to,/ / to&r /, true : / &b, // & to :, a/ / : to /a ///, / da, &// & / & : && &",
+    "Ground truth": "Monomorph QRS complexes"
+  },
+  "43678750.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " / : (wage, / a / of / to / to the & / of, W / a& /age/ /age / kea, w/stand, / / A &  : /age (to do / & / a & / to [ / \n\n, & & & a /, to / / to  / a\n\n: / a : & / and, / :\n\n, keva to /  to /key, 10 : / D, : d / a! / / (at / a, / : a / a all / (a, & a, £ / / a + : / : of / & a :! / to, / a/ a / : da a /a, U : / on/off : to / a/r a / ke / a y & a/ : to ; : a/  a : / a (a / a “it /a / / :force / a a /? W / : to. A, / W / Datab / 10 / a | / a to / : / of a / / 1 / a  :a, / Aard / :don /b a /  : to! / &age / : & a c/ / W, a / for / of (/ / : // ( a / ; a /, : to a / & : a : to () a /w /a : / P : a&rt/ a : : / (w / a” / : A / a ; a to ( /a to : a/dome &: a :  a / ( / a: W uly / :d / a/> a to : / and / :day / 20 / : b a / £ a / A…  : a to a : a$ / a $ a : em / to : ( of / a? : a y to / D / a... a to e :",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Prolonged QT"
+  },
+  "45006501.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\nand strike insurance\nin:    the 1: E 2ndive \\\n*  risk #:\nAND EGENCY: CDD: and\n-4 #&{ (B+ \nt   : 6\nunify?Economic sense \nand# Fd in: a nd e:\nD=5: E : \n*:\nto sh: D\neconomy \n(5:1 \n...:\nHemiserve:\nfor:6:\nif :\n:9: E:\nAble \n=1:\n:1:\nof:\n7:9\n*7:\nto be:\n...\nto\nH: 10:1!\n:8:\nRisk...\n:10:4:\nFutures\n\nFinancial & stock!\nloss \nRisk\nthe:6\ninequal\nRisk:7:\nT 1:\nsafety\n:4\n:call:\n:9:\nat: Risk\nC\n-1:\nhe:\n:7: risk\nrisk:\n:5:9  H\nRisk:\n:3:\nTheoretical \n*7:1 stake\nthe :res\n-:\nand\nEm:\ne:\n: B:8\n:\n*1:\ntelligence:\nloss 10:\nH:\n:15:\n:\nBart:1\n: 1st:\nEMIN financial \nrisk \n: 8: \ne:\nEd:\nspend Financial \nEconomic\nRise 8:\nH: \nEd:3\n:6 : 3\nEconomic:\n:6:5\nEd:9 \n:6 R side\nt:\n:8:3:ed:\nand:\n: US:\nEFFECTS\nthe\n:5:\nE\n:9 \n:5 \n*ED F\n: ED\nBare:\n:4 \n:8 \n:5 \n:ed\nFear\nE:\nHos\n:19 \n:ED \n: Ed:5...\n:9 E:5",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, 1st degree AV block"
+  },
+  "47996455.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " reluctancy of QRS and ST -<font color=\"blue\"><font color=\"#ccc\"></font> <font color=[\"green\"](<font color='red'>V2-V3)\n\nLAD elevation <font Color=\"blue\">-10</font>\n\n<font Color=\"#8c8\" (V1-V2)</font> and <font\nColor=\"blue\">\nV5-V6</font> \n\n<font\ncolor=\"white\" (PQ) </font>",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Bradycardia"
+  },
+  "43600603.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n- (DASH)",
+    "Ground truth": "107 bpm"
+  },
+  "49157512.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ - 1st degree atrial tachycardia",
+    "Ground truth": "Yes - Right bundle branch block"
+  },
+  "49788080.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " +#+#+#+#+#+ são anormal electrocardiograma: Sinus tachycardia de 180 bps\n\nSinus tacho",
+    "Ground truth": "1st degree AV block"
+  },
+  "43985043.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "&>loss=sh\nTGA=:\n,= 2027,#;\n$1: \nOSSD< ˝) D{1}# = on {2020=}\nSavé qo=\"a\" = {\n} &=?\nonset Jad= “\n\nOn the “-“\nS”< (m)\n\ninjury= :#dose{&” to\nB$\\x{E6h  \nonset=;”/ \n\n1:8. / 9\n\nToxicity/loss=;\nAHA# :\n\noncall=\\\nGAMeasure” \nXenosis=\n:  (and$\nto\nexcellent, \nS&:\n\nWDT? \nEconomicall\n=\\\nso:\nWef: \nthe \nAha? / \nHARDSS:\nCLOSSE\nVOD: \nAHA\nSOS\nEva ;\nMgE:\n: \nXEF: \nonel\n(standlossing)\nexactly\nE\nAHA \nforcesl:\n\nEVA \nswevent :\nFODALY?\nEVA:\nUS: \n\ntigerize\nAe:\nEVA\nSWS\nWAS\nEVA?\nAHA \nNED\nA\ntofearE:\nAHA :\nEVAH\nto\ntheed\nEVE\nSAGE:D \nEVA-\nex\noneway \nW5.\nIEM:\nEPA \nofEVAID\nEHA;\nsovere\n{e\nEAA:\n\nVIA:\n\nElena\nAve\n\nwills\nwEVA;\nGSD,\nEVA;\n\nthe;\nA\nExeGND :\nthe\nW4:\neda;\nGIVE:\nEva\nw\nAESA\nWard \nexposure;\nvola!\nEd\nAwa\nwedge\nE;\nVAE\n",
+    "Ground truth": "Left axis deviation (-30° to -90°)"
+  },
+  "40127490.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " toItem ( 0.00\n\n< g = 5-9\n- <  $\\beta$",
+    "Ground truth": "1st degree AV block"
+  },
+  "47528590.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " CBC - 120 bpm",
+    "Ground truth": "54 bpm"
+  },
+  "43527997.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,&:,,//,:va a,,#, to //day,b&stand,va, of, &b,,, ///,, to,/D//&,, planning,, and,&/turn,,/., /&g,&&a, /a,,b,&,&st,&b&, a,/a, to&, / /:,/,,, a/ hard,/.\n\nD,/ /c,, & to/&, true,,it,&/Data,&vice,,ata,va /,fa, as,&//, tosted, planning on,/to,b /,& /ast /a/., to/d,//b&io /b,//la/c,b//, including, a&,//:&,itional, /b& &c,va/v,,/&to vou,& b, a /b /w&r, &//, further,//ast:b/bva, / &, /,, //, &d, toalth/va,,/a&:va/&//la/&c,// ava to, c /a/,, further a/w/ata, to:D//b, to/tva,/va/:wa/va//&b, a/b,/,/the / ///true,& a, /C, tob /// /,:/ /, /va /al,,: a,ad& /,bata, &&b :/ to/.//, &, to/to/cata///c, &:D &&, &a, a/a/ /fa/db, /w,b&r,,ac,,va:b / / /g/a/ke,&#v/ /, to Dust,&",
+    "Ground truth": "54 bpm"
+  },
+  "41362854.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## sine rate: 60 bpm\nmonomorph ecg\n\nRegular Rate: 50 bpm",
+    "Ground truth": "74 bpm"
+  },
+  "44321632.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&/&don, &&, /, a,stand,, /#ing,,va/d//,b, & /,/itional, /&,,,/Dio,sted /b/.,, on /,, a&st,, : /, / to /, &a,, &,,wa,, including, /b/stand //va, a /,ast,,/,&, to,d, to,, to / &�,,&fa, / &a: & /techn,, the,,alth,,la,,/a, / as/ to, to do &b,, //, and & da,, true, / a, to &/ha/Don, & a,,/., & to /b/,,& &, tosted, /D, /t & & && /, planning /, toast, to/va : &, / de, / D,,//, & & to, /// to /g,, include / to& / /, t,,st : // of / &/a : &b & &,  &, : &&a /, #, / : to /: /, of&,b/ a&, & of, & :&&, :&,& /&& to & &:&/,,b to / /& /:st / && :& /b / & & a &/ /& & /to / /a&, a, / a : to a, / / / & : / / ;itional / a / b :, /all & / : & a / : hard / a& : / &, aD /, : of /a /a, / of &a /,: & & /&alth &, &#, & c & / to : /to :",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous inferior wall MI"
+  },
+  "41144902.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/laalth,,,/b: &/D,, &,, /,stand,&sh,va,,&,&:sted,,//,, to,,fa,a,stand/d,,std /,,:,,/main,,va/w,,itional,/D,/to,/ : /:\n\n,d,,:/,, but,//& &, &/ &,&d:,/but,,&r,, a,,:\n\n, /&, /r,, planning,/a, &:,#,, c,,/a#,& :,, it,, on,,b,,stand/,, &y,, the,: &, planning &,:\n\n&,, in,, true,, D, &a,,/.b&,va/la,, include,,:+,,wa,, wa/,,set,,a/la&, &va,//,b & /,& to, to :, on /, a&r, / de,,,w,, : &, of,,&a,,ata :/&:,&g,, and,,ard /,:la,: /, /va/ to,&cl,, of :, / to, including,, da/ld,,:D,&rown,, asb:, & &:&/w,&/b, &b, to/ &: &a:, /b, /a/, &.\n\n,:/all,, for/, to /: /c,, official, to:, hard, a&,/astmate of / &, a /, to\"b,& & &, included,&&:it,,/D/,&+,, b,,,d, /:,:&,bitat",
+    "Ground truth": "66 bpm"
+  },
+  "49872320.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/ : /age a /, &g, to / on /standstand /don /  / /& / /b, W / /A� / / hard / to / D& /a, /.\n\n, a / of to, /, c& / b& / a / to a / / true / a, / / to the / and / / & a / in / (w / further & / A, / / a & / /.\n\n / / /.\n\ntrue & / & /:\n\nbata / :\n\nA / &  to / /c /.\n\nG / /  to & a & to / : / /to / /, to / but to & & / to do / : & on / & & : a : / to U / & to. / &b / a& / an / to : /g/. to / to [ & & & a: / to & to : to / b a / ; / to, to see / a : to & / for to / & on & & to a to / a to t /  a / : to a ; / main / to to / he / to official / to on & /  on / / : on / to “ / a// to / the / / and to / at / to b / to plan / to include / to c, to : : /& : / & // to / ; : / : b / / à / to g : to hard / / Walth : / a c / & : / d / &a / to \"b / to  to : a / a it / to ( to a : : to : g / /: / : a to & : : aard / a “ a /” to / as / to ; to / A / /“ to /} a / the to /  : / la / : : e : to“ / to” to : on to",
+    "Ground truth": "Yes - t wave in inferior leads II, III, aVF"
+  },
+  "40043854.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## bpm 120. \"Question: patient has tachycardia (HR=120 bpm) with normal QRS complexes; Tachycardiac rhythm is likely due to ventricular premature beats. \r\n\r\nTachycardinergic risk factors: Hypertension, Ischemic heart disease\r\n```/2```",
+    "Ground truth": "105 bpm"
+  },
+  "47668729.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&: /,b//,,,/b/,,, &,,&,, planning,/:,/Ditional/technition,&/to, /a/techn,,&r, /#,&y,va,&�,va/d,,:/t,, to,&it,,bao,, /,va/W,,/.&,bata,,don,/D,b,,b/r/&c,,/main,&&/day,& :,&r,:,&//b/&a &c,/va,, a,b/,,�,//, &/, &sted,/�, &:\n\n//, to:+, a/la,,ha,&t/,&ing &,/,stand, /b&:,/&b,&g,/ &&,&b&/a,,va/r: / further/, /&: && &/mate of/&, & &,&gt/wa &/ /, &:,///,/:,, true, / of /b, of /dvice, /:,, on a,& of/ &b, & / a,//b,: & / /: /a, to : &, /D & &/b, / &: /&&b: /b/Ditional:/,/ :a &&:///d, / main:/ :&b/Don : of//b/d, &to:, &&b /,, W && / //b:&, / :&: to&bance/ & to :,,true / : /,& & : and, a&, :, / on &: to /b/d//b/a, /fa& &c/&:&&, toal, /",
+    "Ground truth": "70 bpm"
+  },
+  "43675136.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{#心率 120-130 bpm,ST depression left lateral leads definite}}",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "41506136.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " CBC age: 34 years old.",
+    "Ground truth": "74 years old"
+  },
+  "43504496.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",& &#c,,&va,, &/,&,,it,,,//, &,&fa,,la//,, /&, a,, c,, to, /,,b,&r,ast,/ata,///, a/a,&y,//a,#, ///, /b,, #/,#//,&/, /�,#&o,,itional,,/D,&&, including,,sted,,c,////, to/ast,,�,,a#,, a /&//,wa,/toanka,,g//,a, to ///&a:&/vice,&a/t,&b,/va &,/,, of, / &, &b, true,, planning/ /,itional&///d,,:C,bData,,/,,//c /va a, &&& /,&//va/ / &&,// /true,/st, a/&& &a&// /,/#,& :a, & a,&/ditional hard /&va : &&�,a /fa :, / a /a//,:/, /itional,& /&/D&//&/b&, /:+ /&#,b/&, //&//b/b//,/Dva, /#& /b/ a//,va,//d,//w /& & /,bio / :a /&fa&& further &&cva&&a, /D, a& /a to, &a planning /c/stand/, // &, of//t /, /va,/c&r, to mak, and/,/D,, the///c,bida,//g, &",
+    "Ground truth": "70 bpm"
+  },
+  "45408133.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "assistant \n-4-  = 100 -  $\\%<0.5 min : (re: 1.2 min) - \n-7- 5% min : \n-9 min  -8% min\n-10 min \n-12% min \n",
+    "Ground truth": "84 bpm"
+  },
+  "41360760.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, to ///,va/ planning,,/& &&,,, true,#,,st,&stand & /D,//, /,,�: &a,,&,&&& of&, &d/cb,&to, &,, //ing,/ :it,&st, &c/d,, and,, a//&, as, to include,:#, / on, to, &&: &#/ &:&a, //, /:\n\n,, including, / /, of&/&, /&, #:&&, of,b, to&,: /ata,&b,//b,, & to, / &, ///&&sted,&////aitional, /ast,/ /b, b&r to,b&/D,&/.,&://balth,& /,:, /b //,:& &va /& to /&bast, / a, towa,, da, to/,/to &,&va &,b/ to, to/la &&#, tova, to:, to/r, further, /don & a, /:b//&fa, /t,, of /&/ ///://: /&& /& /:build &&& &, of : to,//c/ &b://va, hard & & :, /c// /& of a /,// :C& to, of//b/w, /itional&&b && /b &, a : to & :b:, of &/ /, /a /, & / of /, a&r,,true,& &day&, cand a,, planning &: /b to & && &b, &b&&//: &&",
+    "Ground truth": "Left anterior fascicular block"
+  },
+  "48702649.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ypse",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "49034107.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/// / &&&stand,:,,,&,,b, to&, of, &,,/a,&r,&&& &wa,, toitional/D,,va/w,la,,d/t,, a, hard/r,& to,&�,,day,,a,, &don, &/a, the,,/,,&b,&/main a/tova,& & /#, & to, & a,& a, to, including,&/ planning,//,,D,#,&stive,, /b&sted &/la, tosh,&: a, /&,/, & &, a//, &a,//s, to/vice,b//c,,/D,/ata &/b&, on, the /b,, according,//&a,&ing, /t,& /,& b : a/ha,&//,&c,/&, &: / & a//&&g, &b&&, / /b/a, to/d, &wa/a/ /a://&,&a /&&a&& to /b//,/b/ack,& the,&cl &/true,&w, / to & &&/&: /&b/.b//& &,&the // : /&a/alth / /wa/w:/&&// to,, on/ /& / a,//:b//va, /, to /& :&& /a/&/to/ && a/wa, &//&b/w &:&: to/ W, &&ard to /va:, true,// of /aanka, &/ :&b & &a &, /d,&#va to: &/",
+    "Ground truth": "79 bpm"
+  },
+  "46273412.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ẵng d caps at 1.5 cm - d ecg abnl",
+    "Ground truth": "Right axis deviation (+90° to +180°)"
+  },
+  "44679996.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "&Tachycardia (73-100 bpm) - Sinus and ventricular tachycaridry (55%, 50%, 45%)",
+    "Ground truth": "58 bpm"
+  },
+  "43210236.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "*  =heart rate: \n= =_?_heart rate _\n\nNote: The heart rate",
+    "Ground truth": "100 bpm"
+  },
+  "42154935.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " PBS \"Suboptimal\" cardiac rhythm",
+    "Ground truth": "74 bpm"
+  },
+  "42401721.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​:irregularly irregular t wave pattern;non-specific ST-T changes",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "49265316.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " -  - ineb:\n-<exposure\nhereina 1/9: e^ (1) and a t= 2015. \n        # 1hence & 20 <Hypothecarefully,elevs\nfor 1) the# :<br> of 1 6honeybittering&7, 2ndor the \n\n            astatinflucate 3 1\n          |a{\n        #tuberculosis} \n             and    -1.2 HONe \n     C diphtheca\n        a.   -cathnesses\n        1  \n   '-Disease-\n       in order to \n        5-4- \n         exptension\n        hemicathes\n\n     Fdisease\n 4(1) \n        -evidence of \n\n    a \n        disease \n           -attribution\n\n        an \n        onefectively\n    (1 \n       1stly\n           a   \n- (1hospid \n        disease\n 1 \n                theadherence\n               cures\nof \n       !      dshort\n    ofthe\n            a\n        evidence\n            of\n              /evidence\n        case\n          e^,\n        atonia\n\n        of \n            the same \n        (1\n         :1 \n        exanthemis\n          a\n          o\n        :8Hepatitis\n           \"and\" \n          of\n     #malaria \n       = 1:\n         Epiq\n     and therefore\n        IEC \n         (Epidemi \n    {EPIE of}\n         case: \n        of\n    #SSEI:\n\n                    1Hemorrhage\n            (GOM\n       astatinate\n       ! 4\nevidence\n\n-    \n    asevere\n",
+    "Ground truth": "70 bpm"
+  },
+  "44363383.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (whance:SH : PR #SH:age /&ry:whless sour?$:$:SH: A Shak inshot,ry Sabroadness:SHAD Score/full: $whfulness! 1:SD RE: ASG Reish:SH [Ary sp-longcome/whstandshot: whfulness secory:D:SH Ary $DD:RY:SH AUDS RESH SD 1 :whness full-timeyard: Sigma £ness Whit /SD RESH AD: Shot -SH A/Super $redlay / Shield? UK: $pow /ageful:RDSH:SH SRALification ofstyle Spar:ODSARD $10:shade Alistful $: GBP /dose,shitional: Rheful &whence/full Spar :setoryfulcoming aries/sp:SH arrition ofletliness $setfully WHfeiteshire: $:stage/reishless/no Whitland $set whit /recting:strike /Aryshotful $15:UA ^{set / AOSALisation/fullnessalty potential /whlyshelf:potlor/drylandlessness ofryshelf: potential /rysetal whliness :widthless/whage,ry:suple/whrylandy 10: AUriage /drylandliness whit / AY:whness! A1ry:domulation $rtly?A5:SHAGE/ASk:Potlandland /A0rylandliness &ry:AUD /WHLY:ABMRlandliness $Duly /age :whliness UD ARlett /Dry 1ry $:LD/hullINESS Sab 1ld/whalth:RD GHORY APOAL:DOM/a-minute €setlessness!OD /SRADry:SPADE\nREADlet/rage/dry:orld /stage $:potential; A1 :SD /devtal $powless/rageful AUAL",
+    "Ground truth": "Left anterior fascicular block"
+  },
+  "41415929.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "aname ≥ 80 bpm; QRS complexes are inverted",
+    "Ground truth": "91 bpm"
+  },
+  "49046503.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "##stm\nAbnormal ST-T pattern due to cardiac disease;no specific information available",
+    "Ground truth": "Yes - Monomorph QRS complexes"
+  },
+  "41414616.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "heed to 100 bpm (80-99 bpm)",
+    "Ground truth": "76 bpm"
+  },
+  "46111385.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / /.\n\n& &, / A / of, bgt/stand, a/d, / hard/dizg a /.\n\n, Dva, in / to d, / a/. and including a the /  of ccl /a/ / W, /.\n\n/Ditional, / the /b /, & & g, G, plan / : / /b, / planning /, to a & on / to / a, / & a, A / A, /& a t, / to a to /.\n\n// & & &: / a &, & a /:\n\nis to, a a / / da & a & &, a & /.\n\n to a / a / of /&d/a / to the /& & a do, / bta /, a/ to see /, ; / a/alth a / to b a, b a / ke & / a. a / de the /, the / a of /.\n\nw/ a& a / an / to far / to to / to make /& / to & to & / to see a / & / & & a& to a/r of / of a &al a /; / of ( to / am / the to / for / hard/ a to of / a a& & & to / ; & ; / & to a/a of a /&/ / &, to & a/ /, / ; / U / a : & a! / to, /, A ; to / / to G & / new a / ; : a / the/ to /. a /  to /&land / a c / ( / 10/ A / a&, & ;, / : the / to ; / to ( / to/ to ;, : a & the / / a to a, all / a ; a /, la / a, / 1 / to, / /$",
+    "Ground truth": "123 bpm"
+  },
+  "45949524.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&, / &,,,#//,&stva,,& &#//&/D, a, a/,,b#&,, /, && c, on&/&, a&,&& / & further,, &a, &, a� a, and,//, /i,, as / &&#b, /&& aanka,va, to, & && a / /&b,#, toD, /c, planning,//#, / to, of /&, //,&:&,/.itional, / as, & a,, further& /,//&va, &it a& / /,&:\n\n, & b, a&r,//:la,, including,&g : /b, a:,ata &, to//a,,itional, & planning, a to /&o planning / to & /b/ast/a :itional,&// / / a#, & Dust, to include&,///wa, planning /& &d,,//la / /va&r /& a,& c&& & a&&, to /# / a& &&, &: a// of /fa:sted a, / hard /a &, of the &b /b/d:, aC&mate /& as && &/ad/ to,b & /va,#&a, /b / /t, / / : /, a &&&& true/ &//b,, to & & /&: : / to / /w&&//:D,//aalth /& ///, & : /a& a/a&&# to / a /to/ / /it&: /day,, a////& / to//, cand /b : &,/ of a,",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous inferior wall MI, Bradycardia, Left axis deviation"
+  },
+  "45815249.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-Cardiac amhythm or flutter}_{a. grc}\n\nNormal ECG.",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Atrial tachycardia (>= 100 BPM)"
+  },
+  "46266709.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",b /&#&,,, /,&, to,//vaD,itional,, planning, to/c, as:#, on,/ //D,//:va, a,va, &/,va &&c&&g/dla,,& /,, to: /&b,/C &a,//,, &b,&�,,// /wa, &,,astio,///,,/stand /,/&,b, / &va,/,#,, da&/ to,/techn a,,b/,, & to,,/d, & /, /b,:\n\nb &, further,, a/D,/D, a /,fa//b, :, to /a,, b,//&t,bata,//itional, //, /to,,alth, of,, t,:/ & &o//a &,//b/r, / to /&,:,&: /, to,d,,va/c,st,/ata,& a, a &a &don, / /,/.&//st,,/a,/:D,, and, to/.// /va : /, c, / :&,// :& / & to ///&va, /a/.,,/.b//va /b:,,/dva,, building,,://, /:+/va,& &,b: tova, to &,/ack &//,/ hard,:D, the, &:/ & planning /, &//g, /c,&&/ :G to /b//a&, /D,,build, /&//,sted,//d//,&b://&& /&:, / planning /& &//&:&,va:, :b,//",
+    "Ground truth": "T Wave present in: inferior leads II, III, aVF"
+  },
+  "46918102.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/stand, to/ /&, a, &&/ /,: for, on, but to, and /.\n\n:\n\na, /, an /, /c /a/.\n\n & &, / a & a/ a / on/.\n\n/w, /b, a /ast : a, /,/, a/,/ to // a, all /, c, do, /.\n\n,va /, a/c, &b/a,, & a, a/, on & // (a, in / of/ a/ &,, a/a,/a, /a, a & &a/, b,/.\n\n& / a/ to, to, a/tio/dis, &/ to &/a, a/b, /:\n\n/.\n\n, a, a, on /, &, a the /\n\na, to / a, to a a/. / a/d, / /, : a /itional/ for, a/: /b/ acl, to& a/age/ on/ a the, on/ to a,/, & : a/:\n\n/ toa /a & a/a/ /.\n\n to /, on & a / :/ / (& &, toalth a, ke/ a &/ A & /a / / to /.\n\n&/ : to / / a /a\n\n& a /,&/ for a/ / a to / to/ & on/ : a.c/, on a / / & : /, to : a & :/ a a, : & a & include / a\n\n&,/ & & a,/ a : to a / a&/ a//, to & a : a/t, a c/, a&a/ a/a : a,d/d,, to/a/ a/d# / author a, da / a/rast / & a on / : to/.\n\n",
+    "Ground truth": "67 bpm"
+  },
+  "42731325.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (also, 2019, the; 1.\n\n!# / 7! :! vce?<}“\n1. 4!<{ “. |<“ “(Wine!”_ 2018. 6!} “ -}” “$-“:\n\n1. :E\n2. 3 : E. 2017! “\n1 : :\n\n! : 2.0: 5! #“_” : “8. e : “:\n8 :“ 8.0 3! :\n1.0” :2 : “...” \n2. : “6” :\nC\n6. 5.1.8 : :“\ne.8.3.12.7.:\n1. :\ne.9.1 :2.2.4.6!8. : 4 : 1:...\n8 : 10.8\n2 9. :!\n3.\n4.2!“11.”7: 13 : 15:\n2.17\n4.18\n4:2 19.18.20...\n3 14.18 : “ 23!”\n9\n3.4 :24\n5!9.16;\n2.9!\n3.2 5\n7.20\n3.\n3.8.\n4}\n6.\n2.3\n4.\n6.7:\n8.\n1.2\n5.3.\n8.4\n2.\n9.6!\n4.7\n5.\n\n3. 8.\n8!\n9.10.\n11.12.\n8\n12.\n9!\n14\n15\n17\n8!\n18\n\n18\n19\n20\n21\n\n30!\n\n28!\n\n29\n\n##17\n32\n\n34\n\n31\n40\n39\n\n41.33\n\n52\n56.65\n61.77\n62\n\n64\n75\n",
+    "Ground truth": "108 bpm"
+  },
+  "47316002.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "**\n\n* Cardiac ECG - rest of normal findings\nNormal cardiac ECG",
+    "Ground truth": "76 years old"
+  },
+  "48858794.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## heart_rate = 76.0 bpm\n\n## pulse_velocity = 24 bpm\n## pulse_duration = 1 day 10 hours\n\\\\\n\r monotonous rhythm\n ## blood_pressure_monitoring - systolic pressure 120/80 mm/h \n## blood_pressure_monitoring - diastolic pressure  90 mm/h\n\n\r normal rhythm\n",
+    "Ground truth": "80 bpm"
+  },
+  "44429075.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",b,a,& /stand,,, & a/ to,, to,sted,&c,&#,//,&,,itional, including,,:\n\n,&a, /b,&don, & :&:ston /va,ake, &a/ke, /, &d,a / a,bata,va,&w,,st/.,ball /&&,b/a, a /itional,&sh,.\n\nwa: &,,&&g, &, W, tosted, #&&to&a:va,�, /&,to, w, as, a& /&al /balth,& to,a/ld,&.\n\n/Dc,,b&, / a/t /c,D,#,, b,  to, a, & &//, /t, to/!, /it, &&, &:techn/d&&b /,, a: hard /a,, planning, / &/ /b : :b,/ to / : /#& /,b/ra, a : a&b, /a/ & && a/true, ://b/, && &/w, /: /& further, : /, /r /a /A, to: /: to: & /, :, :ad/, /# &a&&a//&b,d, / :/a ; / :a, on/,,back : /c#,& &: &,/b, & to /a/.:&,w, to /&: /c/d, & ;, /C, on, & /&/d, :a/.&, to Dust, /s: to/ a &, including /,: /A&r, to :fa /b,b, : &&",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "43693065.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "Caption: Sinus bradycardia, normal; no abnormal findings",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, ST depression (lateral leads - I, avL, V5-V6), Irregularly irregular rhythm"
+  },
+  "44116139.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ModelError",
+    "Ground truth": "51 bpm"
+  },
+  "43472246.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&,,, /itional,&&,va,/D,/b:&, &,,//,&#:/ further & to,,& /�,&/ &,D,& &&,/, &&/,,ast,,c,&a,, & a,//stand,&fa,,/,/ :b/c,, planning,/&c,va of,,&r,, true, & &:,&//, c,&va, &b,, to /&, including,, a,,/va, and,& as, &g, /, &//c, &/b, &:io,,:\n\n/,&.\n\n#&, / :b,/to,,b&, hard &b &:&b, to, to&,&!#, & / /:,, da, b,,itional, to Dust,,:,va /,st, /:& /,,#&/&:G, / &,b,//c&#, tova,, on /,ata && &, //, / /, to/, /&la/itional, &i, /sted& /C,&wa, & of,/ /, a: &&alth,, it &&&/D, to:, &e, /fa&/:D,# /a, a#,b :&:b/,va &&: &//,,/a, /D:/ &, /b& : /b/,b, / of/, a & &&a /&/a,: &st, include, a/t,& planning,:st/Data:+,b / &va/&,b/b to, & further,, the,//&,#: &/it, & c",
+    "Ground truth": "1st degree AV block"
+  },
+  "43093625.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":;\n* 2010 - update\nThe presence of coronary artery disease is a complex to show \nData: Focus 100% \nInformation: Social \nSocioeconomic culture \nResults:\n* Percentage change in patient information: 80.%\n*   Number of participants \n*: Percentages reported by patient\n\nRisk factor profile based on age (age) and sex \nRecommendations: Risk factors are assessed as follows\n \n* Age: 58 years old (patient)\n \n* Sex: Male\n\nSubstance use : frequency of substance-assessment = 70.8%\n\nRisk factor for hypertension: 65% \n* % risk factors as of \n*   Glycemic diet : 80%\n*    Cardiovascular disease risk : 81% \n \nRisk factor classification of cardiovascular disease :\n*   Glucose tolerance : 25 %\n*   Lipid parameters (in mg):\n           Hyperlipidemia (Hypercholesterol) - 10-1 \n*        Lipid status (in women)\n          Lipoprotein cholesterol (Lipids): 12/1000 (men)\n            Lipid metabolism ( lipid profile): 20-50%\n\nOverall, the results are from the following \n\n*   Hypertension \n*    Hypertenisia (hypertailor): 30% \n             Hypertrophy (hypersensitivity): 75%\n               Hypertensities: 75%\n\nPsychological risk factors :\n*  Psychosocial stress : 85%\n              Psychopharmacology : 60%\n                Psychopharmaceuticals: 73%\n*            Psychotherapy : 57%\n            \nPsychiatry-related risk factors : 76%\n                 Psychiatria : 74%\n\nEmotional risk factors:\n                  Emotionally: 67%\n                  Emotional response : 66%\n\nSocial risk factors\n                  Socioeconomic behaviour : 72%\n                    Socioembarrassment : 71%\n\nEconomic risk factors    \n                     Economic",
+    "Ground truth": "91 years old"
+  },
+  "49907418.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", ^{e} r/see force that:\n\nBart  .:\n\nAld: of force, if & EAD: (g& in on 9, String: Tassortive trust, and? and & 1.:\n\n* see to?\"-ness? of? the\"t\" #;\"\n\nof course, for profit 2” +?\n\nto“culling &“”” and “E.”?” a’ly, t” /:\n\nand:\n\narea, AIA#:\nw: of &?e\",“,”&r.,”;?”e?\" &duty “, “?”” with” A”e””/ (SOMAT”e:lye,ra“e”,e?lence of “:”e�ژه”]d”?e.g?e”eže“s”ebrica,”hance“,ce“ion, &”l”ecliance“e”lcome:””e?”r”e’someville”e”?e”see“e“,e”?y e”lance“e“billion”eighth\":e”so”ease of“e,”d“lence“e’read”evice, a”ha”e?”:llish;e”o”e“”eves”e?,e”rhe\":\n\neduce“e,”:e”ldlawrence;e,”tence”eira””lisa;e;e,ecent\"]”d”e,”lloyd;”e”,:sh”evious“e;”d”,e”]“e:”davocement;”emission“,e”#e;la;d”:e”y”eva“eaw””york,least“evene?e?;”",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "41921035.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## heart_rate = 50 bpm\n\nRegular rate: 70 bpm\nSinus rhythm: regular",
+    "Ground truth": "145 bpm"
+  },
+  "45332708.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,, &,,/&/,, a:, /,,//,&,& &, planning,//b,,ast,,&/&,,/a,,va, &:\n\n&&,#,, /&,:,, to,,.\n\na,, //,,ake,, of,, and,,#/,,, Dust,& /, /a, /b,/, a,&&& a,,&A, / to,&st,,a,& a&b, &�,, hard,, planning &, to vou, a/,&/.,: to, & to, /c,,D, / as,/Aitional,,building,,sted,, including,,:/,,&a, aast,&#,&d,,,,: /,//&,////&g,,/D,, da, &: a /b&,/Di /,/Da, :&, //&,d /,&//&&/b, planning /,b/,, hard&, &&,/build,,wa,, include &/to, / /, to/w,& hard,b /, a& &:, to /b//&//,,bao,/ planning,b, /ing//,/ /,/b/&:, a /&//alth,, w&b/, /&b/main, / &, / on a, :,&b/,b&:&, aD,,/. / to/D,&a, to :,,b/d,/a, a & &,& b / &/, /: a, /A,, see/true,, included,, but,,,/,, c,, #, / a /,a/,/",
+    "Ground truth": "No - prompt follow-up recommended; Previous inferior wall MI, Previous lateral (V5, V6, I, aVL) Myocardial Infarction, Right axis deviation"
+  },
+  "45644931.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,,st/, &,&a, / of,,va,&,,#,bao:b, /,la, & /b,, /a/itional,,stand,to/&,//,, include, to,va/stand,b//,#y, /technio, /b/:, on,va /&, a&&c,,&stage, planning,alth, to/ive,,wa,,/!,&stand, to /,b, as/ast,/b�, /sted/ha, &&, / /c, &b,&st,/a/ /g/dition /:std,, to:mate,, planning & : /b/. to,/it,,////, to&,va of a, including,,a: &,, &/ &,va/t,,ıl, tosh, /ata/va, /:// /D/D,, hard,/ to /&sh,,:bva: &/d/re,:,, da, & :&&/ further, /fa: /bke,,/.&&,balth/dvice,&broad &// /, a/w/va/D& of a/ack,/w/wa & /:day,, in//a&r &/b//b/D:&,st:/ & &st,&:, /# to:va && /b: &b//a,b:,a /w / to /:va&&&:/ /, on/b/d, /laalth:&b//st/ /va:, to/c&b:: /a &&:st to,& &, &don &&& /wa,/.,&c//scl//a&,&va/b: /,&",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "44462935.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\n* \nMortality: 10% - Tolerance : \nDisease:  \n-   D1 : 0% - D2 : D3\nMortality:\n- D4 : D5 \nMorbidity : D4",
+    "Ground truth": "Yes - ECG shows significant abnormalities: Previous inferior wall MI"
+  },
+  "45830224.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " toItem, SB; None: ST depression",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "40470651.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " بيانات são de um monitor cardíaco com uma frequete de 60 bpm",
+    "Ground truth": "68 bpm"
+  },
+  "42123904.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " independently \n 1. - \n\n-   # < k = #</sub> -<s> # 0.01\n\n-  -#< s.05#<s > s #> 04%<s>.05# s<%>\n\n-< k= s.</completely >k=## s< 3%= 0;1%<; 4%= 4% <s; 5%;<s;<0%<;}\n\n* - (a) < a)%;\n\n    # 5%; 2%# < 1%#<1% < 0%;< 0%\n\n             (1%)# (0.02%)(0.1%)\n\n            (0%) (0%)\n            \n                % (1%)\n\n                  (0%\n                   %\n                    % 9%\n\n\n                     # (6%) \n                      (4%)# \n                       (3)% \n                        (1)% \n                            (0)%  \n                             (0)%\n\n                   (0%        \n                   (1)%\n\n                 (0.)%\n                 ( 0%) \n                             (1%)\n \n                              (0)\n                               (0))\n \n                           (0)\n\n                     (0.)\n(0)%\n \n                               (1)\n \n \n                         (0%\n\n                   (%)\n \n                  (3)\n \n                   (2)\n \n                    (1%\n \n                     (4)\n \n                      5%\n \n                     4%\n \n                                6%\n \n                             7%\n \n                                    8%\n \n                                  9%\n \n                                 10%\n                                11%\n \n                               12%\n \n                            13%\n \n                          14%\n \n                           15%\n \n                              16%\n \n                    \n                       17%\n \n                       18%\n \n                        19%\n \n                         20%\n \n   \n                      21%\n \n                                          22%\n \n                                       23%\n \n                                        24%\n \n                                      25%\n \n                                     26%\n",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Bradycardia, 1st degree AV block"
+  },
+  "46090447.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "isposable (PR, V1-V2) - normal ECG",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction, Prolonged QT"
+  },
+  "47901247.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (G)  [MRTI?Economic insurance\nreale, not #1 (not on sale?\nwith: the G/MSOe?and the will of gendall E?r...\n- on .EDT #onc?\nthe  on e or so:\nToil,t# =a \nCOSRE :gloss\n1STG: and /on \ngloss? :\nsorc? &on glossy\n- on?\nThe 2.oh\nisol# g\ni. \nThe first\nglossed #g\non #re\ngorel\no,hence 1 in?\nglosses\ngossle\nInstitute of #gloss :on...\n(On s:are :on\non i\nThe on\ngsl :\ne.gosse...\ngloss 2010 g\n(gold) of :gss\ng:\nglossle\nin :\nto gsh:1\ngose\nresult?\nThe in gso\ngloes 1\nThe\nBldingg\nGloss\ngall?\nfor the\nin:\ngordones\nofglosson\ngostle\ns:\nThe in g\ngordle\nThe one ofgloss :\ngloss:\ntheodg\ng: g\ne\nIn :gore\nin\nGross\nAlec\ng\n(USGLore\nof\ngollers:\nGloss?\nin...\ngoregl\nW:G\nInGore\n1 8e\nglose\ngorg:\nG:\nG\nthe\nGoreles: gory\nG\nmills\n(1 g\ntheoreg\nTheode\nGard\nand\nG:\no\ngorsol\nTheore:\ngore...\nAgle\ngory",
+    "Ground truth": "100 bpm"
+  },
+  "49148661.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ - 100 bpm heart rate",
+    "Ground truth": "Yes - T wave inversion (septal- V1-V2)"
+  },
+  "42613050.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "illance: None; risk factors: Hypertension",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI"
+  },
+  "40780806.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,# &, planning, &&, / /,,,//,///, further, to /la,&,, /, of,va, as /�,&d, /b, a,b,/,c,& to /, /itional,& / and, to,&&, a/d# /,st,, &/,,/va/stand,,wa, /fa,,&/a,, a /a / a & a &/ &,, //, a&,/D,,b&&/to,, including,#,&: planning,, ke, & to,va:\n\nb,, :, a/v:va,&va&st, of &, to &, #,// &g,&sted&&:,&ast, a//,& &/a, /va,/., & a, to&r, to/wa,, to da,& a, /a,, da /&,&fa, asb,&//, &D,,/D /, &, as&, the&,va& &,b/D,b /b&,b/t,, true,,building,/b / on:va &, /&& /& /,&b& further,&/ & /s,//mate a / &a,va a,,alth,/build, and& /o, a&r,#&,//ast, to/w,, planning of, &b, / :b,//a, &//#/ a& / planning, /st /balth &/true, tova,, b& / ///b,/Dir,/day &, & / /&al, /w &,/to&& of /ata,, on a,&don,,va /, a/,//",
+    "Ground truth": "59 bpm"
+  },
+  "49986054.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ HR: 120 bpm",
+    "Ground truth": "86 bpm"
+  },
+  "46906999.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "isposable t wave - yes, but only in leads i, v, avr (V1-V3); supraventricular t wave inversion",
+    "Ground truth": "Yes - t wave in lateral leads I, aVL, V5, V6; inferior leads II, III, aVF"
+  },
+  "49050823.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",bata,/stand,#,,, &&, /a,,st/t,//,// /,va,, to &c,,& planning,, and,/sted,&:,,wa,, /,/D,,/, &donitional,,�,/ of,,/,,&,,va/b,&b, &, /va, /g, &/,,/data, & :b, /fa,,//&,/�, a,&//,, planning, a #,, onitional, / /va & /b,, da,, a:,///, of, & to, to,,/a, & &,, as / /techn,,/D /, &to/ &,&&r, &b/r,,al/. /b /#, to : &,//://, /b/a,, main,/la / /,,/., & /, /#ast,/ & :, /&,b, hard to ://,&sh /,& :,/va,// :,, include & && /b/,/rown,/ :a /itional, to the, ///, including, / further, / of,/b/&va, &//,alth,,building /fa/:, to /&bata &, :,&&//:, / :/broad,,b:, & a, / & & & / :/// :, &:,/main & / & a &: to /itional&&, (/, /: /& &: /,:/, to:, a / / /&va /,/age, /:\n\n&bance, /ha /b/day, /alth, /d,,:, //,, b,&ing,",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Irregularly irregular rhythm"
+  },
+  "45258029.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{\"ST depression-LV depression-PR alteration, bundle branch blocks\"}",
+    "Ground truth": "No - no evidence of bundle branch"
+  },
+  "43289207.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## normal_ecg_block  \nBlock is T-wave in lead V1-V2; premature ventricular beats are present but no significant block activity\n\nThe best answer comments:\n\nIrregularly irregular rhythm \nT wave abnormality: Premature ventricle \n\n## Normal ECG\nNormal heart rate: 40-60 bpm\nNormal systolic blood pressure range: 90-130 mmHg\nNormal diastolic blood presssure range: <90 mmH g\n\n\nThe best answers are:\nIrregular rhythm (no information provided)\nT wave abnormalities: PremATURE ventricular tachycardia",
+    "Ground truth": "1st degree AV block"
+  },
+  "46485154.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\n* :\n\n  (in &: / |): #).), and, :\n\nD: \n\n. {:\n\n* : \n\n$? \n\nand !&, D.,:\n\n:\n\n! :\n\n: #:\n, not \n, :?&; ( : \n\n( ) (1)  +,\n\n5\n\nElection?:\n\n} N:\n^/ (}:        (re, “,... :”!, [] \n\nto: |;\n\n,  in??:\n\n5.:\n\n5,} on ;?.\n\nA, $ (:\n\n, for. “(}”, 8;! 4:\n\n( (order ?:\n\nif:\n\n}:\n\n4  e. : a “? :\n\n7 4\n\n“? 1? 5:\n\n5\n\nt:\n\na +!:\n\nend\n\n5:\n\non:5  : \n\n5\n\nelse: ( “, “\n\n”!\n\n(a: }#:\n\n4\n\ns,5?\n\n5} “, e: noisland ”. : see:\n\n4?:\n\nid, “:\n\n10 :? “, 5” “.5:\n\nresult:\n\n6 :c:\n\n5” 5: “e” #;”|:\n\n: “:\n\n”;\n\n5: 5?\n\na:\n\n5:, to:\n\n4 : (v. 5. see:\n\n5 : “, A\n\n11” 3 :”5: ? of ;:\n\n5  a. ::\n\n5:\n\nG\", : on. (i:\n\nshort:\n\n)] e “;”:\n\n5\" 5 : :\n\n&:\n\na “,5 :\n\n6: a “e\", the?:\n\n8:\n\n5 on, a\n\n4, 6 : 5\n\nd”= :“\n\n5\n\nit’s\n\n4 8 :\n\n5?:\n\nend:\n\n5? :\n\n” : “?!:\n\n5“\n\n9, ead\n\n5:",
+    "Ground truth": "Nonspecific intraventricular conduction delay"
+  },
+  "43355500.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",& &, /b:, of /b,,,&, &va,,//,/D,ast planning, to&,,�, &,,itional&&#,a,& a&, /va, & &, &&stand,&:,&b,&//&&&,//& &&&c,,va,sted, & /,,alth,, &/#, /&& a,, to,,/a, a, true, /, a&/ a : /&,&&sted,st, / as /,a&&set,//b,la,& planning, /ata/c# /&b/,&a, further, a / &b,/,&//, /:\n\nb / a, to include, to /c,&st to,& including,va//,b,d,astitional, planning, a�,&vice,,#,/ & /c Dust, /a,, / & :, / #&,b/b&&va &&b & :don/ack /&va:&&/va& & && a /&al, a/ &&, to/b/t on /b&balth,va /b &&:C&to/va, /art / :&&a#, & a /fa, and a/&b://day&st, to/D,va &# &a,&r, a/r:va,//: &, including /va:,, as&&b //a,/alth & /ad&&//a /&o, / / & hard / /b /& & /b//b /b/. /,&d,&va,& to a, a &,# / a :&,building,,sted/a/dive&",
+    "Ground truth": "T Wave present in: septal leads  V1, V2"
+  },
+  "45414184.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## AMI:ST\n\nLateral leads",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "47428466.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "hlas de 30-60 bpm",
+    "Ground truth": "93 bpm"
+  },
+  "45592534.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ždy -5.0- -1st bisected - I,II",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Ectopic atrial rhythm (< 100 BPM)"
+  },
+  "48847995.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /bata, &art,, /,,&/�//,va,,,wa,ast//&&,,st &va, on,b& to,& &&va /, planning /va, a,b,&,la, including,, a&r,, to /itional,& /a,, &,&it,& a,&galth, &a,&sted, and,&d&,va:,,/.,D#,,fa,&set,&/D, &anka of, planning,,itional,itional & tova, &&, to/Dio,,build a//,,b/, && further, & && &don,,c, including /a&&al: &,, da &d,, as,, planning &, to:&& &, & planning, &va / & a,, faritional & /astra,b/., &titional,,#to, &b, /&sh / a&, & /bastmate&,/ / a/Diast/d, / &b/,b/b, :bata /b& & &st&/day :va/wast, //,, include & &b&va :,&&&b/ to&&/a, /a:/b &va/stand &&b,, :st,,building, hard / to& to /b, a&:ad,, on /b&r, &:,/w&b: &&& planning & & /&, / /&a,st /broad, to, true, & of//a, / to / &, / planning, /va:&alth&a//&c, /st/r&to&&a :G, a /ack,& :,,&a, to the",
+    "Ground truth": "Yes - T wave inversion (septal- V1-V2)"
+  },
+  "44418716.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{ \n            -inf        \n            -SH class II/III\n            -ST depression yes\n            ST T wave inversion: left axis deviation (left anterior)\n            ST QRS complex depression}\n            Other: no information available",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "46219695.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / &, to,&c a//, /&&&,,& /&,st:,&, &, true, to& /a# /,,,Cva,D,,it, / /& /itional,, /, a,ast/ &,, &&& a/�,&& &b,, to#sted,,D/D /,&b,////,, asa//& to, / planning,,//& /,//,&ast, planning,b/. to, planning #,, and &#, as, to/,//i /:\n\n,#d, /a,&//, further,&#,,#,#://ata,&fa//&bio,, a&, b,& of, as &&b a,&.\n\n,,b, planning /st, /va/c : planning, /don, a &, & /& & /, to/d, //, ///,c,,/b//,, ke,,&r,& &, include /b, &b /, & a/b& a /, //b,la &&,/day &, /ad /wa c /, /b/c /a:,, o,&va, including a / /b / &&va &/a#&b&& cand /b Dust /b//&a, &//c /b/ to/ack// /C,&:, &/& /techn&//d,, the hard /& :/vice &//ke to/ /b:, to / /, on,&true, / a / to da,// &, planning of a/&,b /&g//&, /Cata, true&& c,va, &.\n\n, a /# ///c,",
+    "Ground truth": "No - no evidence of bundle branch"
+  },
+  "49900359.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",& to,&,,, /b, a,,&#/ &,/D,,b, / as,, &,, the/va ///,itional,, true, &&,&://,//, planning, /&#va,,/d/alth,&.\n\n,,a,,D, &:\n\n,,�,& of,,ast,&&, &b,& further, /d,, including /b/, /&,/.,:,b : /,,st,, vou,&b&, /,//: &, & a,/,,//&,#,,#/stand, a to & to a, to, to a #,, on &a&&sted/D,#b,, to / /,/&:,,:/,//g//,/ &// to, &//&st,//# a/art, & &,//al /c&,&r,& /,wa, /true,,/,,, further /b&&///a / a,&/.,&&r// & & &&&va //b,//a,//b:,&a//&//, a/ :&&& /&&building /b /, /la &#, to include,&/a /&a,&c,,/ata /fa, / /#&&/D, toast,,: a, / & & /day,, a /&b,/tal,&/:&& & /,& & to /&ad:, a&, of/,///& to//va,& a/c,&//t,/vice, /C,#w,,&r&,:G, / planning/b/& /bva//,&,d /, & /it,",
+    "Ground truth": "ST elevation (anterior - V3-V4); ST elevation (lateral leads- I, aVL, V5-V6); ST depression (lateral leads - I, avL, V5-V6); Acute Myocardial Infarction; ST elevation (septal - V1-V2); ST depression (inferior leads- II, III, aVF)"
+  },
+  "47903449.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " cardiovascular examination (coronary), and other \nin which the patient is performed in \n\nHeart\nconditions.",
+    "Ground truth": "Yes - diffuse ST upsloping consistent with early repolarization"
+  },
+  "43655707.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&/&//, planning & to,,, &,, to,&:/vaitional,b,&don & of / &sted,,#st, /, on, as///,&,,& &,a,& c&,/D,/�,,ata, toitional, & &,& a,&r,&& /c,, aanka, & to / further, /stand,&/, & a,,/ing,, the, include, & planning, & a&/techn, including/ata,,//, including,&//d, to & &/D, &a,/to,,la,&io, a/&, &itional,/a, /& to,/.,, including & /c & & & planning &, :a, to /D//,/art, to/,itional, and,//st&//&, /b/D,, included,, b /,,&r /, to//,//fa,//&:,b ///& & /, true, &/#,, / & / &&&,bata,/ke, /: to &/&va,:, a /b,//b&///b,, //&,& /,&&r, to mak, /c/d, /day, a,& b & &//b, //, &&st planning &&,//adva/c, /D /&//a & &&mate, / to ///t, to/c, &b, to/tast,, hard / & to//s,, planning, //c: &// planning /&,  to, hard, a&,st /,//the a, c& to&&& c,&b, /G/:+,itional///&wa, to",
+    "Ground truth": "Right bundle branch block"
+  },
+  "45473728.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "uracy of the vent -scalability rate",
+    "Ground truth": "74 bpm"
+  },
+  "49287149.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ": 5 : for, &:\n\nD: A) insh,eclast, & a /> 1 : to the\n\nif in /d to, d: 1000: (A&A, which of the eis& |: onsh D, and)!.\n\n: not 3 in!&c: e &d: 4 D) 1:17, U: & D: :& D: D:age, a 2 D:,&:nd to/1000, 1 a, so ;& A D:ale ispot,a a:\n\n*1 :18,atcl, which were to deioning, in; a &a, 16: a, a: 10 date,force: A0:AT&D, T:back,dw : A,D:1, but/stand, Re: alet a,realty Date 1, of,D:ris:alid, in! 1”set & DUTS, &:AD :D:and,&e:1 a& N: a: D) :&d, a, of emming a1 a a 19: acom:NYSD a, FAD:ion;thema:ID Ward,e, a : 4: 1> Walth a20: a1 Aid ;1, a0ayroad, date 25 :& a21:16 &d] a & 1}a 15: SD: aaimland AID: SAND: a0,fra,& Ashot:1 25 a# a:nd: 1024: Sand: A816, D :&8 a1 Pot : ID 1, a2dpath; ofemming 18a SD: A1 32 a&d{ A0 Y:24 a18& of 1 D",
+    "Ground truth": "85 bpm"
+  },
+  "49497411.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## shock;\n\nMONITORED FOR:\n\n* Sinus tachycardia (atrial)\n\n* Monomorph ECG\n\n",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction"
+  },
+  "48656372.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,,/techn,it,va, /&g, &a,b, &std, as,itional/build, planning, true,,/main,//,va:/D,b/c,, to include,b/,&, /b&st,, and, to,, but,,ata,va/�,/&,banka,/.&/true,/ake,building,, /,,va/dition,& &&, a,&/&b, /va, to /a,,& /b,,wa, ///, /a/r /, / &va,va to, to a,day, toast, /key, to/ha, /c, to&/,,b/.,d//b,/.,, &b,&b/sted,,b/t, /ack,&alth//,&&b,/,, a/&// /b/itional, tova,, //, b,to, & / :va,//b / &,,// &b /&a, &, including /a//t, / on &b/b,/a, //ad, /to/.&d/w,&:, / /b/do, /gt /&, toalth, hard, ://,/.a,: planning, to:/, /true /b/.&st /w /va:D, /building, /w:+,/b/en, to &/.b/ true of /itional, /it,a / &&b/dive /b/add, /r/a//, :all &&&&//b/D/a /b//a,va /va /b /b/a&,a,&va to/b//, to&r, &//b/ata, /v to a/a /but /true, planning / /,",
+    "Ground truth": "*** CONSIDER ACUTE ST ELEVATION MI ***; HR: 90.1 bpm;Sinus rhythm with interpolated PVC(s).;rSr'(V1) - probable normal variant;Anteroseptal infarct - age undetermined;Inferior and lateral ST elevation. CONSIDER ACUTE INFARCT;Abnormal ECG"
+  },
+  "47234162.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​:asymmetrical ST depression (V1-V2, V3-V4)",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "46367375.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "країan t-wave descriptio ST-T  non-specific ST-T pattern",
+    "Ground truth": "Yes - Diffuse ST segment downslopping; Monomorph QRS complexes"
+  },
+  "44236309.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, / a//, to/,,& &,/Dva,,,//,#b,, planning,a,, of,va,/,,DC,, c,, &&, &,, on//#,,/dio&,&,//itional,, a, a / /sted//,,ata,,D#,//b,ast, & a&,,�,vaD/., /&,fa,, vou&st,,/c,, cand,,/ /,, as,& /,: /va,b//,&&, /o,, to,,/D,&c,&b, planning ///, / : /la,//c /b, including,,a&r, /aD:wa,,/a/, & &, /, planning && to include,,&r,, far,va /&b /, /dva/, canka/,/&,va&&va,& true, / /&mate,/b, : hard,& b, to &&&&//, c/r,&fa,&to,,/w/& /b /c/D /,& to /a,&/vice,/D &:,& planning,&D /b//& a& / / /b/&//ke, & :& to, / further, planning/ : &&#b/w/ ava, &//&,: & &b///the,/a /&// /b,d/ / ///&& /: /& tob / &ad:D& :,/,//don &&balth /t,, da,,astb/c, /C/D:va/ &#b&,/ &va&va/ack, /b/.,,#a, / true",
+    "Ground truth": "90 bpm"
+  },
+  "43838642.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,,&,, planning, &c,, /,//,D/�, /b,a, a,, as,,/D,, : &//,,//&,ata, tova, /&,& /va,&st,& a,&#,, to,&//, /:ststand, / true,&/.,, a&, of,, &ast, &,fa,,st&,la,va,,b,, further,,itional,,/,,//b/r, /true /&&,.\n\n,,:,,#//o,&alth,//day,, c,&&va,va /b /,,art,//va, &/b,va/D,&:,#,&o&, /t, a / &, / a, //#&, planning /,&b&, & to, /a,va//,&&r&&/,, on, / /,c/ &, //,, including,,anka /va/d,,:/ /b/&,b//b&&:\n\n, &va &b, as /, ///b,&/D,&don//d &// /&to,va/ to,, hard/a,,/, to &&& b, asted / / /////& &&C//,//sastmate, and /,: to,b /&b to, a &b &//a /, to see,& further /a //, & a :,, #i,, include, to /,ast//, aast, /buildb ///,b& /b/c,, ana, &&, a//to, /ke,,ad, a&r,,g,b/la,, //va,",
+    "Ground truth": "61 bpm"
+  },
+  "47249965.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "лини 50-70 bpm, sinus rhythm",
+    "Ground truth": "83 bpm"
+  },
+  "48227368.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM LVL - V1, V2 and V3; Low voltage (> 5) - Left atrium; Lateral axis deviation",
+    "Ground truth": "Yes - Left anterior fascicular block; 1st degree AV block"
+  },
+  "49156595.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\nThe data:\n\n-8.0 \n\n-7.0.0 \n-8 4.0-1.0 -2.0 3.0.\n\n-5.0\n-6.0.\n-7.\n-8-0.\n 9.0\n\n-10\n-11.\n\n-12.0-\n\n-13.0 -\n-15.0",
+    "Ground truth": "Yes - Right bundle branch block; 1st degree AV block"
+  },
+  "48635541.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,//,D&:,/D,//c, /a,,,&b/. &&,st of,#ast,,/va, true /,& to,art,, a, /st//, /la,//#,, /,//i,#itional, &, including, / as,,va,//ata, planning,, :a /,, //, / &//,va &,, && a/, / /c,, to&//o,b,,C, c,,a/c, / a,, on,, vou,&r,,b/c,,anka & to&&, & /, a&,&,,#,#/,,, t/ata, /D,, further,, planning /#&//#&&&//d /#,& b/t, /osted /&& /&fa, / to, da,, and, /#b,//: /&:la, to /a&&b/ &,/a�,:b/la #D,& a: to a&b & /a#ata a /b&&/b, tova,, cand, as /it/ / /b /b/a, & &b// &&/true, of /# &/c&, /g to,&&va#/& & /&b, /& to& planning,& /c/c&, the/stb,/D/r,#&alth /b :/b /,st, /va & & /b/D,&a ///a /a////, to/d, a&r,//to a / /, / hard& /b/w of,, c a /,wa,#ke, /t,, ana, /b, including : / & a",
+    "Ground truth": "Yes - ST elevation (lateral leads- I, aVL, V5-V6)"
+  },
+  "47986147.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ": Atrial fibrillation or ventricular tachycardiac arrhythmia",
+    "Ground truth": "No - no evidence of pre-excitation"
+  },
+  "40454616.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\n: &/ [in force on : { /$ : in (long, $ and |:\n\n- : and:\n- :;\n\nso;:\n\n1 - a :& -;:\n\nfor:\n\n:  = -spect,! + to :\nuse : “<sh“D\", : 8: easily ; |:\n\n$ | a  &:\n\non [call;}:! “/ “$ in: PDE “, &: a”,= -:\n\na /! : &:\n\n| :! /: : “, APO...: “/! / e: /”? a} ( /!\n\n:to :?e!+; |: $? E$:\n\n- ! “a &:is: “:\n\n:...:”! /!A, the &:!: $:reality! -““!: “g so:?”:force:\n\n: A’! “:\n\ne?!: “: :!:\nso “!:\n: A’d:\n\nso: ::\n\na “?:\n\n: “! (hence “:soal? :id!”: +: |:all” :!:\n\nG: |! 10:sp:\n\nde:so: |:\n\n!:\n\n:!::““? ::\n\nso “: (b :!power &!: |:\nd:so!: ::\nno” /a “: A “!:\n\nso ::!/! :!so to:\n\nso /a!sh: A:\n\nE:\n\n:“:! A “...A!c:\n\nsp:!:\n\nso,“: to!?\n\n: L6:” D?: G&/a: :“? :\n\n: to “: O :&\n\n:!&:d: to : A$: “B? A+: a!: do:\n\nso:\n\nLOR: |!!: A!:!\n\n",
+    "Ground truth": "Right bundle branch block"
+  },
+  "48309466.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​: atrial tachycardia (HR 120 bpm); ventricular hypertrophy; low voltage qrs",
+    "Ground truth": "133 bpm"
+  },
+  "45356204.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "+1 \n1 0 |",
+    "Ground truth": "91 bpm"
+  },
+  "44768836.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ECG monitor \nRegular rhythm (BRD)",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "44167990.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\nand the patient's heart rate",
+    "Ground truth": "58 bpm"
+  },
+  "46230148.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " Reaper score = 60%, patient monitoring category 1 - patient monitoring categories 40%",
+    "Ground truth": "Right bundle branch block; 1st degree AV block"
+  },
+  "40948642.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "​\n\nBilateral ST elevation",
+    "Ground truth": "85 bpm"
+  },
+  "47220995.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ - 1st degree AVN (infracture) with ST elevation in lateral leads I, II, III and aVF; 2nd degree ventricular tachycardia",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF)"
+  },
+  "47153057.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "cemence,  -data from which is monitored",
+    "Ground truth": "Yes - 1st degree AV block"
+  },
+  "49304648.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "...\n\n\n* 40 bpm",
+    "Ground truth": "96 bpm"
+  },
+  "41260191.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "(“The following“s” : “seal,e” (D)(A) “”the “(“V” |”( “D” “e”\n\n… |(t) the “ “gloss“e” “(”q” |(“e“( “theory” “\n\n… (e” e (a“e` q“e.g” :\n\n“(“l” | “( “(0“e, “(q“e”\n\n(gslf)“i “a“(”...e”...\n\n1\n\n”(u)\n\n…( “e”...“g” \n\n…\n\n”...”(e) “g”...\n\n… (Q)\n(g)...\n\n…(“g”\n...\n(“( e g\n...\n( “d”...\n... ( “(e”\n\n…”q\n...\n(e)\n\n...(\n...\n(”...\n\n“e\n...\n...\ne”...\n...\n...\n”...\n(g” \n...\n(…\n...\n...\n(e” e” \n(g) \n...\n...\n(a“...\n...\n(’e” \n” \ne...\n...\n(g, \n...\n(g) (e\n...“c\n...\ne)“\ne\n…( ) (q)\n\n“e\"\n\n(“u\n...\n“e\n\n…\n\n…(e\ng“e”, \ne\n“...\n\n(“q”...\n\n… ( “g”\n\n…(‘d’\ne\n…\n(“\n(“...\n(q “e\n...)“g\n(”(”e\n...(e)...\n\n”...\n(a...)\n\ne\n(...\n...\n(t)...\n\n(g)...\ne…(q”e”... (e...\n“q“...\n(s)\n\n... (“o”\n\n“e“\n\n…(”...\n(‘o”\n\n...e…e\n(v... “e”\n(“i”...g\n(g) ‘...\n(...\n\n“o\n...\n...\n\n",
+    "Ground truth": "Yes - ECG shows significant abnormalities: Previous inferior wall MI, Previous lateral (V5, V6, I, aVL) Myocardial Infarction, Nonspecific intraventricular conduction delay"
+  },
+  "43413540.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "_sessonal ECG: 80-90% of normal heart rate; ST depression in inferior, lateral, precordial leads",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "44338686.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ховиopathy, ST depression with inverted T wave and inversion of PR segment (I, aVL, V5-V6)",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes; Low voltage QRS"
+  },
+  "43272932.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\"High R wave,AV block\"\n\nHigh heart rate",
+    "Ground truth": "82 bpm"
+  },
+  "49413240.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "(II, V1, V2)\n\nMONITOR: Heart rate = 70-100 bpm; First non-invasive monitor",
+    "Ground truth": "No - no evidence of heart block"
+  },
+  "48705228.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / of & a : / &: hard/la, further /b,d, / : a, the /&, / / a / a, a,va / of :, to / a true &, do / a/D, on / /,, & / and, but a, of, a #, main, / & /  / / the / a hard / an, & & : a /:\n\nwa / a : a (a, : planning / / w / of /, & a, / a\n\n// a, including, / (w: / &/ a, include / de a,, /, :, b, a/w, the, / to the, in / : da : a further a, & of a/ to / / / & & / a t, / A / a/d, a /, : a to a, to, a &, to on a & & & a on / & a / / to / & official / a! / / hard &: / a to / to : a hard a / W, and & a, a / &, / as /, / true / : / / la / of the / / : & / Datab, &, a, / &b / to a / to see / & : to a new / b / /, a& /, the only / /  and / / of a / : on /& : / to, to of / a, to / : to / ; / & to / of “& / /b : / W / : additional / to day to / further to / (b / &, / / for / on a / of \" to : / a d & a & : /,  the / to, / a: : a & / to of : a r : / : : a& a, visual / to b, hard / a&, : to :",
+    "Ground truth": "Borderline ECG; Minor findings: Sinus rhythm, Left anterior fascicular block"
+  },
+  "48187983.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " بيانات < 30 bpm are acceptable",
+    "Ground truth": "89 bpm"
+  },
+  "42530555.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " jScrollPane = -100; non-preetermined",
+    "Ground truth": "Yes - diffuse ST upsloping consistent with early repolarization"
+  },
+  "41223276.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " VID-5-VI-10",
+    "Ground truth": "Yes - ST elevation (anterior - V3-V4); ST elevation (lateral leads- I, aVL, V5-V6); ST elevation (inferior leads - II, III, aVF); ST depression (inferior leads- II, III, aVF)"
+  },
+  "43034233.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " - 1",
+    "Ground truth": "71 bpm"
+  },
+  "47839066.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "láš 10-, ventricular tachycardia (VT) possible.",
+    "Ground truth": "118 bpm"
+  },
+  "45127145.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " =D#, 1} ; [=  #<ebrisea, in : ( -shape;# >10:9/5\n\n[  |=0! 5\n:\n*   D  #lineoutset(        AUC \"demonia \" 0.         \n\n-4 :5 6 + 9,!#!   :\n\nD  $ a : \n        : # :(\n         #8 8=5#  \" \n            # a, not the \n\n       a #  (T7 2#& \"is  # : 9!5 0:\n\nyou\n\n:        #!!\n\nelse ( & 5) \"y 18:        a\n# 8,5, to }! #  :\nA= !^ a+ 5,6\n,1 a =  -15:!$10:   #sunset:! a so,9, !% \n                   &=! # ( #\\nosec>9:      (Hence :  # 1: \n\n# # (A#1\n# :{1!=1)!        HSS A! 9\ntheoretical (Torus=,   : :  |! :\n\n            (10,  :ness a\nif\nBread=so!!= (->AT?D E :&renewanceful,\nUSage,at the$10',': := # ical! #! and 11:\n\n# Ural, 8 ( :!;\n\nand T! D:\\3\n\n## :,=#8 (a,  -0=H  * \n            { 10:        9=! 1\n$10, a =:\n\n#  :EUA!, \n$land!1:9,           % (noting!}$=!&8\n\n!",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "45367459.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM - sinus rhythm",
+    "Ground truth": "Right bundle branch block"
+  },
+  "46731340.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " :! W / w: &: !set: :set / t  # of :  : toshell  ;! : + : [ :  T: : 1 (whstand / : w / :\n\n, t : #/  : : : W / / : : wh realth : / D : a: :! on & A : of : : full / : a : sp ; + / and : #sp / $set :set: e / :set : :thlash :set. / : emal :set full: / for: road: : e, :setland : : loceral /  :ster not: #set!set [set: aim {setset: fullset :!:\n: £set: [full /:rtset: #:\n\n:roadset: 20:set 1:set of / 1set:shot: roadland:back / 15: : / :!setsetset :it /set:wh / : of: [setset / : &ry: 1:\n:sterlandset: UKset: /!set : Whit /:fullsettlement:road :set of: 15 :setset claimset / 5 :setback: : #setset whit :setful:full / : 1000: / :sterster :! : a0set /15: $1:1 :setistry:landset /set : /1set 15set:road / 4: : Whitback /1 : :eull :set 2:set:wareful: /landset : fulllandlandry: : em / 0:! 1sh: 4land : spin:1orb roadlandful / of : a1ryland :1landlandre: /setlandry!: a0: 1020stland! 1 :file /landing",
+    "Ground truth": "Yes - Left axis deviation (-30° to -90°)"
+  },
+  "46876997.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM - Sinus rhythm, normalSinus rhythm\nMin. heart rate : 64 bpm",
+    "Ground truth": "Right bundle branch block"
+  },
+  "41826721.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " / & / / to: &&, /, to :d, & of /g,,&,sh, //standal /, :&// /a / && /b, / to / : a,itional /&,itional, / / and /itional / : / /waalth /a, &: /, /don, to, / / &, /G /:\n\n&.\n\nb&, of / to : / D, / on / / of &, a / Walth, /to, / & : /don / /.\n\na & / & & & (, /broad :itional / to & & / : to /, & da / :! &g, / : &itional /ing, / of / of/, / &  to / :\n\n: / to, according / to/ : / to a /: / &: to / of a / / /: d/D, / and & / a / ;itional /,A, / as / : : to,  / /& / :& & : a / a : /& : /,g, : & / to-d & / of : &, : to, / :a / :“& a / :id / : in / :  / : A” / :: / /a&: / : from / : the / : on / & to / toage / : true / : U : /a : toitional : / : de : / & of ( : : / ona : /\" /: to/ / to” : / of/. to : to : for / of, /c, : /day / : planning / : and / : \" to /! / :\" / :! / : b : / C / :/bata, / a’ to / a “: / PDA / : t : to-do / to c : & :",
+    "Ground truth": "No - no evidence of heart block"
+  },
+  "43830071.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, /b/&:la, /,& to, / &a // /sting of,&,//, a/,, /c, /&o& /, include, /i, including, a/ &, &sted/D#a//, //c,&&,/ &//&,b,,va,/stand/&& a�,//&, /wa,,#io,,, &,&/&#,/&/a,b:,itional,&bata,, to & &fa, /#b&va/va, to, and,& a,,/da, &&& /&b, as /c / & c#&,D, #/ /b, :&,&: /a,, do, & & to,#,&day &, /aition///b,/sh,& &, to&b/ &: &,/ /&&/, a, to/Ditional, further,&a, / /b/c, & b &/.//a,b//,,& /:\n\n#/:b/itional,/,,/techn/ & a/, : &&// / to, &/a,& planning,&// &&d/. a/w, /t& & /& &a# &/b&,,b/alth /&/ /a/& /d/t /&,#&b& a& to/it / /va, / a:&, :ad /va &//a / /&g,, a /c& & &b:&/ &# a/ to & /bida,& further /c# /,/la//dva, further /&st / /c&r,, t,va/alth, to /& :, a&",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous inferior wall MI, ST depression (lateral leads - I, avL, V5-V6)"
+  },
+  "49632004.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, /va planning, &,,, planning,&,/,,/D,,b,//,,va,la,#, /&&,, a,, further:,, as &y,,/main, to,,//aalth, a///, /it, / a&,bsted, &b /, /,,#g,,&don,, & /, &:&, &/D/a,, on,,/d, a /,#itional,,,d, planning /, da, /b:,/, a,& planning / /b, /:\n\n,,st, &c, /fa, /itional, #, / : a, /:al /a, a#,, including /&a /#,wa,, b,,/b /i &&mate, ava / /,: & to, / / &/bata /, of,,Dva &,/ /, planning &&, a &, /a/stand#, far, && /&d/, /ive&, /art, / and, of &,: to,:, & a / &a, & to / & /t&/true, & &, &/a,: :,,/add / &, true : /,&b/alth,&& ///, & ://, to /&st/itional,va/itional of / &//: to/ing &b& /:+ & & /:va : & planning /day,,wa /,/itional / /&: a& & /c /bva,, // /b / / / : &/ / / onva, to the &, toast & / /va/.,, see / to&, planning of /b/ ://b,,: /a /, to mak",
+    "Ground truth": "Left anterior fascicular block; Right bundle branch block; Left axis deviation"
+  },
+  "44876687.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-2 ampere}\nAV block with normal conduction",
+    "Ground truth": "Left anterior fascicular block; Right bundle branch block; 1st degree AV block"
+  },
+  "45895700.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/ a &bata,///, &a,&, /b,&stand,&sted,b, planning, /,/D,itional,/ /std,,&ast/va/building, a, /wa, to &/#,,,: &, /stand,, as/astio,� /& a /b/., and,/# &/ of,&:/ive a /&a/dition, &, on,/ to,/, to, a/c, /&, of /,/ :b,,:/,, / & :st / / a, &:ha, a /, a/:/ a /w, / to, / /, / a&, to /&:,, to the, &b,d, & & a& a, a/w, /:/ /b/a,/ &:, /c, /d/ /,b&/ / b,/b, // : a,  :b/, including/la,, a/r & / Wb: of, &&, & /b &,, of//&, a&/ a/ / &b/: to / & &//: / /b&: & /,, b,: /b/d/& a & / a /:&/&&:&b / &/, & a / of, /# / :, &/b / to /b /, in/va, / : a : /a, //,/itional, /itional, & on / &&//, /:/b / :b &: & a: a, on /, of/ : /bva,:, a :, /va, & to /va/ /&b// :a,, & : /& &b & : &a:, D//, of",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "43108315.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /,,&,,/&c && /&#, planning, a//,&& &&,&c/D,//,,, &D,�,:,,#, /itional a&, true,, as, to,,//#a,& /, to#,, /&b/, /va,,D,sted,//a& &,, b, & /&, to&,//fa&, further,,&r /,/ata,#:C,& a, /va /, /it,,la,, hard,&ing,, of,//g,b,&o,&a,,ast, && to,&b, /g,, true/ca,b /d&�,///�,&st &&//D� &&a!,, include, to a /,b/a planning, &:, / &va,&D && &a, as#//,b to, including&,#//c,b&,/data&r, to/,& & & &:b, da&&, /a &: to&& / / a& canka,&:D#, & &#,b:,D/a &, /#D /, a,& ::#& /:\n\n/,, //b, a / &&&&mate&b&&:,/Di &&G / &,b &&va, /C, to&A,, to :/a &b& & /,a, /c&& a& true of,& vou /#/c, &,&va/. a,, on&true, /al,&ad,& and /a, including, a/ to, /b/t a, a& &//b& a/& a",
+    "Ground truth": "72 bpm"
+  },
+  "43625513.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "omid - % = 10-30%",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Atrial tachycardia (>= 100 BPM)"
+  },
+  "48419842.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{70.0 bpm}. Atrial fibrillation with rapid ventricular response.",
+    "Ground truth": "91 bpm"
+  },
+  "40776932.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",va& /,,b,,//#/c,la,D, &,,,&,,ke,// of,: /, /:, to,//,, /a,ata,ast planning, /, to&d, a# &a, as, a,&&//, to /&,& a,it,,va/,,,/itional,,Dva,/D/a#,,#va&&,//&:\n\n&:&,#c,fa, &//, include, a /,//:b /,#,&//a,,/.,, c:&&&b,// planning,, to/&, &.\n\nC, &�,, da,, & /st//#,#it, further,,:/ to,,g,,:va,, true, b, /b, / / hard,/ /& /bast,, vou,, //,& Dust /,&�/calth,&r, /&& /&b /b/Di/d,# &:, as &, /:+ / &/,,ake, of& & / / &,&vice, /Data planning,#&c, /wa/ to a, including, /va, /t/ : &/b&/b/t /&a,/&&don,, : /w#, / and, :b//& ///la, /day//&&/c&:la,&/aD&bata &, a//, / & /, a/., ke,& /a/banka,, a/ // to /v,b /&//e&, /sted, to a&a /&ad: /& to /, :&o, /to, toast, /# /true,",
+    "Ground truth": "Yes - Early repolarization; ST upslopping"
+  },
+  "48752717.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (Bourland: -:\n\n, and “a&/;.:\n*“=“;:\n\n1.!” a in  the following.here. : A\n\n!:\n\nand. ; this\n:  #c#;\n    : &/ on.here: |:\n\n-} : : in “;“( “; “this is? :#:\n\nif :\n\nHoney, for example; : :r#:\n\n#one: B :\ninset “: \n\n##-! ;? : “. |! “, “! “\n\n- :honey:\n: C# :!\n\n!:\nBare “: 2 “:for”\n\n-;\n\n5\n\n-! :# : : “\n\n1.see: seeable; “;:\n# “a “\n\nisolation\n\n-1:\n\n#set\n\non “: “#e:\n\n3. “:\n\n-! “:” :\nand “:\n\n#6;\n\n#here\n\n1 “:\n\n!#:\n\n1st “\n\n! :\n: see. “?”:\n\n“! “see”:\n#.\n\n“:\n\ns:\n\n1 st? :\n\n# :\n\n#:\n\n“\n\n# see: “! : see:\n\n!:\n\n”# “\n\nKey: “\n\nBleek?:\n\n! “:\n\n4\n\n“\n\n! see\n\n“! :\n\n! :\n\n# see! “? “.:\n\nSee?\n\n! “! :\n\n1:\n\n5! “the “!\n\n1\n\n4:\n\n1 “:see?:\n\n1\n\n# :\n\n! “;:\n\n! see? “:\n\n1:\n\n1:\n4 : ;\n\n“see?” :\n!:\n\n#;:\n\n#:\n\n! :\n\n$#;\n\nuse:\n\n#:\n! :\n\n“!:\n\n##:\n\nget\n\n! :\n\n##:\n\n1 #:\n\nso : see\n\n#:\n\n[ “:\n\n?#:\n\n!\nA:\n: “:\n\nI’m:\n\n“:\n\n1  #:\n\n1 : “!\n\n",
+    "Ground truth": "114 bpm"
+  },
+  "46123803.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ")){\"Very likely AVR block, low QRS amplitude ST depression\"\n\nConsent to perform ECG analysis for Mr. [Last name first name]. Age 35 years.\n\nConclusion: May have acute myocardial infarction in left anterior descending (LAD) lead.",
+    "Ground truth": "95 bpm"
+  },
+  "43261754.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "                             (e.g. \n                # 1st the following are we care                            - #2nd we care\n                                    a) \n#           (9-10)\n            #         (11-20)\n            (14-100)\n            15-1500\n            (16-2000)\n\n                    #        (17-3000\n\n                    #       (18-1800 \n\n                    #      (19-200\n\n                    ##   (21-2200)\n\n                   #     (22-2400\n\n                        #    (23-2500\n\n                         #   (24-2600\n\n                           (25-2800\n\n                          (26-2900)\n\n                            (27-300\n\n                              (28-3100)\n\n                               (29-3200\n\n                                (30-3300\n\n                                 (31-3400)\n\n                                  (32-3500\n\n                                    (33-3600)\n\n                                     (34-3700)\n\n                                   (35-3800)\n\n                                       (36-4000\n\n                                        (37-4100\n\n                                         (38-4200\n\n                                           (39-4300)\n\n                                            (41-4400\n\n                                             (42-4600)\n\n                                               (43-4800\n\n                                                (45-5000)\n\n                                                     (46-5200\n\n                                                      (48-5400\n\n                                       (49-5600\n\n                                      (50-5800\n\n                                          (51-6000\n\n                       (53-6200\n\n                            (55-6400\n\n##               (57-7000",
+    "Ground truth": "*** CONSIDER ACUTE ST ELEVATION MI ***; HR: 118.1 bpm;Atrial fibrillation with rapid ventricular response with paroxysmal idioventricular rhythm or aberrant ventricular conduction.;Rightward axis;IV conduction defect;Possible anterior infarct - age undetermined;Possible left ventricular hypertrophy;Inferior ST elevation. CONSIDER ACUTE INFARCT;Marked precordial ST depression. CONSIDER"
+  },
+  "44197166.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",/D,&,&va, &,,,&g#,#&:,//b &,#,,:&/va&/D, /,,//,,va, planning,sted,, /va,, to,D,/,& &, /b,//&/ &astitional,,a,,/,,,ata&r,&//, &/,,/.&&,:\n\n&& &&/&&&mate of,,b/,b,,�,&c,,/to,&&o,,c//,&a,&la,, &&va:,,Far/va:&,, :&, a///&, /G,, kee,,:D/d/&D,&#, /a,/DC,&stand,,Default, /#, to/ planning&/, /D,, including, &//day,&&r,, a&& / /&#&&b,&wa&/a /,&://&&:laio,,/d//& &: / /b&&//& aanka/ke, /la, /fa/ &&/// :&&c&:&b /va& /, hard /, to/t, /&a& further, on /& to :&/D&,va&&#ad / &&b&b//& :& & &a/./&,/.va, /don, / &c&&/:&&/.itional /b/.,&/toal, /all / true, /d&a /a&:a, / /, a, & /&b:, to /&sted, // & /b /Don &&&sted &&sted&, &a, cand,,wa && to /",
+    "Ground truth": "91 bpm"
+  },
+  "45582030.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":\n\n: : &set /age& /stand (full /;g,5/a\n\n: / &riage,strike/backshot of / 20 /tsh &shell: 10y, a/D:range &shot/dal :g\n\n: &//: [15:Plan\n\nd/Dy: :art/ 1\n\n:land of / of :keyset/ : Artback /load /rtal;15: /stage\n\nbealth, /20:  /val, 0clance/rly&ry:back/Gr:all / a&shshot :whfall /set:va &it /5&backshot\na /yo17/rdly/rly:1bcmd/rcl/rt/gage&:back /backsgiving //cback/15:5/20+G,10 a:shot a1/Art/a5 a15:+/a:RTfeit /gt a&back/mand /cmd//g5card//back /t:+1/Gback/yo:whing &backshot//whfulness planning /gt/a/a20yset /cmd/a20:powy /dark//strike of /shot/aesthetic /15&strike /&+whnage&&backback abackstroke a5landshot/Aastless//why//re:back/age plans :amide plan /backshot /dark a1gly:filfulness/em/rtly &//back/land &&backy :land &back / a20 /cclage /tistry a&$back/plan emcage planning &land /cmd/20 a5:strike a/Plan &back/ha:_plan /&backland plans and aesthetic &//strike a1emshot /a15 plans/em/100 a&wh:darkness plans /ion a/15/15backland /file a10/a15: a/a15",
+    "Ground truth": "St Depression present in: inferior leads II, III, aVF"
+  },
+  "41901937.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "хови your heart rate to 100 bpm. QRS complexes are flat or inverted",
+    "Ground truth": "58 bpm"
+  },
+  "48997601.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## st_depression_inferno;\n## aneurism_in_lateral_midi_st    \n## hemoglobin > 90 g/dl\n",
+    "Ground truth": "St Depression present in: lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "44980293.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "́A low amplitude QRS complexes (V1-V2) are present; ST-T is normal.",
+    "Ground truth": "Yes - Diffuse ST segment downslopping; Monomorph QRS complexes"
+  },
+  "45885405.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "onis heart rate: 72 bpm",
+    "Ground truth": "69 bpm"
+  },
+  "42640707.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " PBS pressure: 40-60; QRS: 30-50; LVE: 20-30",
+    "Ground truth": "71 bpm"
+  },
+  "46432279.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\n? (w : ? in / and, |:\n\nsee, t/ (5  - &a\n:seal of rsh: |  to / a/face, #<e/; 2  (HAld on 6 (a)  ;&? 1} && :set (s\n\n(US  e: /\n\n?;\n\n: (SALE  -  (Lack, bute / e}#; :sl /A (vase] 1:G\nA/ea? a  : a/NS  [ :lance 1/10 11: the / 8= 4/land  A\n\n:laif a \n\n. a  with /e/lf :\n\n,land / : 1 / 1\nt = la\na/r\n\n:\n* (a/lt/SL; 1  a: (ll;\na/ld (NIA /eighth : ,e/line: \nd/; (1; a/ to/NAW a/loss,a ; ( : 9/ 8a/lyes; ;a/ NS:\n\nwith no; to ; 1\n\na},a : a 4  : 6;  a\n\ntoe/ (1:sl a/ 1 a 1... nder: a:\n\na#; a : to:\n\nA;\n\n,SH 1e: 9 a/la / :a ; a: : a; : a: #H\n\nSee,e; a, 1 \n\nKey :  #  a/; a:\n\nThe & : /;\n\n^;\n\nL:\n\n(a) : a a : a:\n\nSee a: /e; 4# 1; : \n\na ;  :sl/  a ; a\n\na/;e:\n\nToilet:\n\n:  a;\n\na; ",
+    "Ground truth": "64 bpm"
+  },
+  "40694029.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\nPredicted values:\n- Stress levels = 40%; Risk classification: risk rating = 50%; Significance level : 10%;\nOmega probability = 30%;\n\nModel parameters:\nBias warning: correlation ratio = 9/10;\nPredicted probability : \n             Predicted value          =   5%; Actual value = 4;\n\nIdentification code :\nClassification Report :\nFear level    :         anxiety rate = 80%;    sadness level = 60%\n\nNote:\nClassification report : Accuracy = 90; Precision = 70%\n\nRisk :          sensitivity = 65%; specificity = 55%\n\nTarget range : 100%\n\nRisk     prevalence = 45%; specificity     = 42%\n\nNote:\n\nRisk            sensitivity =50%; specificity       =38%\n\nProbability : accuracy = 85%\nclassification           sensitivity =75%; specificity      =73%\n\nNote :\n\nClassification     precision = 95%\n\nNote :\nclassification        sensitivity=88%; specificity=82%\n\nWarning :\nrisk=85%\nsensitivity=80%\n\nprobability\nclassification=score\n85%\nrisk=80%\nsensitization=70%\n\nNote\nclassification\nsensitivity = 75%\nspecificity = 72%\n\n### classification\naccuracy = 78%\nspectrum =\npredictive = 77%\n\nNote : classification = 74%\n\nRisk = 92%;\nsensitivity     =76%\nspecification = 79%\n\nNote: \n\nclassification = 83%\n\nprobability = 84%\n\nNote\n\nrisk = 89%\nsensitive = 81%\n\nprobability  of     cases\nclassification =86%\n\ninformation\nrecognition = 87%\nsimplification =88%\n\nNote, classification =90%, \n\nprobability =93%\n\nNote classification, sensitization, specification,\n\nprobability of   conditions\nor outcomes =94%\n\nNote,\n\nprobability  confidence intervals,\nfor diagnostic\n\ndata :\n\nprobability of  conditions\n and outcomes = 96%\n\nNote.\n\nprobability of\ncases or\noutcomes =98%\n\nprobability of\n\nd",
+    "Ground truth": "70 bpm"
+  },
+  "45444326.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", &a to a /& & of the /t,a,  / in / & a, /b : D,,va c, a c/stand a c, d, / and, A, a to the, a/wing a, &g,  &a /b, a, ona /a, a&, & of, of. a, to, & a &a, /c, /a/ring, a :&a&, a & a to / da, /all to/a (a / a,to a, b,w & &.\n\n, && a, U, but the /a# in a, A&al :&d, t, a w/d: &&, :a, & c,b,d,a/d,age, a a& &a c, for a /a to / a &don Walth, a de / a (a: a,a/  to, to, to/ to &a r: to, / a of a, a/, W, see, a of /gt a to ; a / a. a / to / to a a a /, towa, a / ke a & to: a (c to a, z /a/ a c : on /a /, a the a/.b a a. a: & a / /a & : to a of, a: a/ a, (a, to /a/. a/ to. to : a, : a to a& a &  /, / : a/.c, a (m a, W / a c to, a la to the :a/ to\" a / and a a :c, to a  / the, &. a a,!a> a, the, in / a/land a a an, to the to : on, to ; to a,a",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous lateral (V5, V6, I, aVL) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Bradycardia"
+  },
+  "45136652.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",landsh:file/force: (a new /key D: acl\n\nW:land: to of the air full:Dration /d&a full A:air fullback/stand :it (wage / and:field ava a/c to, & a&set fulltim: a d/D/Aalth a:re-sh / a:all of:wh:shcl a:fruit a/a15:itsgiving:it tclent/turn!\n\nw tofile a#sh sky: a:it a/ccl/dle thecal ava:file aerial: W/rle United:road airfully aim a#/ a: full /devt alet sand: a$shrt: a…/it a:file a20: a full: a5 a&lroadlandal :la /a:lit a+ a: UKland:rt a:strike a:full:don/train de:wh//full a:rt/new/aalth:Dcl/Acl:vente:valet acal San y:ration limate a:D:ville a/acl /dlescl&ritland a#/:rcl aDles:backland:back/a/a#a15:out/a/s:lightful a/land:full :it/dle a:Plan:vent a&land a&back/a5/land a:mand alett/dle:powland a/a:file:cal alet Airland:vent:ke:/json acal whit:fareland a/dle:Dit:/a:land/land 15/a:clure:outland/a1/track: a-road/standard aland:land a#roadland:out:file/a5 alandland a20$:cal a5: ton Portsmouth:aval D/load a/uly:land/burland Troad:/a/landland:15/a/reful:roadless:lad a102",
+    "Ground truth": "77 bpm"
+  },
+  "40115913.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " - 1.0, -2.4",
+    "Ground truth": "101 bpm"
+  },
+  "47462866.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-150bps indicative_of_angle_intensities=low}ECG_abnormal_heart_rhythm.htm#ecg_abnormal\\_heart\\_rhythm\n(171.0-149.9 bpm)",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, Left axis deviation"
+  },
+  "41693496.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ":full/shot20:shcl/re:pow /gain:dev/dle15:20:va :5: A$20$set $10:20:$:it/20:pot a:10015:strike/shot:land/20 :val / a:val :id/shot,d:ville :1/A25:Pot / 3851?A#rtle/mand a:shot main,20:15:shlevent//& a&clorb:va15/15: POT & akey:re-sh:17:15$1:RT/15\nh:15/land:20 a20:20 :w4:it/blem:va:20/10:val15:va20:reside20/20 a1:a:va18:102:ab:pot :20/15 a1:15 de:shot a20/le:it:10230/a20:strike t:20/A:15&land:pot/20:$/a:back/165:15:a:20+30:20:+:21:15 A20/wh:20/a :12/20&15: pot/dle:NY:15:Auly:15/a15:hab/20+:300:abandon/g:15 D:20/tle/15:a :20 :15:DO/15':a:15 :20 a:em/20+A20:22:1005/15 :$A+va15:15/A#15:lad/15 A&d:15 Walth:15&a: potential:16:15 a: AU:15#15/20$:15:day:15°20:25 a25:15/t :a20/abs:10/15 de15:17spect:20& a25 a20 :DD/15land:15 Stand:Pot:ab15:AB:15",
+    "Ground truth": "77 bpm"
+  },
+  "49937237.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (with; / and} : “ “/” ARSH turn, “\n: “, “if : “, query “: | for, in ““r “:corle, “} “:\n\nin e / ex\n\nfor the PR? of “’” “  |: { “} : (} “re}$; “, : to “ “” NS” “! (PR: “” {5 “:6, “” : “” (N“V “” “:“NS:} “” PR” NS COR “{” NS} ” : (and “(“4” ( “}” NS “}’}” ““ “”” } “” ns “NS ^{  NS “NS} “ NS” NS { “ “NS” NS- : “ns “ NS ““NS “” a” “”e“ NS “ NS} “:’ NS “of “ NS: (}” N{... NS”?” NS NS “so “d” “} NS”’ NS NS} NS “ “ NS“ NS”} “a “ NS :” “ NS NSW “: NS”” NS : NSNS “ NS NS” U” “ a” NS (i} NS NS: NS} of NS: “:” NS ^NS “ “ ( NS’s NS “( “ NS 2} “8 “ NS ${ “”}” $ NS { 5 NS”...\n\nns NS “}{ NS$NS NS NS’s { “ ( “: “ NSNS”} NS ( “ NS a NS NS :\n\nand NS { US {1 NS}  O SS “ “ “7 “ “e” : NS : “ NS\n\nif “ “of NSW : “} # NS? NS { e “ NS }NS: “e is “ NS,” NS, NS {5} “NS “all” “of”",
+    "Ground truth": "Yes - st depression in septal leads  V1, V2; anterior leads V3-V4"
+  },
+  "43083084.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## hypotensor\nNo; not applicable; may lower heart rate & blood pressure",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "45447773.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ rate: 80 bpm. QRS complexes are hyper-kinetic. Posterior interventricular fibrosis (QVF)",
+    "Ground truth": "60 bpm"
+  },
+  "40679871.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{#175 bpm, vRHR=24-30 bpm, qRS complexes rBB, RRA, QRS}",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous inferior wall MI, Bradycardia, Prolonged QT"
+  },
+  "47447146.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " jScrollPane - minisciaminence for the monitor: $\\textdiverse}$ - class 1, $\\textsubclass} (V1-V4)$",
+    "Ground truth": "Yes - t wave in septal leads  V1, V2; lateral leads I, aVL, V5, V6; anterior leads V3-V4"
+  },
+  "48376391.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{\"24. T wave is abnormal, QRS depression, ST elevation\"; probable left ventricular ischemia\"; inferior wall hypokinesis); probable right ventricular Ischemia\"; lateral wall hypertrophy\"};\n\n``)\n\nNon-specific electrocardiogram",
+    "Ground truth": "St Depression present in: lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "48398237.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "_EPSI: Sinus and atrial tachycardia (HR: 104.0 bpm); Normal ECG",
+    "Ground truth": "No - Borderline ECG; Minor findings: Sinus rhythm, Regular rhythm, 1st degree AV block"
+  },
+  "47311907.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{Dh ccp. Abnormal findings:Sinus tachycardia (Grade III):PR interval desv.>120 bpm;V1-V2+ST depression grade II;V3-V4 non-specific ST depression grade I;V7-V8 R wave abnormal};Abnormal ECG findings:Monomorph];Probable Torsades de pointe (Type IV,Deebling 5-12)]",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, Previous anterior (V3-V4) Myocardial Infarction, Atrial flutter"
+  },
+  "45535203.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "​\n\n-50-100 bpm",
+    "Ground truth": "96 bpm"
+  },
+  "49091833.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{71.0 bpm} (heart rate 31.4 bpm due to left atrial enlargement)\n\nRegurgitation of the aorta, ventricular hypertrophy, low-grade fever",
+    "Ground truth": "67 bpm"
+  },
+  "45531533.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "&,,, &,#, /a//c/Cva,,&,va,&//,va:&& a&r, planning,&g,stitional,,D a & c, hard&&&// &&,&o,& /&,b &&&, a&, as, a//,, a &, to /ast, a,va &,,�,&st, planning// &, planning da && & &:\n\n&#,&& true,/Data,& kefa, /b, to,&/,,# &d,, vou, planning &,anka,& a,&# &&�io,, as& :&:& &, && a&& //&, /&stast to&, b,& && /,,b& & / further,, include,&.\n\n&b&, & :&, planning /&ing,&:sted /&& & a &&b /&to &,&cvice, / a&a /& &la//& &/,&b/. / to a & & & to&&/ a / &&:a,//b&b,,&r&&b & &, / / &,a,b of /& / a :, /, /c, a /&/a & /a & &&stitional &&a,&ad /i &,C,&true//, / & a / /a/&c/&b/build, & & aD,//&alth /b&&a& &b&day//la &&A cand, &va, /GD, to &&C,,//,&d/c, & a&/v,&ata/ & /& mak&c/, /&� a& /ata",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "41370703.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "assistant\n\nConduction delay is present in all leads.",
+    "Ground truth": "Yes - Left axis deviation"
+  },
+  "46233557.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## ecg_label_monitored_by_heart_breathing,\nECG monitoree_parcelle_patients_with_allergy_to_rh_investigations_heart_disease\n\nmonitored_by:_adults_;_patients_with_allergic_reaction_to_rhf_heart_condition\n\necg_monitored_age_40-69_years_;_diagnosis_rh_rh_abnormal_cardiovascular_diseases \n\nAge is based on patients' age at diagnosis",
+    "Ground truth": "Left axis deviation (-30° to -90°)"
+  },
+  "40295269.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM - Hypertrophic cardio  - Sinus rhythm (HR:72 bpm), sinus bradycardia",
+    "Ground truth": "102 bpm"
+  },
+  "46159896.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "​\n\nNo",
+    "Ground truth": "No - no abnormalities in this category"
+  },
+  "45130850.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## sex UNKNOWN\n\nNew York style 12.0 V R 11-12",
+    "Ground truth": "Male"
+  },
+  "44330307.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{M. tachycardia (PR or A:F 100-199);Abnormal ECG",
+    "Ground truth": "Yes - ECG shows significant abnormalities: Previous inferior wall MI, Left axis deviation"
+  },
+  "41975005.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", to& &,//& a,//:,&/d# /a//:&,/,, /st:,, &&,,, to/titional,, as,&,bsted, including /d//&,&:, &,va/va,&c, &#, & further, /&b /&&, /,&b/D///&o,:/:, true,,//,&&:\n\n /fa,,& &b/bata: /c,/it/#, /b,,ast of, /va&, &g, &//,/#set,/stand/. &&alth, & &,&bao,,/a,//t,/vice,,://&,Dva/Don, /ata,&///�//, & :&,//crown,,b/a, / /bfa&don to, / a,& :&& to//&& a /b//va, //bast/la, / &///faio,&#//& & /&va/ : a, b,//wa/stand /, &&r &&c/a,/a planning / /&// & da & a /& a/r/ /a &&&: &, & a, a /,va& /&,building a,/faalth / &&fa& to /&/a/ hard&b//, to /b/./b/, /a, on /va, planning/&va && &/& / / :va,/ && :a /va//b,d/ &,, a/true, /w& / &b, /:to vou,/D, to see & /b&b &//wa& a&st/ha /b &y/b ///",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF)"
+  },
+  "47523316.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/ATc  \n-; $\\text{< /-}\n) [Brae}]...\n- $ \na: [mL](- Dose of the same 10) <\ndontal - }-{$[ESE]! (orfe$D$\n-SP 1)\n``{\n    EDD?E;\n- [S(0)\n-}\nInfluence{;}<}]{<};\nHypothusland;\nthe 10.}",
+    "Ground truth": "54 bpm"
+  },
+  "43718891.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "VAS - 140 bpm",
+    "Ground truth": "81 bpm"
+  },
+  "44264341.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## ecg_monitoring MONITORS-HYPERSION\nAnxiety;atrial nodal tachycardia;sinus rhythm;monomorphic tachyarrhythmia.",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, Regularly irregular Rhythm"
+  },
+  "47672804.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "rupa = 40-; preservative tachycardia",
+    "Ground truth": "39 bpm"
+  },
+  "48984255.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&,& planning, a, /&, &c &b,,&/sted,,, /a,//,va,, &,itional,&&,�,ast /& planning of, planning,# &,, to,, a&, c,// further,&c,,la /,:\n\n,, and,, hard, to b,//&, /, /c, &/ata,, #,, //, //D, / planning, &:&,,itionalitional,, as a,,/d, / / /,,b, &&,st&o&//b, /o,//b,d, /va, /D,,C:,,/Di,,//v,,�//,, planning /, on,b /,/.&, a /b, to /#&,&r,&//, & & &//&g, &b planning / /:,#c, to :, &fa,,/ /& /, including / /a#a,, : ///b//b/, a& &&&& /&&a/a planning,,:/ planning, include,,/c/, / &/b,&b, ke, &vice,, of, & / /&##,,va: /&b/add,///:c,/c /,#b, true && :c//va& & to,// /, &a a / /it, //&& &,& &c, as&& hard, /b/r//& & /&//alth,//day a, to&& a, &.\n\n&///ast / /st/to,/, the, to a,&D, true,&anka, a &d//, aD/titional, /fa//d#",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, Left anterior fascicular block, Right bundle branch block"
+  },
+  "48187767.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",//,&/,,&,,,//& &:\n\n,&b& to, &&.\n\n&&,/ /#,,/&itional,//g, &,&va, /a,&#,&r,, /&,//b:&b,& a,#& /&/.\n\n&,&ing,, &ha /&#to,&.\n\n//&st,,#//, &//,,/t &&,�,& &,, on,/la&, &b& &g,& to planning,,Default,&&& to a&&.\n\nD,&y, /,G, &fa:,,bata,,/aıl,&&r, /c,, to, /#to/,&, a&, / true, & &,//.\n\n&alth,,itional,,&A&b//&itional/,&t&, as//#,&//#//a:, &o &&&b/,b,/// &, of, &g /nil,, further,&�,, planning,&steditional,b hard&,/Dit,//mate &b//a,//gt /,& / /true&&c,& planning & to&a / & ://b/&,:+//a&& a//&& & /&b/.&&: /a&,: planning//&, //b&grown,& :&&wa&//,a,,c, &ad,&a/rast,, hard, a,, a /va &&b / &, c&&/ack, &c//g&, to&b/ & &&:C,,&a, / to,& b, &a//, a && &/, /g/ &b/.",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "42274403.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", &, /a&b, /ha,/,,&day/steddon/turn of a,,, /,b,, planning, to &//,&b,d,,don, & & &b /,,/&dar, a, b,d, /r,/stand/b:,/itional, including, /va,,bao /b,alth,/g,st, &a,,b/c,b/r,,/D,, to /broad,/,,,//, /b&r & : /d/wa,, far,, &&,/a, towa,& / &,b /&,&, / /b/d,  / &/b,b &b, a&,,it,,va, &b:&, on/gt, &rt,, as,don/va& &b&g,, a/wa/all /b&,/�, /& &a &va, /#/&,bplan &b &&//,,: /d/w &fa&b/.,&:, /building & / &:,,:/,& &&&va& /,&&b: /b a /&don, /:b,&/b & &: andb, &/a&b//b&b :&,,b, of /,true,balth & :, / a, / :& & /a, of, / & & :& / /s, / ; /&to /b : /b / &&/&&: hard /&day to, to :a&, &: &, to a /: hard, / A&b&: to /a &//a /bart& : /&:wa, to&, W, /c, & /&alth &",
+    "Ground truth": "74 bpm"
+  },
+  "47196672.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,, /: &&la/ &,&va,,#,, &fa, planning, &stedb/D, a / &,,//a:&,,&, further,& /b, /& to :, &&data /,, of, to,&&, a,//, /#&// ///,&r, &, /, / /itional,va, a :& &//day, to&&b/d /c&, / : &&,/wa,& to& /, a/&&/it, / to :/&, & to,,:, & /,�,, as,&/& on,,/ to, to/./&b,b /, planning /&//,, a&a /&b&//&&to/bata,, to//,& & &,b, &a,&a/ &&/D, /b/b /b: /& &/ & /&& / &:a,,/., to/stand,&bfa, &t,& b/D to / /# / /&,&wa, & & / true,,:/,,w:wa&&:/b/&/la, / & /D / /b/, & & a, &b/r/,&// of /a&b/w,,&r/b &:/& / / /a /bva,//://&,/.&: & & && :ad : &//& to &, :&b/ to / &d/techn /a, the &, a && && /#balth/ /&mate/b, :, to :fa,//&b,d/a/ / & & : / :&don /&la,/D, toal / /",
+    "Ground truth": "53 bpm"
+  },
+  "40618106.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{DIIH QRS Flanks,Anterior,Post,Left Anterior Intermedius,Right Atrial R wave,PR and AVI axis deviation}\nFV > V1-V2; Ia,V3,V4;V5-V6;V7-V8;LII,III,aVL aVR",
+    "Ground truth": "T Wave present in: lateral leads I, aVL, V5, V6"
+  },
+  "45528863.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " independ{  -  D - 9, 10 - 10, 7}",
+    "Ground truth": "66 bpm"
+  },
+  "48535169.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " - 4,5;   -HOMA = \n  -  #1.2 ( 4) for 5: 0.100% \n\n- \n          % \n            -HDFE\n  = -5 \n         HFE \n             -DHF \n             HFA \n             HF \n           HDF \n           HEM \n           HEF\n\n  2010 \n\n-VEE \n\n    VE  \n            VIB \n\n    VEB \n\n      VOT \n\n        VIV \n\n         VIV",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF)"
+  },
+  "43942743.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ systol -HR < 30 bpm; q wave - inferior lobe anterior \n\nR-R ≥ 100 bpm",
+    "Ground truth": "61 bpm"
+  },
+  "46506377.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/b,&st# of, / / / a, as,//,,va,&, planning,//g &a,,, to,,&va, & /itional, //&,#a,////, /&,� &, and,, &#,&&&,,la,& /:\n\nb&o, /,, /D/, &/,, a,&c/,, /bva,,ast,&:,&sted,/&/a, / as,& to&,&.\n\n//b,, include /d,,/,&/c,& &,,//a, /techn, /a, &, / to/.b, / &//&&:/b/Cast /, &&, /fa, & & a&, &// /&//,wa,:&, a /i&,/itional,b, &&r, / on: /,/ /a&& & /,&b, c &a/Dive// : && :&& ///b&/alth, &: /&&a/bva /& &: planning,, b& to &&va /a:, /al & /va /, / Dust, /true,, da/&&//c& &&b/d/ / /a /c/day, &b,b& &/#tova & && & as, & to /&a,& // /, planning / //a/c/ further, /i/ /&:/,&////ing&,/Dit & /c & a /b&//& &c /c, a& / toast /& / a / /b, :,b,d/true a, / a &/////b//the&& a, to/tit,",
+    "Ground truth": "63 bpm"
+  },
+  "49214183.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "омі -1. V1, V2, V3, V4; PR interval: < 0, QT interval: >500 ms",
+    "Ground truth": "87 bpm"
+  },
+  "43435802.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " handsOME_conduction_delay. \n\nC ventricular rate >100 bpm; normal QRS complex amplitudes: < 50 mm; \nabnormal PR interval: P wave <90 beats); first degree atrial fibrillation};\n\nNormal ECG",
+    "Ground truth": "Yes - Left anterior fascicular block"
+  },
+  "47221223.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,&, /,b,,,C/, /va aD�,,/D,&&//,&d, &&#,,:,c /,/ata/ /,, far,&itional//c&r to,b&fa,#, #&sted,,/la,& a,ast,, c,/,, to,&/day, planning &&, and//,, /i,, of,//, /a,, true a/,& /#, further,&.\n\n &o&:,//st/,b#, as&C,,//a&,&io,&//d, //,, a, &,, including, /art, da, /ast,// /,anka,&vice, planning,, b&&a &&//&a&it&c,b!, & /t,&c&/ast to/c#, toast, & &, a /# /g to / ::\n\n, & as/ /&,, & to / /b /&&,:a /, /D,/va&, cand/la&, & hard ///&&& to /b,c, / &,&/.//&/b& a /a ///c,& to/,va,, planning Dust,&#ke ///a /&/a&& a&& as& /& ava, /b//true to&&ad / /to,&b, /c, &ast//b,D,,Dastb//& a/ : a:& /a&&: /, further &, /& /, & mak & &# a& &, the /, a&r / /,& & /, on /, //s to&/&c /c&&c",
+    "Ground truth": "69 bpm"
+  },
+  "45703101.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "ховиopathic ECG findings - decompitition of myocardial infarction",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "48509859.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /c, on a &sh/stand,a/.\n\n, on / to : a,& a, &tion, /key.\n\nwell (ha, in / a/ b: a, of /:\n\n/Dive /:\n\nb, &don, a, true a, the in a, in a &/:\n\n&  hard /spect, according, a,a: /age & / a r, y, / iny, to a, main / & stand /, & &c, a / A:ing to / a / &alition &, in, a on/ walth / to /:\n\na, an / in /&diss & to de / a, /a, to the & to /: to a y, and &e, / & : t,  to / to make a c & / \n\nto: D, a/ a/ in / see /, a dall / : to a/a (wage / notitional, a ;ation a & at :ard,/ : potential on & /  (Dard / to:\n\na & / on, a :&/ to a / keb /age /a / of to/see a : a / of /c / : a & on, to & a/ditional : to /; on /& cke / on a, a a/ (a\n\n&: to /a : & a &: a / a to/ on / of a / :\n\n a / : & to a : : to the / a ( to: a & a : /, : a all / on (vall / a : to, a  to ( to a:is to a major :in / a on / & of a to /& for : a. to / : /a a / to, to / on /a ; a / b: to (h : to : : a zid",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "43329142.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "isposable: 40 bpm",
+    "Ground truth": "59 bpm"
+  },
+  "40246258.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", (: :set, of /: (b, &;:Plan: do/plan, for: a: of,  (A: US, :std: in, : T: U, and:is:sh: t:at;: :&, :all/dit: (d: a : &: (T,sh: (a;: (vital, &:5:5, a:all: $:stage, in: D: £:all,  &t:it:full,?:+  on: (key,back:;default: &:iso:to: (Key:it+: a, to:is/D:sh,cal:DT: UK, on:;:Do:Default:1;b:w:hab:in,it: &?e:rt:Default, & (Of:5:D:sh;&:sh/a;:£:RT/A:strike, default/20:as:W/r,realth,5:D,Default:rice,b:;&:$,broad:;wh/swer:back:it/W:Default$::is,A:5?$;&;:wh/:>h:Plan, a;:D:;it, to):,A;broad,do:;b,5/;:;C:it/:D//:DT/5:Dar,bance;:b:Plan &:;a:sh:,:5th:is;b;&&:10:U:;A:4:at:;s:5set/;5:oral;&A:;w:20:W:it;&b:Uc:to;5,&:is Plan &a:20;;c:Galth/;it:US:;t:;E:Plan;a",
+    "Ground truth": "No - no evidence of bundle branch"
+  },
+  "43273089.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## ecg_univariate_age_transformed_abnormality_t wave_abnormalities_no\n\nT wave abnormalities=absent;no T wave abnormalities;V1-V2 not present;V3-V4 not visible\nT wave abnormalitys_1st degree AV block;atrial tachycardia_not suspected\nT_wave_abnormalites_heart rate increase>120 bpm;v1_v2 absent;v3-v4 not seen\nTWaveAbnormalities_1nddegreeAVblock;atria_tachycardiac_notsuspected",
+    "Ground truth": "Yes - t wave in anterior leads V3-V4"
+  },
+  "49349735.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / to\", /: from of, & a : all: for d/a,all/ and of, : ! of main / of”aalth of stand,&shing, are : A :stand in / w: / D :alid : a ; a\" /:age/ /st /: (a, a &donit /&: and : not /&thy /, &stitional? Walth : /:at / to :d / of; doful : to\",ed a /, a  da / for: zate / of? a:onal / a/ a, : of & : a / of&: atl&? A: of a :wh to / of all to$set a /re,va :to / of / a : ofland of ;key a/dit / of a/ : to,astion / a /&' of a / a:ral &s /: a / wh : forriage a/stance a/D,shot for : to & A:shra : a/Eclor / command of a5& a/ of, a/ralishment, for a / 102 / of : a/Wal of a&land a /w / to of /stand / aast /darkland a&full a /b : of a/r to / a, a/Dwly a10/ast a /daval of/ to: aast of / Dhablstandal a: emc / of white/ a : to Whitstand a5 a,road / aardland: a/ance a & a: a+15: to a to, a : a/r, of a a &A/s a1 10/ to : a, of / : a2, a /20 a&shell / of tonal, a, / of,land of / tofile a:stand a/land",
+    "Ground truth": "89 bpm"
+  },
+  "44124148.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /a / &,,, / / of, &b,&, &stand, & &&// & &, a, / & / tova,,:, & / a /, aD,& & :a, /s, /,, to a,/.\n\n//&,//,�, to, t, &, /:\n\n#day to,, far, of /, /b /b,,& a,, : &,itional,& the a&, /& a && a / /b&r /, & : / &&,,&a,,/D: on to, da& & of, to /,itional &, b, & to &, to: / to a&& a&alth,, a& /, to/da, to mak, /g, &�, and to / & to :, : hard / a & a, & a /va / &:itional, a / a,va, to see, /wa, as / /&b/a,, planning, & of / aitional, to of / / a& a/t, :& &&a /b&&,&# & / /,  & to /&& & / of /&, to Dust of / &stitional, of,& /&/ : a/true &, && /al & of/. / :, a to / a: /& / a&A, to further / /all / a/ & to& to&&d planning / a&a &,&& to /a, : a /& the /a to/ : hard/stand & of true / to, / of&, a & /:G, to && & to, to de / / &a, a : /va &fa&c of a, a/.& / to /:don of /a",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous lateral (V5, V6, I, aVL) Myocardial Infarction, Junctional rhythm, Right bundle branch block"
+  },
+  "47249467.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​:asymptolic t wave prolongation (V1-V2)",
+    "Ground truth": "Yes - t wave in anterior leads V3-V4"
+  },
+  "49934261.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " independant financial information provided by \n- Regulatory actions: \n\n* Cash flow: $\\$ 1 billion ( International Monetary Committee of: 'Cash Flow Management Organisation' :  SABRENDON -  \"Financial stability and access\"",
+    "Ground truth": "Yes - Right bundle branch block"
+  },
+  "46120467.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", a& &,,&, &, /st/ /bva:sted to,,,dast, to,//c,&fa,&&:\n\n,, /&&,, &&b,&.\n\n&#la, /a,,/a, & &st// &/D,,#&,&va,, /// planning, a,,b,, daio, a##, /b &&, c/ /,& & a,//, #day, a /,,/&, /, a&r,/,, ke of,, as&,//: further a, to a, &c,/:&,c, &//,, to vou, /t, /G//b, &b/.,a, &/b, /ata,& /,//it,wa, and && &# /& / a:art : a / &, to /c,,// planning &b /& & /,b/,b,,d,, of,C//d,&: /&,la &a /&# / /&//&b& a/cDanka &, & //&& a,/� /c/:a &#,,itional, ///&//b/ / /b& /&:& /ad a &,: && planning //all /fa, / //b& :& hard/ack/,b/t&&D/dive&, a Dust / &b, as//a /b,//&faal, / true,#//&, b, &a,&#b :, /fa// /, / &&& :ata / /, further, /#w /a/:la, a &don,, hard&&b/d//st,&b /b /Data",
+    "Ground truth": "Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction, 1st degree AV block"
+  },
+  "45110587.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-150bmp}   V1-V2 QRS complexes are non-specific\n\nNS/AVNRT",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, Previous inferior wall MI, 1st degree AV block"
+  },
+  "46910430.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " 4. the original time of ##<see>\nand= (e) = see",
+    "Ground truth": "60 bpm"
+  },
+  "48639992.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, /&b//,/d/la, as,,wa,,/D,stand, /a,& planning,,, &,,va:, /va,va,/,&, on,, to, /, &va/b,& /,#, a, /d,,&/.,//,,//b, //bast,, a &,b,,D,va/D,& &, /sted,, planning &,&b, to&,�,/Dition ///,&&va,,,/,va/ing,va&&,,ata,,b/d,,day,&: /b, : /,&a,, da, to/ &, &:\n\n&,st /b/,,b&/ further,&don,,,d/fa,/ &/ /, to the,,: /a/ tova of,,alth,, and,,/true &b, &fa/d,b /,, including, to /&,/itional,, :building/ && /b&r,/allb,&a,&#, &/D /,/D/Arown /, /c, / /, of, / : a,/a /& & & &, true /& / of,& //, /w /b/w /b/wa&,b/cva : to / to / /g, / & /,va /&&/ :, ://, & /a /va :, /b /& a,, as /fa: / / & &b / / : / && & / :d, / a / / a, & to /b:b/t, /wa, / to/ /#a//va//, ///& / to,&//, to/d,//&,&:/, /A",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous anterior (V3-V4) Myocardial Infarction"
+  },
+  "40030028.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / a : Walth,t (in & / to the :it/ : /a D, on Plan & /:\n\n&set in / &: plan / of : is / : plan / (tiss/main, at A/D: ; plan /, a, a : de : a, & /& to make, : main : : to a / (at :c, a: planning /& & tsh / for : : (a, (key /d, :\n\n: d, is, & : (gall & a to & /to : :dev / a, : to (a & :balth : & / bgt to a, to\n\na, & (bstand in w/r a : to/turn,  and a/ard a / : a : : plan to : plan & a / to-plan : a & a : a ywh, to & to ccl/ : : he a :ydon, : (w a plan &:\n\n: :plan : / (a : to : : :to (doe plan to aid & a tio : & a plan : plan (a to : to: da to : a /c& / / to / (W/A : to& to (w: : : keitat a to / to to : (Plan : to / a: : to Walth, & to : zad a/w (a plan & (a: to :  & /a : a”to :& a : & to: : a to : e : to & (c to /: plan a : U  : : a+ : w : to he / W: : A :a & a, on : a“ (: & to a told : : & ( a,! to:to a “ (a’ : to, to & : :… to & 10 a : / to : A / command",
+    "Ground truth": "Right bundle branch block"
+  },
+  "42772808.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " /, & a/ and& / of /  /,  / /t / (, //,stand / / &&set, a /, / and, / : / /&, /, D, / y / &/ stand & / /day / a / /c/d, /, / to / / t, &b, / a,d/, / to & /, a ; / &, / & / & & /, & &/ & /: / t/age / &stance / /d / / a/ccl,, / / / e & & &, a, / /don / &bandon / a,/ & plan & on,  a /d/ / &: /, c, / T,  & & a & / b /key /, at / / alth /  & a / a/d, to / W /  to /& d, a &/stand / & a/d & &y / to/tal / / in/ /,,  / & for / a &, & / a/t / : a / A / / : & & : &, /, a : /, to / & : a, & / the / & w/d & / and / &, &&  / a  : / to/ &, ( / / d / full / / to, : /  plan /  : to / a, / : an / istry /, d/ / / (a : ke /, :\n\n / / s / a : a  / land & / to, / atl/ / talth / : : / a z / , /   to / time & / : to : /, A / : main / /, +, & aid / &  / of : / :, & and : / of ; and / / [ / & not / & t / to",
+    "Ground truth": "Male"
+  },
+  "45901796.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "́ 90.° Abnormal ECG",
+    "Ground truth": "No - Abnormal ECG; Significant findings: Previous inferior wall MI, ST depression (lateral leads - I, avL, V5-V6), Irregularly irregular rhythm"
+  },
+  "47205846.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "   -1st sinusoidal reference test ; 4th normal coronary monocardiol - \n-5th echocardiogram\n+5th electrocardiogram\n-4th rolandemic reference \n-4thin minimally registered \n-3rd non register \n-2nd normal \n\nThe monitoring information is provided by the American Heart Association (AHA) and the Canadian Heart Association Committee (CHAM). \n-Hr = Heart rate in minutes; br = Blood pressure \n-rr = Rhythmus or rhythm\n-ge -hythm or rhythm \n-8bpm \n-1min -monomial \n\nReference range for a study of 'r' : US <US \nStudy group :USG\n-2 -4th sinusoid \n\nFinal classification: 6th sinusoidal \n-9 -1scor express\n\nMinimally registered monitorin 'R' :US \n-7th coronaryarteria\n-1sine register \n  2nd minimal coronaryarterium \n-0-minimal \n-10th cardiovasculararteria \n-30 minute normal \n-6th sinusoidal \n\nFor reference:\n-1st coronaryarterial \n-50% mince \n-40% sinulectral \n-20% coronaryarteriae \n-15% sinecrine \n-35% coronary arteriae \n        16% sinus \n-60% coronaryarticular \n-45% sinucardiac \n-80% coronaryphrenic \n\nHypertension rates are minimum values as per 1000 individuals. Note that this is not the same as \"minimal\" or \"sinusoidal\" information.\n-4y minimum systolic blood pressure \n           70% systolic renal index \n            10% supineal blood pressure \n\n-4 y minimum body length \n           premaxima \n-90% maximum cardiac size \n           mmaxima \n\n     4y maximum heart weight \n          pmax",
+    "Ground truth": "Yes - T wave inversion (septal- V1-V2); Monomorph QRS complexes"
+  },
+  "42002963.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " - /<\n\n1\n  # \n- / \n\nSo, do not, and\n\nin the, therefore,   \na -easey, in 5.0 : \n\ni /excellent/!",
+    "Ground truth": "Yes - t wave in anterior leads V3-V4"
+  },
+  "40908092.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", / &  on / &, / a, : & / :\n\n& & / & on &, a :, a, &, on /, /, &:\n\n/ main /a,, a &, b, /, a on / a /, a & / the, / : on & & & a, / on a, to, &, / & a / a w / tsh : / a y, /! & a, /:\n\n:  & on / / on ; & a : a /, /, he / a , & / plan / for / /  to / a & & : a a, on  W, / to / & : /, & ; on / main / de / ( a / in & &, ; /, on ; / : & a & a wh / : a, a / / a,  of / a : on a / de, / / T : and, to / : to : / on / on, / a! on /: / a to / on & a y & :, A : to /& : on / to : & & ; & : on : / : / & / to a & : to & on, a / : Ditat / / ; : on ( a : /  on & on  for / on : : a // to / / : :, / : + / to ( a \" : / / & & on : on” / & ; : ; a / on  a / &, : & :  a : & () / on “a / : ; : a & on () / to to / to & : : on  : : / toitional / a’ / :  / on \"/ : a : to\" on / ; a : : &, on / : an / :a : a on : a in : on ; : /! to a / of a : U",
+    "Ground truth": "59 bpm"
+  },
+  "46216184.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&, a, / &,//,,,va,, / //b&/D, /,&& to,,alth,,& &,st,/,, &&, / to, planning, a &, /&:&//, /b,,/ &//,&mate, &,, to, /ing,,b,&/, &o,,ast /�/,,,#,, far//,/itional/,/c//, & : /&,, further, & / &///&&, on,,//d,, //,&to/.,,/c,, a&,/g,,�,&st,, include /,,/a,,day, tova, ///,//a, &fa, /y,,ive,, #, &b,/b/d,,:, /la/,va//&don,//t /, planning of, /ata,/to,// /& /, on & &,/ / / to/, /:/,,rown,/&, &a &,&#,va ://,/a&r /, /a/la&, to /va//a/. to,/#&&&:,, true,&b, /#,& /bsted, a /&&///,balth, /techn,,D/&b/ &/building,&e, & to, : / /&stand,&vice /,b,d/, as /& c&,&wa,, cand /& & /, tobuild/, to& a&a /, & &&& ///ha,,,, /va, to/dio &, to/&c,& : /a /&b,d/a/,&//to,,,/,",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF)"
+  },
+  "45713462.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", &,& &// /,, to, &b a,#,,/, /, & further &,,# &,/#a,&////,va, c//it/&,&la &//, /&,,, true /,&&,//ast,,�,&:\n\n, as,, //,&, &&, a//#,& ///&b/c,,/D, ke,, /c,, b, a, & /st,&c planning,,& planning,&:,, on /,b/. / to,,va: /d,va & to, a a, including,b,&alth / da,fa,& #&,sted,, of,,:, / && /io/,itional &, /D,// &, & a,:/&ata,&� /&:sted,b / /b/ / /a, as&, as /, /fa,//C, / /la/ to /,:o,, far,&a&,D&g//&, /i,, & to/& a,&va, :b:, and a /,#al / /to,//&&& /day/va/b /&va#va/,&#c //, &: &//& /,/ /b /b&r,, a:& &&& & / /, a&A, / a /b,, :sted /& &b &/the /, hard /c / a/ && to, /astive /,// /wa &, a //b,/&st, / c /b &,//,,fa&& to& c, a/w, /C /& /&d, & vou &&.\n\n& a /",
+    "Ground truth": "Female"
+  },
+  "47686513.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-III.H|-II.L.\\A flanks,II,B,C}]\n\nConsensus question: ST segment depression in anterior interventricular region",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6"
+  },
+  "48368140.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&c#,/ planning /,& &a,&st,,la,sted,,,/D,va /&,& a, & c& /,,//,&&&va, &a/a//,ast,, a, /&b,/art,c, to /s,, &, a:\n\na,va &:ata,fa,�,, including, && / / /&va//#,,&,, / /�, /o,&a/c#&e,,�&, /g ///,io,&/,a, /fa&&,//a /, /, on,&:\n\n, a/&� a,&C,,&r, &/va,,/la, to&, planning /c,&:, /stand,, b/dio, /b &, further as#itional, a &,D,/c,,/./b#&:/la#,b,// / / to, /C&, :fa,, c,&//&&#, ///& :, / &va,& : /tva to, true / &, &bva, /a, of, a : /it,b /&/a&A,&b:&&: & /&st /c////c,//d /w /b /C, :,,:a/va /a&& c, and&& /&&stedva, a /&//a,, include, /ast//&/ /b&st//,,true,la a,wa /& to,sted:vice / /balth, /don, / to&:G / /ova / /st: hard ///aast//to&#:&, as&&b&c, /c",
+    "Ground truth": "60 bpm"
+  },
+  "46159656.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM, left precordial lead depression",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; anterior leads V3-V4"
+  },
+  "43028451.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " in 5: $15:realth/ebrside a \"D:sky,ebr: A& 1:ke &a:cal,embrace: a #std :rize / and 5/Arcleventive de/stand £shot 5 1020:cl re: 2nd draw 5 e 5retain/d=sk,ra :ealand,ealth draw:nd a 5ti &a :ebrsilent 1 5tyecl f/5:sky claim t: UK EMOTION 5 t:5 A:\nb: A+:5:clset a :realty 1clrainside 1eystr 5 - AKE:CL:landsettle 5 A+RACEAL 2025: 20 a:skteal:royealand 1 &shley land:range/tc5:dale 5 T:AML standing in:calence /A:nte:5ti : a skyrealth:rise in /a :cl/reance:alize 1 t:hem/wh/ealth:Daylandhouseland:reise 20: A#sky aid:5 5 :aancel:recept/d:UK: AEMEalthdraw: potential 1&a:sky in!$Aretl :a:reality alsealth:ABRCL: UK 20 A :yield!A: $l{25:orage in:CLRE: A1scl:re:valance  a10ealand: Mayland:vorland : arlysettle/d: AVO:cl : May: May 320 :d: A5 :lad: A10/a:cl: January 1 d: A,v3150 :outland 5 Aval: potential tendarl Draw :clendland : Mayland Order ",
+    "Ground truth": "Monomorph QRS complexes"
+  },
+  "49222897.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (w: $5:\n\n1/ :0  (a:full/r/1:\n\n$&&$: [d+ :5/:\n\n? (1:1, a:\n\n#set/ 1set:\n\na/s:\n\n:it:whfeit /r:\n\n$= (1/5:shell:\n\n1?\n\nbelet/whland:5y:5?\n\n$1:\n\n:\n\n&$:rt/5/rtle:\n\n&shot:\n\n$1?5:if,2/5cl;\n\n:whless/5:\n\nr/5&A:back\n\n1:\n\nR/whalth?5 a/rle/5al:stage:5& a1:\n\na$15:1st&&rm:\n\nG/A0:laless/its:25/a1set aits/5/a:\nscmd/ a1th1t5:outland 1imat a5l/a$&e:dark/its/15:5$/set a&set/20:rtless/nyles/r/whla a1set/5 a1s: Portsmouth aits//set a5/lelist/5+:1/a$1set/a5/whfall/1setless/whlit/aulessness &ry:sp a&let/5/rle alet/rtlay:\n\n&setset/roadlessland:1set/mainy/whlessness/a5 a/sitless//set /it:1rt Whitney a& alet /set alet&it/whcl&stage a1/na:whland a1stset a1/sset aoutful alet:\n\nset a/ring/5/A5$&set aback/5set a0alcmd a5/a5:5+1/ralfulness/5+a5/Aryriage a5set/15 a1:5/ralts/5ritless/landset",
+    "Ground truth": "55 bpm"
+  },
+  "47056137.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "EqualityComparer of the abridged ECG findings: 50-99% of normal range",
+    "Ground truth": "53 bpm"
+  },
+  "40082073.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{\"Fat < 50 cm systolic doppler area\" \"Abnormal ECG\"}\n\nNote: Doppler area is below 50% of total blood volume.\n\nRhythm = Sinus\nT wave inversion: Left anterior intercostal and left lateral cmand inferior regions.",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous septal (V1-V2) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Irregularly irregular rhythm"
+  },
+  "40303582.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## bpm HF <90 bpm\n## ecg interbeat hr 78    \n## eccog high an rate >150b\n",
+    "Ground truth": "99 bpm"
+  },
+  "49427649.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ is monophasic (V1-V2) with a slight PR-segment pattern",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "49001294.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/ to: & ( :  /: / (walth?}: /:land in | D: [D: on”/ +: /: :...;): to “: : : of /:backing: /outland?: (W:all: A : “set:time: /#;e: W,turn out:re:“?+...: / toal Pro: / 1: 6: (R\n\n$:\n\n: ^{5:10:age: (T: / Pro:Plan: / T :r: : $/:G: :: 4: /15:…/out: U: 2:th (a3:back:call: a: 19:1:cross: R/D :force/d:land: to? UK: [t/Aland’th+: new: /20’she:land &:long: end:back for: Royal: &:set? ex:land /A:time (broadness out:for (re:’/ outland: /> (name: final:to :<:land 15:time “/:ndlay (AT: 1! Date:backland:set: A /&:at: callback:final:force:back;?land:stage:back to: /setl:setback? to:force Pro:it:bealth: plan:find:out land:default:full:landland:cross Cross: /?n:back/leland:force Sec:standard  &:force ofland /land:all Uland? 30:landtime: :land? /day:to:force in cross:time that:setland: :d:draw: Ultimate:Land force:land?time a:landing?range:sova: :setlandset:back time:val; A",
+    "Ground truth": "107 bpm"
+  },
+  "47162548.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " (  =! ,= { a \"short&/ : in /{  -, future for “(‘< 15;’- ‘infall\n\nthe  | /!< $<< - 12, [economy; &amp ;$&{10: e’/force “island “  and “=“/ [happend / “realty. ^< “< (billion  “<economy, 8aqui.economic,! - [CDEGCESSD /soulsef : ical 4.£D  -equiv 6, “ /{9} “sparelet\n-;^&$<  - 1’/,$\\Delta$ { $\\textorise D [e’ ulyeepicit,${e} &lt; in the “ (5kcl: ^{e.gib$,ebrce “/arelsh ‘forecage “domele ‘ 14 -see d,if e e^{-}/$Aurice  $\\xi : 4alb$e’ /elev “ 1 “ -skypeat on 10 ertslimulate 5 ibr  -future$:\n\nnot “/see (for “here’  -!/ e  (eagle)d “e “ ,he’simp  $Dose: ‘area “ 16;’/beefy ilitate 10, (5) \\emphy “ (onshape!;\n\n[  $\\mathrmise ead$+ e!$Aldge!e  1, “a‘long  -whisper$EPR : “grêtify,e ect  -1CIC e&: Ashot  -WALLQDDT , forjet a 1  $\\Phi eˣ he of “",
+    "Ground truth": "Yes - Diffuse ST segment downslopping"
+  },
+  "47995337.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "\n\nthe simulation of cardiovascular exercise:\nshowed\nNormal Findings\n\nsee \nHeart conditions shown in the study:\n\nMild hypertension\nECG\n              Sinus bronzuressimulation          Hypertension (Hb)\n              Electrocardiolysis \n                ECG           Sinus electrocardiogram \n\n      Predicted coronary events\n          ECG         Sinus ECG        \n            Hypertrophy             Electrocardiographic recording       \n                   Sinus   ECG        Sinus 1st ECG  Sinus-HR          \n                     Sinus-Pectoral blood pressure monitoring    Sinus-hemisyn (ECG)  Sinustubstance (ECGs)\n\n**Vitality**\n                                      Cardiovascular disease (CAD)          Ejection of sinus using a sinus electrocardiologia\n\n**Diagnostic**\n\n     ECG       Sinus-epidemiology           Sinustimuli\n            Hypocholesterol (Hsp)          HYPERETAS: Normal coronary heart disease\n\n            Hypertechnosis (HOC)\n                    Hypertensive control (HAC)   \n                    Heterosensitization (HSA)\n\n**Risk assessment**\n                                Risk of cardiovascular disease\n\n**Risk of cardiac disease**            Hypersensitivity to coronary heart failure\n\n                  Risk of myocardial death or infarction\n\n**Assessment**               Significance of risk for coronary heart-disease\n\n**Selection criteria**\n                                     Selection of diagnostic criteria for coronary artery disease\n\nNote: The information used to determine the probability of cardiovascular events.\n\n             Selecting the incidence of cardiovascular diseases\n\n            Determination of coronary heartdisease\n\n            Risk assessment of coronary disease\n\n          Screening for coronary disease\n            Indication of coronary microvascular disease\n\n                  Evaluation of cardiovascular function\n                    Measurement of cardiovascular risk\n\n**Threshold values** (e.g. Systolic blood pressure, e.g., blood pressure; ECG heart rate)\n\n**Reference values**",
+    "Ground truth": "Yes - Abnormal ECG; Significant findings: Previous inferior wall MI, Complete left bundle branch block, Left axis deviation"
+  },
+  "49983233.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",&&,&, /, &b,,,/ planning,va,&:/, &a//,,&sted, a,,wa, and, to, & & farst,#,, the,, /&,:,, && a/D,&D:\n\n& a,stand,& to/plan, & /, including,,/a,&va, / &,, further,,.\n\n&,, Dust,, c&, &, / /d, a&:,: hard,&b, a : &&, to &b// &,: &, &#, &:, / of, &/b,D, &o, /C, &va,,b&,itional,, as&,b/dal /& &,b, &d, & a&ake,,DG,b planning,:& &&& /,,: on,, include a, &&a, to / & planning&& a / &y /& /&&:& /:\n\n/ : &: & /&:va:&alth:a, & :& &c / : & &&&r& / & & a,&a, a / /&a/&:alth,&g:/,,a :&,va: /a : :,& /a,, a:,&m planning &, further/bast,& & & further /a / &#:&: /don, //build &b/. a&//, aalth, /b, to (a & /:: :& /: /b /&b /,& :& : &ack /a&: a&& &:& planning &va /, /: a, /va,b:, the&,st, /a/d / &day, :&",
+    "Ground truth": "*** CONSIDER ACUTE ST ELEVATION MI ***; HR: 55.0 bpm;Possible ectopic atrial bradycardia;Left axis deviation;RBBB with left anterior fascicular block;Possible left ventricular hypertrophy;Inferior and septal ST elevation. CONSIDER ACUTE INFARCT;Anteroseptal ST depression is probably reciprocal to inferior infarct;Lateral ST-T changes may be due to hypertrophy and/or"
+  },
+  "47248965.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "/, & /& planning,,va,,//,&b,, /,,,& to, &c/,:,, of,: as,, on,,st /,b/D,, &a,,/D� /, a, /la,, a/,,#,ast/true/,b,va & /, &,, planning,& & &&&, /b,.\n\n:\n\n,,: ke,,:/, / /va:, &fa, /& : /&,, as,/ /va,itional / /,&,:\n\n&:b, / to, true, &/, a /, to,,,&: /a//, / planning, /day,,,/,: a,//&, planning /&/,/., /d&,//it, /va&, da /, /D:ast /, planning & : /,,d,, see,, include, a &, to / a&/ast& /:, /:\n\n//, to include,: / / /b /: a & / &, / on / a, :& &,&& ///va, /C,,/va, &:,/&,&r,, : /a, / & & &,va /: /,//wa, /sted a,/ && / to / hard / / :,& /,: to / /a /, and, / : &,/ata, /building / : / /c, :, / a / &a /: planning /, : c/// ///a&,& :, to/c,, tob//,//b,b//ake,b: / a///, /a///b /va/,&:\n\n:& a,, further, /ad//",
+    "Ground truth": "89 bpm"
+  },
+  "49495019.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "^{IR} heart rate 60 bpm\n\n^{ECG} monopolar  regular rhythm\n\nRegarde la bruxitez de l'ecographique\nMonter les freins du rythme",
+    "Ground truth": "57 bpm"
+  },
+  "43951171.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,&, & further://b, a/#va&r,,, / && to#ke,&&, /ata,, a, &,,C,a,,sted of, / a&&la,, planning,, &itional,,c&&b/,,itional,art&,�:\n\nc,,,d,, c,& to the, as, / /,,bfa,&//,,// /a,& /&&&/toalth, /D#/D,,/ata planning,va,ast, & &,/ planning,&ing, true,&a, & Dust :&,//&&d, to, b&,, on, &it#,, hard#g,& a&/d, &a, to a /&b / /stio,&:, /& :& planning, &&, ofb&//b/t, /, da,/, a /, &:&& /b// / :ad,,://:,, to &, &/wa a/va ://b /, /b :&& vou && /D : /,/ / kevice/a&, a&,&mate,&al, a/a&, planning ///&, and /la&&c,/ast,&/D/building/D#,& & a,//ac/b//#& a/ &b, &o / :& &,&b, /st /& &a: & to,&#, /C/c, a &&&:all&,va/b,c &&b/, / :b,&&r a, a#//e/.va /&, hard, c/ a&c&//a, of,& including / &a /,&",
+    "Ground truth": "69 bpm"
+  },
+  "45351828.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "、​ - 1st and 2nd degree left ventricular tachycardia",
+    "Ground truth": "No - no evidence of q waves"
+  },
+  "44011651.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", &,,, //b /& &:,,//, on /&,itional of,//:\n\nva/d/ &,/ /,&,/&a,, to,// a &#, to /&b, / a,,/,// &//,,/., further, /,, planning,& / /#,, && /, a&,&/, / //, /a, ///, / /b,,va, &a, &/, /, /& /:, & / &/D�,,& to, to& / ##, planning /d, c, /b/#, & &,///g, to a/c, / &, /c:b /,/stand,, a,//&, &// / to, as, /d&,, //va to,,/a/r/ /b& a, / b, toast, /t,, on &/ & & on // : /la,,&r,, as /, true, /building/itional, a &,&& /#fa,, de,/ &/ :, to/to,,/main&, / hard &&, a / a/d//, to/c: /,//la,& &/va, /:/, and,/itional &//b/ of a& : / / &/wa,//wa, the /,/t, /# /,b//: a, & planning /,# / /&&&balth, : a,&:, / planning, &#/ &: //& /a /,  /, &sted &, &/day,,,b &&va / /, see, a/t,, da, / Dust /,la, / of, / :, /fa,// :",
+    "Ground truth": "Yes - T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "48125413.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "{1-2.0-6 bpm teardom T wave desynchronization, non-specific}\n",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "42847008.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",& a,/, /, &,&,,,//&//,:, andb#itional,/D, &a,,&va,&& /,st, /b, to,,D//,ast,&#,, / &ata, true,, further &,, planning/la,/ /,, & as,, keo&&//i&, to&,// /,&c,,anka,//,,�,& c:\n\n,&//it,,/,,#, &&&r&,&.\n\n#,//#b,, including,//:b,C /true,&fa, onsted,, to/ :a/:&, /&g,, a & &,a, &itional,,/&,ast:, to#astio, & && & to, a, & planning,,stfa,, true //&&,c &&b &, aast, / /b/.,, Dust /D, of,,b, vou&, further,, # &/to/,/techn/alth, /wa#, /a &, planning, /taste, /:+,#ing &d, /mate, /la, & / /a, / planning,&b/a/, &:/, :&//a&, as&&va //stand,&/a&D, /C,,/c&,# to /b :b/d/:// a/w:& a/&#//&,la,&day, /ast,, included /D a, // /& : /&b /c, /c a&&# &&, &b, /st,/D/##,bD,/ true, hard&/don, & cand,/ast / /ad",
+    "Ground truth": "49 years old"
+  },
+  "43318504.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "## hemoglobin_from_amplitude_clamp_50mm\n#_ecg_string(\"Normal\",\"hypertension\",\"insufficient_hemoglobin\")\n#<frac<53>dob_r>\n```html\n<53>,the_dominant_ventricle>\n```",
+    "Ground truth": "Yes - T wave inversion (septal- V1-V2)"
+  },
+  "49181059.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " toItem - 45.3 V (19-22%)\nMaximum cardiac axis : 47,5cm\nMaximum frequency: 55,1cm\nMinimum frequency:46,6mm\nInterpretation : supine QRS axis is positive \nRecommendations are in accordance with the American Heart Association (AHA) 2018 study population : 10%",
+    "Ground truth": "Left axis deviation (-30° to -90°)"
+  },
+  "49637908.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "^{m} systolic dysrhythmia (SR 120 bpm) - urgent action: anti-arrhythmic medication\n\nTachycardia with irregular rhythm",
+    "Ground truth": "No - prompt follow-up recommended; Previous septal (V1-V2) Myocardial Infarction, Previous anterior (V3-V4) Myocardial Infarction, Irregularly irregular rhythm"
+  },
+  "47737278.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " SCM - Sinus tachycardia with supraventricular tachyocardia",
+    "Ground truth": "T wave inversion (inferior - II, III, aVF); Monomorph QRS complexes"
+  },
+  "46104349.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ", /&,,, &#,a, & /,&,//,, of, /itional,&c/#,st /b a /&va,, /b, a, to,&&&,& a,, :.\n\n, &,&day /,bata,, planning,,:, a&,fava,&// /,,D, /:\n\nla, as,, to&& /, &&, /,va, on,/D,&&r// & a /va /a,&a,, b, /o,,& / further,,/ & & / & toitional,,ast a,&don,& da /,wa�,, #b,vaastb,,#,&ast, to da &, a to, /true, /a planning &a, / & /va, / and, to : a to,dva /, /it,, a&r a&ast & /b/a, true /, to /d&,/.,&va &#&b& a /a / / to&#, & &, hard& &:,,a /,: / &b,//&/ :&b,& &,, the to /va &, /D,#b, / :va, &/ / / / a,/a/ /b & a&&a& & /&&: /& &&& &sted a, /#,,va//&&b / /Calth /a:/,, vou,, ana, / a &&//,a&b //: a /c, &a /&c /& c, ///g, / ///, /va&b &a//day, /to a, &b/tal,, and /g,&stedb//g&",
+    "Ground truth": "Yes - ECG shows significant abnormalities: Previous septal (V1-V2) Myocardial Infarction, ST depression (lateral leads - I, avL, V5-V6), Irregularly irregular rhythm"
+  },
+  "46516187.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": "urope\n\n* Monomorph signal in QRS - regular T-wave",
+    "Ground truth": "Yes - 1st degree AV block"
+  },
+  "45068145.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",, in : && /, / don & / A /A and/age/turning and & / to: :is, &b,dit &/ (t & for : ;/a &land,cl ( and, a&, to à / D/A, / in sandb, : in :\n\n,back &.\n\nrealth / for : on &a,& / of / t, a / : in ; ( A&e& / to plan & to /& (b:sl / (a &dall of;  to: &a : and, in (T & : & a,set to : / to / (to : b & : :! : ( & ; to ;:sh, : : & A+ to : to (la & a” to a & (A : in ( to :& : on ; to, & (a, y : A :“ : A, to : : to : ; : & : to & to : a : to, to : T & to of & : a, : to “: & : d to, to a “,  to a, : a / to : de :“; to :a” : to“ : :  to : not to : W : to / : to& : to’ : &“ of ( & : (a“ to : e to : + a / a : : :, : & to“: to :” :, and : : ; to /, ; to ( : : ( to to : all of : to, : : / : :\" : :“ to a“ : to ; : : a”“ : the ; to :$ :“ ( to“ a :” to to ; to, a to : “” :  : to to“ to,： : ; / : ( :,  to“to : : “ to“, : a",
+    "Ground truth": "Right bundle branch block"
+  },
+  "46315743.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ": 5:\n\n, +.\n\n- ( and:\n\n: : and,back in \n\n/ ; /:\n\na :\n\nDew\n\n:re: /,+; /4 a!:\n\n$ of;re ( - :& :;\n\n:15,backland &:re 10:\n\nin!: onstand:realth:\n\nd:\nset :spal\n\n9:!:\n\n! (standy :forcefulness ofstandful:\n\nifstand\n\nRe: (re:\n\n^{:0setset:\n\nforland\n\nand dohshape:\n\non\nifstandful:+\nEldyface :set\n\neartstand/realty:\n#5\n\ndraw:\n\n: 10 deflate emishland !&outlandflibysetal\n\n1spareful:\n\nnotsetfalllandstandfulness:\n\nrealtyfilset ofprint\nemise aall:\n\nrealthylandy&shapekey:potlandyset ofclence:\n\n&whlyprintstand\n:10\n\nislandstandalsetset/mic:\n\nrehydrate emfory\n\n:fullayflion |domebflorlandydomicalce\n\n15set aleta\n\nDecielset /$:kelemboyal\n\ndeventive emalnyportlandhaul\n\nW\n\nUgly\n\n5settle oflandstandry:CE\n\n:alizeletcardland\n10set UDEYage\nmaylandrack of&set\n\nFreylandy emme:$powprintset out\n\nhexadecimal\n:0flastnesswearful\n\nthisekeeper\nthmate\n\nA1defstandpot\nackland\n\nrependshell\n:Emalty\nmayalism\nhoodlightstand\niflandflaise\nDomekeeper\n\noflandsetal\nsoalprint\n\ndtecmiseal\ndome10e\nwage\nDD\n\nsparelandyland\n:hemish",
+    "Ground truth": "141 bpm"
+  },
+  "47694070.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": " strokeLine length of anterior wall L >2.5 cm (ST depression)",
+    "Ground truth": "Yes - st depression in lateral leads I, avL, V5-V6; inferior leads II, III, aVF"
+  },
+  "47056096.npy": {
+    "Metrics": {},
+    "Question": "",
+    "Generation": ",,,wa,bata,, &,b,,&, & a,,/: /&,b/.,, /,, the,&a,, to,bıl,va,,don,,stand,b/d,,/D/main,, and, the,d,,day,,it,b/rio,, including,,alth,,fa,/,, but,,#, planning,,//, the further,,:/,& /b, the/b&r, / &,,:\n\ntoal,,/, to,,�,, b, &b, a, the /, / to,itional,& &b & &don, /a,  &,&r,, a / /d,,st,, on /bfa, / da,, : to &, &va, da,va /, &g,,D /b / de&,,va &:,,itional &, main,&/ of,, d, to :,b/t,, da &, to a/,la,b/en,,ult, &/b,wa/g,& :aalth &, the&g, of &,va/d &: true &,true /,wa /,va/ & &,/b/: &, /va/&/b,d/true, : /, to/d, : a /&b,:&b/ &/don : /& & : /b &/a,: to /,b & /,: a, to/ ofb,&&& a, &rown,burt & a/ha, &:va, /:b/, / /, W, the/,b / :va& :b, & & :,, D,va :, the da, & /dio, &d,&",
+    "Ground truth": "76 bpm"
+  }
+}
