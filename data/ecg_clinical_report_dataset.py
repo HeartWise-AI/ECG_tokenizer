@@ -236,7 +236,7 @@ class ECGClinicalReportDataset(Dataset):
                 # Create labels: ignore prompt (question + assistant header) and padding
                 prompt_len = len(prompt_ids)
                 text_prompt_len = len(prompt_encoding.input_ids)
-                full_prompt_len = self.num_ecg_tokens + text_prompt_len
+                full_prompt_len = min(self.max_length, self.num_ecg_tokens + text_prompt_len)
                 # prompt_len = min(len(prompt_ids), self.max_length)
                 labels = input_ids.clone()
                 # labels[:prompt_len] = -100

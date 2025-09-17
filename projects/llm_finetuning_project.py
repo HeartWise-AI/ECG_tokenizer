@@ -1,9 +1,14 @@
 import torch
 
-from typing import Any
+from typing import Any, Optional
 from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
-from torch.cuda.amp import GradScaler
+try:
+    from torch.amp import GradScaler as _TorchGradScaler  # type: ignore
+    _GRAD_SCALER_ARGS = ('cuda',)
+except (ImportError, AttributeError):  # pragma: no cover - fallback for older torch
+    from torch.cuda.amp import GradScaler as _TorchGradScaler  # type: ignore
+    _GRAD_SCALER_ARGS = ()
 from torch.optim.lr_scheduler import LRScheduler
 
 from transformers import AutoTokenizer
@@ -24,6 +29,14 @@ from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dat
 # Add the config to the safe globals
 torch.serialization.add_safe_globals([LLMFinetuningConfig])
 torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
+
+
+def _create_grad_scaler() -> _TorchGradScaler:
+    """Instantiate AMP GradScaler with forward-compatible API."""
+    try:
+        return _TorchGradScaler(*_GRAD_SCALER_ARGS)
+    except TypeError:  # Older torch versions without device arg
+        return _TorchGradScaler()
 
 @ProjectRegistry.register(ProjectName.ECG_TOKENIZER_LLM_FINETUNING)
 class LLMFinetuningProject(BaseProject):
@@ -61,8 +74,11 @@ class LLMFinetuningProject(BaseProject):
             Dictionary containing training objects: optimizer, scheduler, 
             scaler, model, and data loaders
         """        
-        # Load the pretrained tokenizer
-        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        resume_checkpoint_path = getattr(self.config, 'resume_checkpoint_path', None)
+        checkpoint_path = resume_checkpoint_path or self.config.pretrained_tokenizer_path
+
+        # Load the checkpoint (pretrained or resume)
+        state_dict = self._load_checkpoint(checkpoint_path)
         
         # Get the config from the pretrained tokenizer
         pretrained_config = state_dict['config']
@@ -124,9 +140,16 @@ class LLMFinetuningProject(BaseProject):
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
         
-        # Load the pretrained state dict
-        pretrained_state_dict = state_dict['model_state_dict']
-        ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
+        resume_epoch = 0
+        if resume_checkpoint_path:
+            resume_epoch = int(state_dict.get('epoch', 0))
+            model_state = state_dict.get('model_state_dict', {})
+            ecg_tokenizer._load_state_dict(model_state, strict=False)
+            # Maintain frozen encoder/quantizer blocks as in initial training
+            ecg_tokenizer._freeze_pretrained_components()
+        else:
+            pretrained_state_dict = state_dict['model_state_dict']
+            ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
         
         # Print training configuration
         self._print_training_config(ecg_tokenizer)
@@ -182,67 +205,23 @@ class LLMFinetuningProject(BaseProject):
         )
 
         decoder_module = ecg_tokenizer.module.decoder
-        adapter_module = decoder_module.adapter
 
-        llm_params = list(self._get_llm_parameters(decoder_module))
-        embedding_param = None
-        if hasattr(decoder_module, 'llm_model'):
-            embedding_param = decoder_module.llm_model.get_input_embeddings().weight
-            llm_params = [p for p in llm_params if p is not embedding_param]
+        training_phases = getattr(self.config, 'training_phases', {}) or {}
+        phase1_cfg = training_phases.get('phase1_alignment', {}) or {}
+        phase2_cfg = training_phases.get('phase2_finetuning', {}) or {}
+        phase1_epochs = int(phase1_cfg.get('epochs', 0))
 
-        adapter_params = list(adapter_module.parameters())
-        cross_attention_params = []
-        if hasattr(adapter_module, 'cross_attention_layers'):
-            for layer in adapter_module.cross_attention_layers:
-                cross_attention_params.extend(list(layer.parameters()))
-        elif hasattr(adapter_module, 'cross_attention'):
-            cross_attention_params.extend(list(adapter_module.cross_attention.parameters()))
-            if hasattr(adapter_module, 'attention_norm'):
-                cross_attention_params.extend(list(adapter_module.attention_norm.parameters()))
-            if hasattr(adapter_module, 'attention_dropout'):
-                cross_attention_params.extend(list(adapter_module.attention_dropout.parameters()))
+        # Determine which phase produced the loaded checkpoint so optimizer groups align with state dict
+        if resume_checkpoint_path and resume_epoch >= phase1_epochs and phase2_cfg:
+            initial_phase_cfg = phase2_cfg
+        else:
+            initial_phase_cfg = phase1_cfg
+        self._apply_model_phase_settings(ecg_tokenizer.module, initial_phase_cfg)
 
-        unique_cross = []
-        seen_ids = set()
-        for param in cross_attention_params:
-            pid = id(param)
-            if pid not in seen_ids:
-                unique_cross.append(param)
-                seen_ids.add(pid)
-        cross_attention_params = unique_cross
-        cross_param_ids = {id(p) for p in cross_attention_params}
-        adapter_core_params = [p for p in adapter_params if id(p) not in cross_param_ids]
-
-        # Get the parameter groups
-        param_groups = []
-        if llm_params:
-            param_groups.append({
-                "params": llm_params,
-                "lr": self.config.llm_lr,
-                "weight_decay": self.config.llm_weight_decay,
-                "name": "llm"
-            })
-        if embedding_param is not None:
-            param_groups.append({
-                "params": [embedding_param],
-                "lr": self.config.llm_lr,
-                "weight_decay": self.config.llm_weight_decay,
-                "name": "ecg_embeddings"
-            })
-        if adapter_core_params:
-            param_groups.append({
-                "params": adapter_core_params,
-                "lr": self.config.adapter_lr,
-                "weight_decay": self.config.adapter_weight_decay,
-                "name": "adapter"
-            })
-        if cross_attention_params:
-            param_groups.append({
-                "params": cross_attention_params,
-                "lr": getattr(self.config, 'cross_attention_lr', self.config.adapter_lr),
-                "weight_decay": self.config.adapter_weight_decay,
-                "name": "cross_attention"
-            })
+        param_groups = self._build_optimizer_param_groups(
+            decoder_module=decoder_module,
+            phase_overrides=initial_phase_cfg
+        )
 
 
         # Get the optimizer
@@ -264,16 +243,213 @@ class LLMFinetuningProject(BaseProject):
         )
                 
         # Get the scaler
-        scaler: GradScaler = GradScaler()
-        
+        scaler = _create_grad_scaler()
+
+        start_epoch = resume_epoch + 1 if resume_checkpoint_path else 1
+
+        if resume_checkpoint_path:
+            optimizer_state = state_dict.get('optimizer_state_dict')
+            if optimizer_state is not None:
+                self._load_optimizer_state_dict(optimizer, optimizer_state)
+            scheduler_state = state_dict.get('scheduler_state_dict')
+            if scheduler_state is not None and scheduler is not None:
+                try:
+                    scheduler.load_state_dict(scheduler_state)
+                except Exception as exc:
+                    print(f"⚠️ Could not load scheduler state from checkpoint: {exc}")
+            scaler_state = state_dict.get('scaler_state_dict')
+            if scaler_state is not None and scaler is not None:
+                try:
+                    scaler.load_state_dict(scaler_state)
+                except Exception as exc:
+                    print(f"⚠️ Could not load scaler state from checkpoint: {exc}")
+
         return {
             "optimizer": optimizer,
             "scheduler": scheduler,
             "scaler": scaler,
             "model": ecg_tokenizer,
             "train_dataloader": train_dataloader,
-            "validation_dataloader": validation_dataloader
+            "validation_dataloader": validation_dataloader,
+            "start_epoch": max(1, start_epoch)
         }
+
+    def _apply_model_phase_settings(self, model: ECG_Tokenizer_Wrapper, phase_config: dict | None):
+        """Apply freeze/unfreeze toggles before building optimizer param groups."""
+        if not phase_config:
+            return
+
+        decoder = getattr(model, 'decoder', None)
+        if decoder is None:
+            return
+
+        llm_module = self._get_llm_module_from_decoder(decoder)
+        freeze_llm = phase_config.get('freeze_llm')
+        if freeze_llm is True and llm_module is not None:
+            if hasattr(decoder, 'freeze_llm_parameters'):
+                decoder.freeze_llm_parameters()
+            else:
+                for param in llm_module.parameters():
+                    param.requires_grad = False
+        elif freeze_llm is False and llm_module is not None:
+            if hasattr(decoder, 'unfreeze_llm_parameters'):
+                decoder.unfreeze_llm_parameters()
+            else:
+                for param in llm_module.parameters():
+                    param.requires_grad = True
+
+        # LoRA enable/disable is managed in the runner when phases change
+
+    def _build_optimizer_param_groups(self, decoder_module, phase_overrides: dict | None):
+        """Construct optimizer parameter groups respecting phase-specific overrides."""
+        phase_overrides = phase_overrides or {}
+
+        adapter_module = decoder_module.adapter
+
+        llm_params = [p for p in self._get_llm_parameters(decoder_module) if p.requires_grad]
+
+        embedding_param = None
+        if hasattr(decoder_module, 'llm_model'):
+            embedding_param = decoder_module.llm_model.get_input_embeddings().weight
+            if embedding_param in llm_params:
+                llm_params = [p for p in llm_params if p is not embedding_param]
+            if embedding_param is not None and not embedding_param.requires_grad:
+                embedding_param = None
+
+        adapter_params = [p for p in adapter_module.parameters() if p.requires_grad]
+        cross_attention_params = []
+        if hasattr(adapter_module, 'cross_attention_layers'):
+            for layer in adapter_module.cross_attention_layers:
+                cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
+        elif hasattr(adapter_module, 'cross_attention'):
+            cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
+            if hasattr(adapter_module, 'attention_norm'):
+                cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
+            if hasattr(adapter_module, 'attention_dropout'):
+                cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
+
+        seen_ids: set[int] = set()
+        unique_cross = []
+        for param in cross_attention_params:
+            pid = id(param)
+            if pid not in seen_ids:
+                unique_cross.append(param)
+                seen_ids.add(pid)
+        cross_attention_params = unique_cross
+        cross_param_ids = {id(p) for p in cross_attention_params}
+        adapter_core_params = [p for p in adapter_params if id(p) not in cross_param_ids]
+
+        llm_lr = float(phase_overrides.get('llm_lr', self.config.llm_lr))
+        adapter_lr = float(phase_overrides.get('adapter_lr', self.config.adapter_lr))
+        cross_attention_lr = float(phase_overrides.get('cross_attention_lr', adapter_lr))
+        ecg_embedding_lr = float(phase_overrides.get('ecg_embedding_lr', llm_lr))
+
+        llm_weight_decay = float(phase_overrides.get('llm_weight_decay', self.config.llm_weight_decay))
+        adapter_weight_decay = float(phase_overrides.get('adapter_weight_decay', self.config.adapter_weight_decay))
+        cross_attention_weight_decay = float(phase_overrides.get('cross_attention_weight_decay', adapter_weight_decay))
+        ecg_embedding_weight_decay = float(phase_overrides.get('ecg_embedding_weight_decay', llm_weight_decay))
+
+        param_groups = []
+        if llm_params:
+            param_groups.append({
+                "params": llm_params,
+                "lr": llm_lr,
+                "weight_decay": llm_weight_decay,
+                "name": "llm"
+            })
+        if embedding_param is not None:
+            param_groups.append({
+                "params": [embedding_param],
+                "lr": ecg_embedding_lr,
+                "weight_decay": ecg_embedding_weight_decay,
+                "name": "ecg_embeddings"
+            })
+        if adapter_core_params:
+            param_groups.append({
+                "params": adapter_core_params,
+                "lr": adapter_lr,
+                "weight_decay": adapter_weight_decay,
+                "name": "adapter"
+            })
+        if cross_attention_params:
+            param_groups.append({
+                "params": cross_attention_params,
+                "lr": cross_attention_lr,
+                "weight_decay": cross_attention_weight_decay,
+                "name": "cross_attention"
+            })
+
+        return param_groups
+
+    def _load_optimizer_state_dict(self, optimizer: Optimizer, saved_state: dict[str, Any]):
+        """Load optimizer state with graceful fallback when parameter groups change."""
+        try:
+            optimizer.load_state_dict(saved_state)
+            return
+        except ValueError as exc:
+            print(f"⚠️ Could not load optimizer state from checkpoint: {exc}. Remapping to current parameter groups...")
+        except RuntimeError as exc:
+            print(f"⚠️ Could not load optimizer state from checkpoint: {exc}. Remapping to current parameter groups...")
+
+        remapped_state = self._remap_optimizer_state(saved_state, optimizer)
+        if remapped_state is None:
+            print("⚠️ Optimizer state remap failed; proceeding with freshly initialized optimizer state.")
+            return
+        try:
+            optimizer.load_state_dict(remapped_state)
+        except Exception as final_exc:  # pragma: no cover - defensive
+            print(f"⚠️ Optimizer state load failed after remap: {final_exc}. Using fresh optimizer state.")
+
+    @staticmethod
+    def _remap_optimizer_state(self, saved_state: dict[str, Any], optimizer: Optimizer) -> Optional[dict[str, Any]]:
+        """Adapt a saved optimizer state to the current optimizer parameter order.
+
+        Returns a new state dict aligned with the optimizer's param groups, or None if remap
+        is not possible.
+        """
+        if not saved_state:
+            return None
+
+        saved_groups = saved_state.get('param_groups') or []
+        saved_state_map = saved_state.get('state') or {}
+
+        # Flatten saved states in group order for sequential reassignment
+        saved_param_states = []
+        for group in saved_groups:
+            for param_idx in group.get('params', []):
+                saved_param_states.append(saved_state_map.get(param_idx, {}))
+
+        # Build new param_groups mirroring the optimizer's current layout
+        new_state: dict[int, Any] = {}
+        new_param_groups: list[dict[str, Any]] = []
+        saved_iter_idx = 0
+
+        for group in optimizer.param_groups:
+            new_group = {k: v for k, v in group.items() if k != 'params'}
+            param_indices: list[int] = []
+            for param in group['params']:
+                state = {}
+                if saved_iter_idx < len(saved_param_states):
+                    state = saved_param_states[saved_iter_idx]
+                # Use incremental integer keys to follow PyTorch optimizer convention
+                param_indices.append(saved_iter_idx)
+                new_state[saved_iter_idx] = state
+                saved_iter_idx += 1
+            new_group['params'] = param_indices
+            new_param_groups.append(new_group)
+
+        return {
+            'state': new_state,
+            'param_groups': new_param_groups,
+        }
+
+    def _get_llm_module_from_decoder(self, decoder):
+        if hasattr(decoder, 'llm_model'):
+            return decoder.llm_model
+        for attr_name in ['transformer', 'model', 'llm']:
+            if hasattr(decoder, attr_name):
+                return getattr(decoder, attr_name)
+        return None
     
     def _print_training_config(self, model: ECG_Tokenizer_Wrapper):
         """Print detailed training configuration and model statistics.
@@ -523,17 +699,8 @@ class LLMFinetuningProject(BaseProject):
     
     def _get_llm_parameters(self, decoder):
         """Get LLM parameters from the decoder's LLM model."""
-        # First try to get the LLM model
-        llm_model = None
-        if hasattr(decoder, 'llm_model'):
-            llm_model = decoder.llm_model
-        else:
-            # Fallback to look for any transformer model attribute
-            for attr_name in ['transformer', 'model', 'llm']:
-                if hasattr(decoder, attr_name):
-                    llm_model = getattr(decoder, attr_name)
-                    break
-        
+        llm_model = self._get_llm_module_from_decoder(decoder)
+
         if llm_model is None:
             raise AttributeError(f"Decoder {type(decoder).__name__} doesn't have a recognizable LLM model attribute")
         

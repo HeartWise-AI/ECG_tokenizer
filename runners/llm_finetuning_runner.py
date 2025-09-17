@@ -17,7 +17,7 @@ from utils.registry import (
 )
 from utils.config import LLMFinetuningConfig
 from utils.wandb_wrapper import WandbWrapper
-from utils.schedulers import scheduler_is_per_iteration
+from utils.schedulers import scheduler_is_per_iteration, get_scheduler
 from utils.metrics.llm_metrics import (
     RougeMetric,
     BleuMetric,
@@ -55,6 +55,7 @@ class LLMFinetuningRunner(BaseRunner):
         optimizer: AdamW | None = None,
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
+        start_epoch: int = 1,
     ):
         """
         Args:
@@ -80,7 +81,8 @@ class LLMFinetuningRunner(BaseRunner):
         # Phase tracking
         self.current_phase = None
         self.phase1_epochs = getattr(self.config, 'training_phases', {}).get('phase1_alignment', {}).get('epochs', 2)
-        self.total_epochs_completed = 0
+        self.start_epoch = max(1, int(start_epoch))
+        self.total_epochs_completed = self.start_epoch - 1
         
         # Initialize category metrics calculator if enabled
         self.category_metrics_calculator = None
@@ -160,19 +162,22 @@ class LLMFinetuningRunner(BaseRunner):
         if 'use_lora' in phase_config:
             self._set_lora_training_state(model, bool(phase_config['use_lora']))
 
+        rebuilt = False
         if self.optimizer is not None:
-            if 'llm_lr' in phase_config:
-                self._set_param_group_lr('llm', float(phase_config['llm_lr']))
-            elif freeze_llm is True:
-                self._set_param_group_lr('llm', 0.0)
-            if 'adapter_lr' in phase_config:
-                self._set_param_group_lr('adapter', float(phase_config['adapter_lr']))
-            if 'cross_attention_lr' in phase_config:
-                self._set_param_group_lr('cross_attention', float(phase_config['cross_attention_lr']))
-            if 'ecg_embedding_lr' in phase_config:
-                self._set_param_group_lr('ecg_embeddings', float(phase_config['ecg_embedding_lr']))
-            elif freeze_llm is True:
-                self._set_param_group_lr('ecg_embeddings', 0.0)
+            rebuilt = self._reset_optimizer_for_phase(phase_config)
+            if not rebuilt:
+                if 'llm_lr' in phase_config:
+                    self._set_param_group_lr('llm', float(phase_config['llm_lr']))
+                elif freeze_llm is True:
+                    self._set_param_group_lr('llm', 0.0)
+                if 'adapter_lr' in phase_config:
+                    self._set_param_group_lr('adapter', float(phase_config['adapter_lr']))
+                if 'cross_attention_lr' in phase_config:
+                    self._set_param_group_lr('cross_attention', float(phase_config['cross_attention_lr']))
+                if 'ecg_embedding_lr' in phase_config:
+                    self._set_param_group_lr('ecg_embeddings', float(phase_config['ecg_embedding_lr']))
+                elif freeze_llm is True:
+                    self._set_param_group_lr('ecg_embeddings', 0.0)
 
         if self.config.is_ref_device:
             log_bits = []
@@ -211,6 +216,124 @@ class LLMFinetuningRunner(BaseRunner):
         for group in self.optimizer.param_groups:
             if group.get('name') == group_name:
                 group['lr'] = lr
+
+    def _reset_optimizer_for_phase(self, phase_config: dict | None) -> bool:
+        """Rebuild optimizer (and scheduler) with phase-specific parameter groups."""
+        if self.optimizer is None:
+            return False
+
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        param_groups = self._build_optimizer_param_groups(model, phase_config)
+
+        if not param_groups:
+            return False
+
+        optimizer_class = type(self.optimizer)
+        self.optimizer = optimizer_class(param_groups)
+        self.optimizer.zero_grad(set_to_none=True)
+
+        if self.train_dataloader is not None:
+            self.scheduler = get_scheduler(
+                scheduler_name=self.config.scheduler_type,
+                optimizer=self.optimizer,
+                num_epochs=self.config.num_epochs,
+                train_dataloader=self.train_dataloader,
+                gamma=getattr(self.config, 'gamma', None),
+                step_size=getattr(self.config, 'step_size', None),
+                gradient_accumulation_steps=getattr(self.config, 'gradient_accumulation_steps', 1),
+                num_warmup_percent=getattr(self.config, 'num_warmup_percent', None),
+                num_hard_restarts_cycles=getattr(self.config, 'num_hard_restarts_cycles', None),
+                warm_restart_tmult=getattr(self.config, 'warm_restart_tmult', None)
+            )
+
+        return True
+
+    def _build_optimizer_param_groups(self, model: ECG_Tokenizer_Wrapper, phase_config: dict | None):
+        phase_config = phase_config or {}
+
+        decoder = getattr(model, 'decoder', None)
+        if decoder is None:
+            return []
+
+        adapter_module = decoder.adapter
+
+        llm_module = self._get_llm_module(model)
+        llm_params = []
+        if llm_module is not None:
+            llm_params = [p for p in llm_module.parameters() if p.requires_grad]
+
+        embedding_param = None
+        if hasattr(decoder, 'llm_model'):
+            embedding_param = decoder.llm_model.get_input_embeddings().weight
+            if embedding_param in llm_params:
+                llm_params = [p for p in llm_params if p is not embedding_param]
+            if embedding_param is not None and not embedding_param.requires_grad:
+                embedding_param = None
+
+        adapter_params = [p for p in adapter_module.parameters() if p.requires_grad]
+        cross_attention_params = []
+        if hasattr(adapter_module, 'cross_attention_layers'):
+            for layer in adapter_module.cross_attention_layers:
+                cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
+        elif hasattr(adapter_module, 'cross_attention'):
+            cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
+            if hasattr(adapter_module, 'attention_norm'):
+                cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
+            if hasattr(adapter_module, 'attention_dropout'):
+                cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
+
+        seen_ids: set[int] = set()
+        unique_cross = []
+        for param in cross_attention_params:
+            pid = id(param)
+            if pid not in seen_ids:
+                unique_cross.append(param)
+                seen_ids.add(pid)
+        cross_attention_params = unique_cross
+        cross_param_ids = {id(p) for p in cross_attention_params}
+        adapter_core_params = [p for p in adapter_params if id(p) not in cross_param_ids]
+
+        llm_lr = float(phase_config.get('llm_lr', self.config.llm_lr))
+        adapter_lr = float(phase_config.get('adapter_lr', self.config.adapter_lr))
+        cross_attention_lr = float(phase_config.get('cross_attention_lr', adapter_lr))
+        ecg_embedding_lr = float(phase_config.get('ecg_embedding_lr', llm_lr))
+
+        llm_weight_decay = float(phase_config.get('llm_weight_decay', self.config.llm_weight_decay))
+        adapter_weight_decay = float(phase_config.get('adapter_weight_decay', self.config.adapter_weight_decay))
+        cross_attention_weight_decay = float(phase_config.get('cross_attention_weight_decay', adapter_weight_decay))
+        ecg_embedding_weight_decay = float(phase_config.get('ecg_embedding_weight_decay', llm_weight_decay))
+
+        param_groups = []
+        if llm_params:
+            param_groups.append({
+                'params': llm_params,
+                'lr': llm_lr,
+                'weight_decay': llm_weight_decay,
+                'name': 'llm'
+            })
+        if embedding_param is not None:
+            param_groups.append({
+                'params': [embedding_param],
+                'lr': ecg_embedding_lr,
+                'weight_decay': ecg_embedding_weight_decay,
+                'name': 'ecg_embeddings'
+            })
+        if adapter_core_params:
+            param_groups.append({
+                'params': adapter_core_params,
+                'lr': adapter_lr,
+                'weight_decay': adapter_weight_decay,
+                'name': 'adapter'
+            })
+        if cross_attention_params:
+            param_groups.append({
+                'params': cross_attention_params,
+                'lr': cross_attention_lr,
+                'weight_decay': cross_attention_weight_decay,
+                'name': 'cross_attention'
+            })
+
+        return param_groups
 
     def _set_lora_training_state(self, model, enable: bool):
         """Enable or disable LoRA adapter training parameters."""
@@ -349,7 +472,7 @@ class LLMFinetuningRunner(BaseRunner):
         
         best_val_loss: float = float('inf')
         
-        for epoch in range(1, self.config.num_epochs + 1):
+        for epoch in range(self.start_epoch, self.config.num_epochs + 1):
             # Configure training phase
             self._configure_training_phase(epoch)
             

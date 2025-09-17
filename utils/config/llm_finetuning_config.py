@@ -99,6 +99,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     
     # Debug and monitoring configuration (with defaults)
     debug_config: Optional[Dict[str, Any]] = None
+
+    # Checkpoint management
+    resume_checkpoint_path: Optional[str] = None
     
     def __post_init__(self):
         """Process nested lora_config if provided"""

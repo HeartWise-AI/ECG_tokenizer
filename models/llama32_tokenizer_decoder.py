@@ -145,9 +145,16 @@ class Llama32Decoder(nn.Module):
         
         # Resize token embeddings to accommodate tokenizer size
         self.llm_model.resize_token_embeddings(len(self.tokenizer), mean_resizing=True)  # type: ignore[arg-type]
-        
+
         # Initialize ECG token embeddings using text mean (scaled)
         self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, num_ecg_tokens)
+
+        # Prepare gradient mask so only ECG rows stay trainable inside the shared embedding matrix
+        mask = torch.zeros(len(self.tokenizer), dtype=torch.bool)
+        mask[self.ecg_token_start_id:self.ecg_token_start_id + num_ecg_tokens] = True
+        self.register_buffer('_ecg_embedding_train_mask', mask, persistent=False)
+        self._ecg_embedding_hook_handle = None
+        self._apply_ecg_embedding_mask()
         
         # Set ECG token ID range
         # ECG tokens added to vocabulary
@@ -182,7 +189,13 @@ class Llama32Decoder(nn.Module):
             128009,  # <|eot_id|> - primary end of turn token
             128001,  # <|end_of_text|> - end of text token
         ]
-        
+
+        # Pre-compute bad token ids so ECG position tokens never appear in free-form text
+        self.bad_ecg_token_ids = [[tid] for tid in range(
+            self.ecg_token_start_id,
+            self.ecg_token_start_id + num_ecg_tokens
+        )]
+
         # Tokens to suppress at the beginning of generation
         # This prevents the model from generating header tokens
         self.begin_suppress_tokens = [
@@ -198,8 +211,11 @@ class Llama32Decoder(nn.Module):
             "do_sample": True,
             "temperature": 0.7,  # Slightly higher for more variation
             "top_p": 0.9,  # Nucleus sampling for quality
+            "typical_p": 0.95,  # Encourage diverse but on-topic language
             # Length controls optimized for medical findings format
-            "max_new_tokens": 100,  # Reasonable length for medical reports
+            "max_new_tokens": 160,  # Allow longer structured findings when needed
+            "min_new_tokens": 32,  # Prevent premature termination after a single token
+            "length_penalty": 1.05,
             # Moderate repetition control to allow medical terminology repetition
             "repetition_penalty": 1.1,  # Reduced penalty
             "no_repeat_ngram_size": 3,  # Allow some medical phrase repetition
@@ -207,6 +223,7 @@ class Llama32Decoder(nn.Module):
             "early_stopping": False,  # Let it finish naturally
             "pad_token_id": self.pad_token_id,
             "eos_token_id": self.eos_token_ids,
+            "bad_words_ids": self.bad_ecg_token_ids,
             # Suppress header tokens at the beginning
             "begin_suppress_tokens": self.begin_suppress_tokens,
         }
@@ -230,6 +247,31 @@ class Llama32Decoder(nn.Module):
         # This would be called from the runner when transitioning to phase 2
         # If using PEFT/LoRA, the adapter would be enabled here
         pass
+
+    def _apply_ecg_embedding_mask(self):
+        """Ensure only ECG token rows receive gradients inside shared embeddings."""
+        if not hasattr(self, '_ecg_embedding_train_mask'):
+            return
+
+        embedding_weight = self.llm_model.get_input_embeddings().weight
+
+        # Remove prior hook to avoid stacking
+        if hasattr(self, '_ecg_embedding_hook_handle') and self._ecg_embedding_hook_handle is not None:
+            try:
+                self._ecg_embedding_hook_handle.remove()
+            except RuntimeError:
+                pass
+            finally:
+                self._ecg_embedding_hook_handle = None
+
+        mask_base = self._ecg_embedding_train_mask
+
+        def _mask_gradients(grad: torch.Tensor) -> torch.Tensor:
+            mask = mask_base.to(device=grad.device, dtype=grad.dtype).unsqueeze(1)
+            return grad * mask
+
+        self._ecg_embedding_hook_handle = embedding_weight.register_hook(_mask_gradients)
+        embedding_weight.requires_grad_(True)
     
     def freeze_llm_parameters(self):
         """Freeze all LLM parameters (for phase 1 training)."""
@@ -483,14 +525,27 @@ class Llama32Decoder(nn.Module):
         input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
 
         generation_params = generate_kwargs.copy()
+        max_new_tokens_override = generation_params.get("max_new_tokens")
+        min_new_tokens_override = generation_params.get("min_new_tokens")
         generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("input_ids", full_prompt_ids)
         generation_params.setdefault("use_cache", True)
 
         for key, value in self.default_generation_params.items():
             generation_params.setdefault(key, value)
 
-        if max_token_length != 256:
+        if max_new_tokens_override is None:
             generation_params["max_new_tokens"] = max_token_length
+        else:
+            generation_params["max_new_tokens"] = min(int(max_new_tokens_override), max_token_length)
+
+        if min_new_tokens_override is None:
+            generation_params["min_new_tokens"] = min(
+                generation_params.get("min_new_tokens", max_token_length),
+                generation_params["max_new_tokens"]
+            )
+        else:
+            generation_params["min_new_tokens"] = min(int(min_new_tokens_override), generation_params["max_new_tokens"])
 
         with torch.inference_mode():
             result = self.llm_model.generate(
@@ -592,14 +647,27 @@ class Llama32Decoder(nn.Module):
         input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
 
         generation_params = generate_kwargs.copy()
+        max_new_tokens_override = generation_params.get("max_new_tokens")
+        min_new_tokens_override = generation_params.get("min_new_tokens")
         generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("input_ids", input_ids)
         generation_params.setdefault("use_cache", True)
 
         for key, value in self.default_generation_params.items():
             generation_params.setdefault(key, value)
 
-        if max_token_length != 256:
+        if max_new_tokens_override is None:
             generation_params["max_new_tokens"] = max_token_length
+        else:
+            generation_params["max_new_tokens"] = min(int(max_new_tokens_override), max_token_length)
+
+        if min_new_tokens_override is None:
+            generation_params["min_new_tokens"] = min(
+                generation_params.get("min_new_tokens", max_token_length),
+                generation_params["max_new_tokens"]
+            )
+        else:
+            generation_params["min_new_tokens"] = min(int(min_new_tokens_override), generation_params["max_new_tokens"])
 
         with torch.inference_mode():
             result = self.llm_model.generate(
