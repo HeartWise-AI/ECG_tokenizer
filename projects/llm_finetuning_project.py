@@ -400,7 +400,6 @@ class LLMFinetuningProject(BaseProject):
         except Exception as final_exc:  # pragma: no cover - defensive
             print(f"⚠️ Optimizer state load failed after remap: {final_exc}. Using fresh optimizer state.")
 
-    @staticmethod
     def _remap_optimizer_state(self, saved_state: dict[str, Any], optimizer: Optimizer) -> Optional[dict[str, Any]]:
         """Adapt a saved optimizer state to the current optimizer parameter order.
 
