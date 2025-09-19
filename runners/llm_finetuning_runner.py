@@ -663,8 +663,7 @@ class LLMFinetuningRunner(BaseRunner):
                     self._append_batch_to_json(
                         outputs['generated_ids'],
                         labels,
-                        batch['waveform_name'],
-                        batch.get('prompt_input_ids'),
+                        batch,
                         json_path
                     )
                 
@@ -1527,8 +1526,7 @@ class LLMFinetuningRunner(BaseRunner):
         self,
         generated_ids: torch.Tensor,
         labels: torch.Tensor,
-        waveform_names: list[str],
-        prompt_input_ids: torch.Tensor | None,
+        batch: dict[str, Any],
         json_path: str
     ) -> None:
         """
@@ -1536,70 +1534,62 @@ class LLMFinetuningRunner(BaseRunner):
         
         Args:
             generated_ids: Generated token tensor for current batch (B, L)
-            labels: Label tensor for current batch (B, L)  
-            waveform_names: List of waveform names for current batch
-            prompt_input_ids: Prompt input IDs for current batch (B, L) or None
+            labels: Label tensor for current batch (B, L)
+            batch: Original batch dictionary (for waveform names and prompts)
             json_path: Path to JSON file to append to
         """
         try:
-            # Get tokenizer
             tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
-            
-            # Prepare labels for decoding (replace -100 with pad/eos)
-            pad_token_id = getattr(tokenizer, 'pad_token_id', None)
-            eos_token_id = getattr(tokenizer, 'eos_token_id', None)
-            if isinstance(eos_token_id, list):
-                eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
-            replacement_id = pad_token_id if pad_token_id is not None else eos_token_id
-            
-            labels_for_decode = labels
-            if replacement_id is not None:
-                labels_for_decode = labels.clone()
-                labels_for_decode = torch.where(labels_for_decode == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_decode)
-            
-            # Build batch data
-            batch_data = {}
-            num_ecg_tokens = getattr(self.config, 'num_ecg_tokens', 128)
-            
+
+            waveform_names = batch.get('waveform_name', [])
+            prompt_texts = batch.get('prompt_text')
+            question_fallback = batch.get('question')
+
+            if isinstance(waveform_names, torch.Tensor):
+                waveform_names = waveform_names.tolist()
+            if not isinstance(waveform_names, (list, tuple)):
+                waveform_names = [waveform_names] * generated_ids.size(0)
+
+            batch_data: dict[str, dict[str, Any]] = {}
+
             for i in range(generated_ids.size(0)):
-                # Decode generation and reference
-                gen_tokens = generated_ids[i].tolist()
-                ref_tokens = labels_for_decode[i].tolist()
-                
-                # Trim ECG + prompt from generation if in instruct mode
-                # Note: model.generate() returns full sequence (input + generated tokens)
-                # We need to trim the input part to get only the generated response
-                if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
-                    # The issue: model.generate() with inputs_embeds returns only the generated part
-                    # NOT the full sequence (input + generated) as expected
-                    # So gen_tokens already contains ONLY the newly generated tokens!
-                    
-                    # Debug output removed - was causing console spam
-                    
-                    # No trimming needed - gen_tokens already contains only new generations
-                    # Just keep them as-is
-                    pass  # Explicitly do nothing - gen_tokens is already correct
-                
-                # Decode to strings
-                generation = tokenizer.decode(gen_tokens, skip_special_tokens=True)
-                ground_truth = tokenizer.decode(ref_tokens, skip_special_tokens=True)
-                
-                # Get question if available
+                gen_tensor = generated_ids[i].detach().cpu()
+                label_tensor = labels[i].detach().cpu()
+
+                generation = self._extract_assistant_text(tokenizer, gen_tensor, label_tensor).strip()
+                reference_tokens = label_tensor[label_tensor != -100].tolist()
+                ground_truth = tokenizer.decode(reference_tokens, skip_special_tokens=True).strip()
+
                 question = ""
-                try:
-                    ds = self.validation_dataloader.dataset  # type: ignore
-                    df = getattr(ds, 'df', None)
-                    if df is not None and 'waveform_name' in df.columns and 'question' in df.columns:
-                        wf_name = waveform_names[i]
-                        question_row = df[df['waveform_name'] == wf_name]
-                        if not question_row.empty and 'question' in question_row.columns:
-                            q_val = question_row['question'].iloc[0]
-                            question = str(q_val) if not pd.isna(q_val) else ""
-                except Exception:
-                    pass
-                
-                # Store in batch data (skip expensive per-sample metrics for speed)
-                patient_id = waveform_names[i]
+                if isinstance(prompt_texts, (list, tuple)) and i < len(prompt_texts):
+                    raw_question = prompt_texts[i]
+                    if raw_question is not None:
+                        question = str(raw_question).strip()
+                elif isinstance(question_fallback, (list, tuple)) and i < len(question_fallback):
+                    raw_question = question_fallback[i]
+                    if raw_question is not None:
+                        question = str(raw_question).strip()
+                else:
+                    try:
+                        ds = self.validation_dataloader.dataset  # type: ignore
+                        df = getattr(ds, 'df', None)
+                        if df is not None and 'waveform_name' in df.columns:
+                            wf_name = waveform_names[i] if isinstance(waveform_names, (list, tuple)) else waveform_names
+                            question_row = df[df['waveform_name'] == wf_name]
+                            if not question_row.empty:
+                                q_val = None
+                                for col in ['question', 'prompt_text', 'prompt']:
+                                    if col in question_row.columns:
+                                        q_val = question_row[col].iloc[0]
+                                        if not pd.isna(q_val):
+                                            break
+                                if q_val is not None and not pd.isna(q_val):
+                                    question = str(q_val).strip()
+                    except Exception:
+                        pass
+
+                patient_id = waveform_names[i] if isinstance(waveform_names, (list, tuple)) else waveform_names
+                patient_id = str(patient_id)
                 batch_data[patient_id] = {
                     'Metrics': {},  # Empty for speed - can compute later if needed
                     'Question': question,
