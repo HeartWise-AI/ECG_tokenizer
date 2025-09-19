@@ -112,6 +112,8 @@ class LLMFinetuningProject(BaseProject):
                 'target_modules': self.config.lora_target_modules,
                 'bias': self.config.lora_bias
             }
+            if self.config.lora_top_k_layers is not None:
+                lora_config['top_k_layers'] = self.config.lora_top_k_layers
 
         # Load the tokenizer first (may add special tokens)
         tokenizer_name = self.config.tokenizer_name
@@ -130,6 +132,11 @@ class LLMFinetuningProject(BaseProject):
             huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
             tokenizer=tokenizer,
+            num_visual_tokens=self.config.bridge_num_visual_tokens or self.config.num_ecg_tokens,
+            bridge_mid_dim=self.config.bridge_mid_dim,
+            bridge_num_heads=self.config.bridge_num_heads,
+            bridge_dropout=self.config.bridge_dropout,
+            bridge_num_special_tokens=self.config.bridge_num_special_tokens,
             use_lora=self.config.use_lora,
             lora_config=lora_config
         ).to(self.config.device)
@@ -304,29 +311,35 @@ class LLMFinetuningProject(BaseProject):
         """Construct optimizer parameter groups respecting phase-specific overrides."""
         phase_overrides = phase_overrides or {}
 
-        adapter_module = decoder_module.adapter
+        adapter_module = getattr(decoder_module, 'adapter', None)
+        bridge_module = getattr(decoder_module, 'bridge', None)
+        core_adapter_module = adapter_module if adapter_module is not None else bridge_module
 
         llm_params = [p for p in self._get_llm_parameters(decoder_module) if p.requires_grad]
 
         embedding_param = None
         if hasattr(decoder_module, 'llm_model'):
             embedding_param = decoder_module.llm_model.get_input_embeddings().weight
-            if embedding_param in llm_params:
-                llm_params = [p for p in llm_params if p is not embedding_param]
-            if embedding_param is not None and not embedding_param.requires_grad:
-                embedding_param = None
+            if embedding_param is not None:
+                if any(p is embedding_param for p in llm_params):
+                    llm_params = [p for p in llm_params if p is not embedding_param]
+                if not embedding_param.requires_grad:
+                    embedding_param = None
 
-        adapter_params = [p for p in adapter_module.parameters() if p.requires_grad]
+        adapter_params = []
+        if core_adapter_module is not None:
+            adapter_params = [p for p in core_adapter_module.parameters() if p.requires_grad]
         cross_attention_params = []
-        if hasattr(adapter_module, 'cross_attention_layers'):
-            for layer in adapter_module.cross_attention_layers:
-                cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
-        elif hasattr(adapter_module, 'cross_attention'):
-            cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
-            if hasattr(adapter_module, 'attention_norm'):
-                cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
-            if hasattr(adapter_module, 'attention_dropout'):
-                cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
+        if adapter_module is not None:
+            if hasattr(adapter_module, 'cross_attention_layers'):
+                for layer in adapter_module.cross_attention_layers:
+                    cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
+            elif hasattr(adapter_module, 'cross_attention'):
+                cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
+                if hasattr(adapter_module, 'attention_norm'):
+                    cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
+                if hasattr(adapter_module, 'attention_dropout'):
+                    cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
 
         seen_ids: set[int] = set()
         unique_cross = []
@@ -472,6 +485,12 @@ class LLMFinetuningProject(BaseProject):
 
         print(f"\nAdapter: {model.decoder.adapter_name}")
         print(f"Decoder: {model.decoder_name} ({model.decoder_mode.value} mode)")
+
+        bridge_config = getattr(model.decoder, 'bridge_config', None)
+        if bridge_config:
+            print(f"\nBridge configuration:")
+            for key, value in bridge_config.items():
+                print(f"  {key}: {value}")
         
         # Print LoRA configuration if enabled
         if self.config.use_lora:
@@ -481,6 +500,8 @@ class LLMFinetuningProject(BaseProject):
             print(f"  Dropout: {self.config.lora_dropout}")
             print(f"  Target modules: {self.config.lora_target_modules}")
             print(f"  Bias: {self.config.lora_bias}")
+            if self.config.lora_top_k_layers is not None:
+                print(f"  Top-k layers: {self.config.lora_top_k_layers}")
             
             # Print LoRA-specific parameter counts if available
             llm_model = None

@@ -67,6 +67,13 @@ class LLMFinetuningConfig(HeartWiseConfig):
     # Fields with defaults (must come after all required fields)
     ecg_token_start_id: Optional[int] = None
     intermediate_dim: Optional[int] = None
+    ecg_codebook_size: int = 192
+    bridge_mid_dim: int = 512
+    bridge_num_visual_tokens: Optional[int] = None
+    bridge_num_heads: int = 8
+    bridge_dropout: float = 0.1
+    bridge_num_special_tokens: int = 4
+    bertscore_max_batches: Optional[int] = 5
     
     # Per-category metrics configuration (with defaults)
     compute_category_metrics: bool = False
@@ -88,6 +95,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     lora_target_modules: Optional[list[str]] = None  # Will default to common targets
     lora_bias: str = "none"  # "none", "all", or "lora_only"
     lora_config: Optional[Dict[str, Any]] = None  # Nested LoRA config
+    lora_top_k_layers: Optional[int] = None
     
     # Training optimization parameters (with defaults)
     gradient_accumulation_steps: int = 1
@@ -112,3 +120,4 @@ class LLMFinetuningConfig(HeartWiseConfig):
             self.lora_dropout = self.lora_config.get('lora_dropout', self.lora_dropout)
             self.lora_target_modules = self.lora_config.get('target_modules', self.lora_target_modules)
             self.lora_bias = self.lora_config.get('bias', self.lora_bias)
+            self.lora_top_k_layers = self.lora_config.get('top_k_layers', self.lora_top_k_layers)

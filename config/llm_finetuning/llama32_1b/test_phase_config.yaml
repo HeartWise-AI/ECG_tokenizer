@@ -58,18 +58,25 @@ decoder_mode: !!str "llm"
 decoder_name: !!str "Llama32_Decoder"
 # LLM tokenizer parameters
 tokenizer_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-max_token_length: !!int 400
+max_token_length: !!int 448
 ecg_token_start_id: !!int 128258
 # Instruction tuning
 instruct_mode: !!bool true
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-adapter_name: !!str "Llama32_SequenceTokenAdapter"
+adapter_name: !!str "Llama32_ECGProjectionBridge"
 llm_input_embedding_size: !!int 2048
 # Sequence token specific parameters
 use_cross_attention: !!bool true
 num_attention_heads: !!int 8
 intermediate_dim: !!int 1024
+# ECG code bridge parameters
+ecg_codebook_size: !!int 192
+bridge_mid_dim: !!int 512
+bridge_num_visual_tokens: !!int 48
+bridge_num_heads: !!int 8
+bridge_dropout: !!float 0.1
+bridge_num_special_tokens: !!int 4
 # LoRA parameters
 use_lora: !!bool false
 lora_config:
@@ -102,7 +109,7 @@ gradient_accumulation_steps: !!int 1 # No accumulation for testing
 dataloader_pin_memory: !!bool true
 # Sequence length management
 max_sequence_length: !!int 528
-num_ecg_tokens: !!int 128
+num_ecg_tokens: !!int 48
 # Attention visualization
 enable_attention_visualization: !!bool false # Disabled for quick test
 attention_log_frequency: !!int 10

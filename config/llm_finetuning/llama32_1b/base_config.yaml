@@ -31,13 +31,21 @@ decoder_mode: !!str "llm"
 decoder_name: !!str "Llama32_Decoder"
 # LLM tokenizer parameters
 tokenizer_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-max_token_length: !!int 256
+max_token_length: !!int 448
+num_ecg_tokens: !!int 48
 # Instruction tuning
 instruct_mode: !!bool true
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-adapter_name: !!str "Llama32_SequenceAdapter"
+adapter_name: !!str "Llama32_ECGProjectionBridge"
 llm_input_embedding_size: !!int 2048
+# ECG code bridge parameters (defaults)
+ecg_codebook_size: !!int 192
+bridge_mid_dim: !!int 512
+bridge_num_visual_tokens: !!int 48
+bridge_num_heads: !!int 8
+bridge_dropout: !!float 0.1
+bridge_num_special_tokens: !!int 4
 # Dataset parameters
 train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated_with_questions.parquet"
 validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/test_subset.parquet"

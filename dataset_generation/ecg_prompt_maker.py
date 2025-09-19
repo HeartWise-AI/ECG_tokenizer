@@ -103,10 +103,8 @@ class ECGPromptMaker:
                 "Are there pericarditic changes?"
             ],
             "OTHER": [
-                "Are there any other notable findings?",
                 "Are there any nonspecific ST-T changes?",
                 "Is there early repolarization?",
-                "Are there any electrolyte abnormalities suggested?",
                 "What other findings are present?",
                 "Are the T waves normal in morphology?",
                 "Is there anything else abnormal?"

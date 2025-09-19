@@ -894,6 +894,11 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         llm_input_embedding_size: int = 768,
         adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
+        num_visual_tokens: Optional[int] = None,
+        bridge_mid_dim: int = 512,
+        bridge_num_heads: int = 8,
+        bridge_dropout: float = 0.1,
+        bridge_num_special_tokens: int = 4,
         use_lora: bool = False,
         lora_config: Optional[dict[str, Any]] = None,
         tokenizer: Optional[Any] = None,
@@ -944,17 +949,30 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             try:
                 quantized_feature_shape = (128, 82)
                 decoder_ctor = cast(Any, decoder_class)
-                self.decoder = cast(nn.Module, decoder_ctor(
-                    huggingface_model_name=huggingface_model_name,
-                    llm_input_embedding_size=llm_input_embedding_size,
-                    quantized_feature_shape=quantized_feature_shape,
-                    adapter_name=adapter_name,
-                    adapter_dropout=adapter_dropout,
-                    quantizer=self.quantizer,  # Pass quantizer for direct codebook access
-                    tokenizer=tokenizer,
-                    enable_attention_visualization=enable_attention_visualization,
-                    attention_log_frequency=attention_log_frequency
-                ))
+                decoder_kwargs: dict[str, Any] = {
+                    'huggingface_model_name': huggingface_model_name,
+                    'llm_input_embedding_size': llm_input_embedding_size,
+                    'quantized_feature_shape': quantized_feature_shape,
+                    'adapter_name': adapter_name,
+                    'adapter_dropout': adapter_dropout,
+                    'quantizer': self.quantizer,
+                    'tokenizer': tokenizer,
+                    'enable_attention_visualization': enable_attention_visualization,
+                    'attention_log_frequency': attention_log_frequency,
+                }
+
+                if decoder_name == ModelName.LLAMA32_DECODER.value or decoder_name == "Llama32_Decoder":
+                    decoder_kwargs.update({
+                        'ecg_codebook_size': codebook_size,
+                        'num_visual_tokens': num_visual_tokens,
+                        'bridge_mid_dim': bridge_mid_dim,
+                        'bridge_num_heads': bridge_num_heads,
+                        'bridge_dropout': bridge_dropout,
+                        'bridge_num_special_tokens': bridge_num_special_tokens,
+                        'num_quantizers': num_quantizers,
+                    })
+
+                self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
                 
                 # Apply LoRA to the LLM if requested
                 if use_lora and lora_config:
@@ -1016,7 +1034,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             lora_alpha=lora_config.get('lora_alpha', 32),
             lora_dropout=lora_config.get('lora_dropout', 0.05),
             target_modules=target_modules,
-            bias=lora_config.get('bias', 'none')
+            bias=lora_config.get('bias', 'none'),
+            modules_to_save=lora_config.get('modules_to_save')
         )
         
         # Apply LoRA to the LLM
@@ -1025,7 +1044,61 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         elif hasattr(self.decoder, 'llm'):
             self.decoder.llm = get_peft_model(self.decoder.llm, lora_config_obj)
         
+        top_k_layers = lora_config.get('top_k_layers')
+        if top_k_layers is not None:
+            self._freeze_lower_lora_layers(top_k_layers)
+
         print(f"Applied LoRA to LLM with config: {lora_config_obj}")
+
+    def _freeze_lower_lora_layers(self, top_k_layers: int) -> None:
+        """Freeze LoRA parameters outside the top-k decoder layers."""
+        if top_k_layers <= 0:
+            return
+
+        llm_model = None
+        if hasattr(self.decoder, 'llm_model'):
+            llm_model = self.decoder.llm_model
+        elif hasattr(self.decoder, 'llm'):
+            llm_model = self.decoder.llm
+        if llm_model is None:
+            return
+
+        base = getattr(llm_model, 'base_model', None)
+        if base is None:
+            return
+
+        layer_container = getattr(getattr(base, 'model', base), 'layers', None)
+        if layer_container is None:
+            return
+
+        total_layers = len(layer_container)
+        cutoff = max(0, total_layers - top_k_layers)
+
+        frozen, trainable = 0, 0
+        for name, param in llm_model.named_parameters():
+            if 'lora_' not in name:
+                continue
+            if '.layers.' in name:
+                try:
+                    layer_idx = int(name.split('.layers.')[1].split('.')[0])
+                except ValueError:
+                    param.requires_grad = False
+                    frozen += 1
+                    continue
+                if layer_idx < cutoff:
+                    param.requires_grad = False
+                    frozen += 1
+                else:
+                    param.requires_grad = True
+                    trainable += 1
+            else:
+                param.requires_grad = True
+                trainable += 1
+
+        if self.use_lora:
+            print(
+                f"LoRA top-k restriction: training {trainable} adapter params, frozen {frozen}"
+            )
 
     def set_lora_inference_mode(self, inference_mode: bool = True):
         """Set LoRA inference mode to optimize for inference."""
@@ -1091,7 +1164,32 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     # For all other keys, try direct mapping
                     if key in current_state_dict:
                         filtered_state_dict[key] = value
-            
+
+            # Align checkpoint tensors with current model shapes (handle token count changes)
+            target_state_dict = self.state_dict()
+            for key in list(filtered_state_dict.keys()):
+                target_tensor = target_state_dict.get(key)
+                if target_tensor is None:
+                    continue
+
+                source_tensor = filtered_state_dict[key]
+                if source_tensor.shape == target_tensor.shape:
+                    continue
+
+                # Allow safe trimming/padding along the first dimension when inner dims match
+                if source_tensor.dim() >= 1 and target_tensor.dim() >= 1 and source_tensor.shape[1:] == target_tensor.shape[1:]:
+                    resized = target_tensor.clone()
+                    copy_rows = min(source_tensor.shape[0], target_tensor.shape[0])
+                    resized[:copy_rows] = source_tensor[:copy_rows].to(dtype=resized.dtype, device=resized.device)
+                    if copy_rows < target_tensor.shape[0]:
+                        # Leave remaining rows as initialised in resized (typically random init)
+                        pass
+                    filtered_state_dict[key] = resized
+                    print(f"Adjusted checkpoint tensor '{key}' from {tuple(source_tensor.shape)} to {tuple(target_tensor.shape)}")
+                else:
+                    print(f"Skipping incompatible tensor '{key}' with shape {tuple(source_tensor.shape)} (expected {tuple(target_tensor.shape)})")
+                    filtered_state_dict.pop(key)
+
             self.load_state_dict(filtered_state_dict, strict=False)
         elif has_lora_keys and not current_has_lora:
             # Checkpoint has LoRA but current model doesn't - need to extract base weights
@@ -1293,6 +1391,22 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             
         print(f"  Decoder: {'TRAIN' if self.decoder.training else 'EVAL'}")
 
+    @staticmethod
+    def _extract_primary_codes(indices: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        """Extract the first residual codebook index per position for discrete bridging."""
+        if not isinstance(indices, torch.Tensor):
+            return None
+
+        codes = indices.long()
+        if codes.dim() == 4:
+            # Assume shape [groups, batch, seq, depth]; take first group
+            codes = codes[0]
+        if codes.dim() == 3 and codes.size(-1) > 1:
+            codes = codes[..., 0]
+        if codes.dim() == 3 and codes.size(-1) == 1:
+            codes = codes.squeeze(-1)
+        return codes
+
     def forward(
         self, 
         ecg_signal: torch.Tensor, 
@@ -1331,11 +1445,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             quantized, indices, commit_loss = quantizer_outputs
             all_codes = None
 
+        quantized_code_ids = self._extract_primary_codes(indices)
+
         # Handle different decoder types
         if self.decoder_mode == DecoderMode.LLM:
             try:
                 decoder_output = self.decoder(
                     quantized_features=quantized,
+                    quantized_codes=quantized_code_ids,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
@@ -1392,7 +1509,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         
         # Get quantized features
         features = self.encoder(x)
-        quantized, _, _ = self.quantizer(features)
+        quantized, indices, _ = self.quantizer(features)
+        quantized_codes = self._extract_primary_codes(indices)
         
         # Check if decoder has a generate method
         if not hasattr(self.decoder, 'generate_report'):
@@ -1400,6 +1518,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         
         return self.decoder.generate_report(
             quantized_features=quantized,
+            quantized_codes=quantized_codes,
             max_token_length=max_token_length,
             **generate_kwargs
         )
@@ -1421,13 +1540,15 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
         x = x.to(dtype=torch.float32)
         features = self.encoder(x)
-        quantized, _, _ = self.quantizer(features)
+        quantized, indices, _ = self.quantizer(features)
+        quantized_codes = self._extract_primary_codes(indices)
 
         if not hasattr(self.decoder, 'generate_report_with_question'):
             raise ValueError(f"Decoder '{self.decoder_name}' does not support question-conditioned generation")
 
         return self.decoder.generate_report_with_question(
             quantized_features=quantized,
+            quantized_codes=quantized_codes,
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
             max_token_length=max_token_length,

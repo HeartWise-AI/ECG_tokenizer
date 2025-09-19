@@ -10,12 +10,46 @@ Each class is registered with MetricRegistry for consistent retrieval.
 """
 
 import torch
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 from transformers import GPT2Tokenizer
 from evaluate import load as load_metric
 import numpy as np
 
 from utils.registry import MetricRegistry  # Ensure this registry is defined in your project
+
+
+def _decode_assistant_only(
+    tokenizer: GPT2Tokenizer,
+    generated: torch.Tensor,
+    labels: torch.Tensor
+) -> Tuple[str, str]:
+    """Decode assistant-only text for predictions and references.
+
+    Drops prompt tokens (where labels are -100) from both the generated output and
+    the reference so that metrics focus on the assistant response instead of the
+    system/user conversation.
+    """
+    label_list = labels.detach().tolist()
+
+    # Identify assistant tokens (labels != -100) for the reference.
+    assistant_token_ids = [tok for tok in label_list if tok != -100]
+
+    # Determine where assistant tokens begin to trim prompts from generations.
+    first_assistant_idx = next(
+        (idx for idx, tok in enumerate(label_list) if tok != -100),
+        len(label_list)
+    )
+
+    generated_list = generated.detach().tolist()
+
+    # If generation includes the prompt (length >= assistant start), trim it; otherwise keep as-is.
+    if len(generated_list) >= first_assistant_idx:
+        generated_list = generated_list[first_assistant_idx:]
+
+    prediction_text = tokenizer.decode(generated_list, skip_special_tokens=True)
+    reference_text = tokenizer.decode(assistant_token_ids, skip_special_tokens=True)
+
+    return prediction_text, reference_text
 
 @MetricRegistry.register("rouge")
 class RougeMetric:
@@ -41,8 +75,9 @@ class RougeMetric:
         predictions = []
         references = []
         for gen, lab in zip(generated_ids, labels):
-            predictions.append(tokenizer.decode(gen.tolist(), skip_special_tokens=True))
-            references.append(tokenizer.decode(lab.tolist(), skip_special_tokens=True))
+            prediction_text, reference_text = _decode_assistant_only(tokenizer, gen, lab)
+            predictions.append(prediction_text)
+            references.append(reference_text)
         result = RougeMetric._metric.compute(predictions=predictions, references=references)
 
         return {
@@ -76,9 +111,7 @@ class BleuMetric:
         predictions = []
         references = []
         for gen, lab in zip(generated_ids, labels):
-            # Decode both predictions and references as strings.
-            decoded_prediction = tokenizer.decode(gen.tolist(), skip_special_tokens=True)
-            decoded_reference  = tokenizer.decode(lab.tolist(), skip_special_tokens=True)
+            decoded_prediction, decoded_reference = _decode_assistant_only(tokenizer, gen, lab)
             predictions.append(decoded_prediction)
             references.append(decoded_reference)
         
@@ -126,8 +159,9 @@ class MeteorMetric:
         predictions = []
         references = []
         for gen, lab in zip(generated_ids, labels):
-            predictions.append(tokenizer.decode(gen.tolist(), skip_special_tokens=True))
-            references.append(tokenizer.decode(lab.tolist(), skip_special_tokens=True))
+            prediction_text, reference_text = _decode_assistant_only(tokenizer, gen, lab)
+            predictions.append(prediction_text)
+            references.append(reference_text)
         result = MeteorMetric._metric.compute(predictions=predictions, references=references)
         return {
             "meteor": result["meteor"],
@@ -153,8 +187,9 @@ class BertScoreMetric:
         predictions: List[str] = []
         references: List[str] = []
         for gen, lab in zip(generated_ids, labels):
-            predictions.append(tokenizer.decode(gen.tolist(), skip_special_tokens=True))
-            references.append(tokenizer.decode(lab.tolist(), skip_special_tokens=True))
+            prediction_text, reference_text = _decode_assistant_only(tokenizer, gen, lab)
+            predictions.append(prediction_text)
+            references.append(reference_text)
 
         # Lazy-load evaluate metric and dependency to avoid ModuleNotFoundError at import time
         if BertScoreMetric._metric is None:

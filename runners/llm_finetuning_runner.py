@@ -22,6 +22,7 @@ from utils.metrics.llm_metrics import (
     RougeMetric,
     BleuMetric,
     MeteorMetric,
+    BertScoreMetric,
     update_best_metric,
     update_worst_metric,
     update_random_batch_metric
@@ -35,7 +36,8 @@ from tqdm import tqdm
 from typing import (
     Any, 
     Union, 
-    Callable
+    Callable,
+    Optional
 )
 
 
@@ -91,6 +93,10 @@ class LLMFinetuningRunner(BaseRunner):
                 metric_names=getattr(self.config, 'category_metrics', ['rouge', 'bleu', 'meteor']),
                 device=self.config.device
             )
+        
+        # Control expensive metric evaluation (e.g., BERTScore) across validation batches
+        self.bertscore_max_batches: Optional[int] = getattr(self.config, 'bertscore_max_batches', None)
+        self._bertscore_skip_logged: bool = False
         
     def execute(
         self, 
@@ -255,7 +261,9 @@ class LLMFinetuningRunner(BaseRunner):
         if decoder is None:
             return []
 
-        adapter_module = decoder.adapter
+        adapter_module = getattr(decoder, 'adapter', None)
+        bridge_module = getattr(decoder, 'bridge', None)
+        core_adapter_module = adapter_module if adapter_module is not None else bridge_module
 
         llm_module = self._get_llm_module(model)
         llm_params = []
@@ -265,22 +273,26 @@ class LLMFinetuningRunner(BaseRunner):
         embedding_param = None
         if hasattr(decoder, 'llm_model'):
             embedding_param = decoder.llm_model.get_input_embeddings().weight
-            if embedding_param in llm_params:
-                llm_params = [p for p in llm_params if p is not embedding_param]
-            if embedding_param is not None and not embedding_param.requires_grad:
-                embedding_param = None
+            if embedding_param is not None:
+                if any(p is embedding_param for p in llm_params):
+                    llm_params = [p for p in llm_params if p is not embedding_param]
+                if not embedding_param.requires_grad:
+                    embedding_param = None
 
-        adapter_params = [p for p in adapter_module.parameters() if p.requires_grad]
+        adapter_params = []
+        if core_adapter_module is not None:
+            adapter_params = [p for p in core_adapter_module.parameters() if p.requires_grad]
         cross_attention_params = []
-        if hasattr(adapter_module, 'cross_attention_layers'):
-            for layer in adapter_module.cross_attention_layers:
-                cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
-        elif hasattr(adapter_module, 'cross_attention'):
-            cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
-            if hasattr(adapter_module, 'attention_norm'):
-                cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
-            if hasattr(adapter_module, 'attention_dropout'):
-                cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
+        if adapter_module is not None:
+            if hasattr(adapter_module, 'cross_attention_layers'):
+                for layer in adapter_module.cross_attention_layers:
+                    cross_attention_params.extend([p for p in layer.parameters() if p.requires_grad])
+            elif hasattr(adapter_module, 'cross_attention'):
+                cross_attention_params.extend([p for p in adapter_module.cross_attention.parameters() if p.requires_grad])
+                if hasattr(adapter_module, 'attention_norm'):
+                    cross_attention_params.extend([p for p in adapter_module.attention_norm.parameters() if p.requires_grad])
+                if hasattr(adapter_module, 'attention_dropout'):
+                    cross_attention_params.extend([p for p in adapter_module.attention_dropout.parameters() if p.requires_grad])
 
         seen_ids: set[int] = set()
         unique_cross = []
@@ -595,6 +607,7 @@ class LLMFinetuningRunner(BaseRunner):
         epoch_metrics: dict[str, float] = {}
         
         if mode == RunMode.VALIDATE:
+            self._bertscore_skip_logged = False
             worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
             # Initialize JSON file for incremental writing
             json_path = f"./ECG_tokenizer/val_generations/val_generations_epoch_{epoch}.json"
@@ -664,7 +677,8 @@ class LLMFinetuningRunner(BaseRunner):
                     worst_batch_metrics, # parsed and updated by reference object - not returned
                     random_batch_metrics, # parsed and updated by reference object - not returned
                     random_batch=random_batch_idx == batch_idx,
-                    batch=batch  # Pass batch for category information
+                    batch=batch,  # Pass batch for category information
+                    batch_idx=batch_idx
                 )
                 metrics.update(batch_metrics)                  
             
@@ -718,21 +732,30 @@ class LLMFinetuningRunner(BaseRunner):
                 
                 # Calculate gradient norms for different components
                 grad_norms = {}
-                if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
-                    adapter_grad = torch.nn.utils.clip_grad_norm_(
-                        model.decoder.adapter.parameters(), 
-                        max_norm=float('inf')
-                    )
-                    grad_norms['adapter_grad_norm'] = adapter_grad.item() if torch.is_tensor(adapter_grad) else adapter_grad
-                    postfix_dict['adapter_grad'] = f'{adapter_grad:.2e}'
-                
+                if hasattr(model, 'decoder'):
+                    adapter_module = getattr(model.decoder, 'adapter', None)
+                    bridge_module = getattr(model.decoder, 'bridge', None)
+                    core_module = adapter_module if adapter_module is not None else bridge_module
+
+                    if core_module is not None:
+                        core_params = [p for p in core_module.parameters() if p.requires_grad and p.grad is not None]
+                        if core_params:
+                            adapter_grad = torch.nn.utils.clip_grad_norm_(
+                                core_params,
+                                max_norm=float('inf')
+                            )
+                            grad_norms['adapter_grad_norm'] = adapter_grad.item() if torch.is_tensor(adapter_grad) else adapter_grad
+                            postfix_dict['adapter_grad'] = f'{adapter_grad:.2e}'
+
                 if hasattr(model, 'decoder') and hasattr(model.decoder, 'cross_attention_layers'):
-                    cross_attn_grad = torch.nn.utils.clip_grad_norm_(
-                        model.decoder.cross_attention_layers.parameters(),
-                        max_norm=float('inf')
-                    )
-                    grad_norms['cross_attn_grad_norm'] = cross_attn_grad.item() if torch.is_tensor(cross_attn_grad) else cross_attn_grad
-                    postfix_dict['cross_grad'] = f'{cross_attn_grad:.2e}'
+                    cross_params = [p for layer in model.decoder.cross_attention_layers for p in layer.parameters() if p.requires_grad and p.grad is not None]
+                    if cross_params:
+                        cross_attn_grad = torch.nn.utils.clip_grad_norm_(
+                            cross_params,
+                            max_norm=float('inf')
+                        )
+                        grad_norms['cross_attn_grad_norm'] = cross_attn_grad.item() if torch.is_tensor(cross_attn_grad) else cross_attn_grad
+                        postfix_dict['cross_grad'] = f'{cross_attn_grad:.2e}'
                 
                 # Add to epoch metrics for wandb logging
                 for key, value in grad_norms.items():
@@ -838,23 +861,33 @@ class LLMFinetuningRunner(BaseRunner):
         # Return the epoch metrics
         return epoch_metrics
     
+    def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
+        """Return only the assistant portion of the generated text."""
+        if generated_ids is None:
+            return ""
+
+        # Determine where assistant labels begin so we can drop the prompt portion
+        first_assistant_idx = 0
+        non_ignored = (label_ids != -100).nonzero(as_tuple=False)
+        if non_ignored.numel() > 0:
+            first_assistant_idx = int(non_ignored[0].item())
+
+        trimmed_ids = generated_ids[first_assistant_idx:]
+        return tokenizer.decode(trimmed_ids.tolist(), skip_special_tokens=True)
+
     def _log_sample_generation(self, outputs: dict, labels: torch.Tensor, epoch: int, batch_idx: int):
         """Log sample generations for debugging."""
         try:
-            # Get the actual model (unwrap from DDP if necessary)
             model = self.model.module if hasattr(self.model, 'module') else self.model
-            # Get tokenizer
             tokenizer = model.decoder.tokenizer
-            
-            # Take first sample from batch
+
             generated_ids = outputs['generated_ids'][0] if 'generated_ids' in outputs else None
             label_ids = labels[0]
-            
+
             if generated_ids is not None:
-                # Decode tokens
-                generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
-                label_text = tokenizer.decode(label_ids[label_ids != -100], skip_special_tokens=True)
-                
+                generated_text = self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
+                label_text = tokenizer.decode(label_ids[label_ids != -100].tolist(), skip_special_tokens=True)
+
                 print("\n" + "="*60)
                 print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
                 print("-"*60)
@@ -932,6 +965,19 @@ class LLMFinetuningRunner(BaseRunner):
             world_size=self.config.world_size,
             device_ids=self.config.device
         )
+
+        max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
+        if max_grad_norm is not None and max_grad_norm > 0:
+            clip_params: list[torch.nn.Parameter] = []
+            for group in self.optimizer.param_groups:
+                for param in group['params']:
+                    if param is None:
+                        continue
+                    grad = getattr(param, 'grad', None)
+                    if grad is not None:
+                        clip_params.append(param)
+            if clip_params:
+                torch.nn.utils.clip_grad_norm_(clip_params, max_grad_norm)
         
         # Step optimizer directly without gradient scaling for bfloat16
         self.optimizer.step()
@@ -1326,6 +1372,7 @@ class LLMFinetuningRunner(BaseRunner):
         random_batch_metrics: dict[str, list[dict[str, Union[float, list[str]]]]],
         random_batch: bool = False,
         batch: dict = None,
+        batch_idx: int = 0,
     ) -> dict[str, float]:
         """
         Compute metrics for validation and update best/worst batch metrics.
@@ -1338,23 +1385,16 @@ class LLMFinetuningRunner(BaseRunner):
             worst_batch_metrics: Dictionary containing the worst batch metrics
             random_batch_metrics: Dictionary containing the random batch metrics
             random_batch: Whether the batch is random
+            batch_idx: Index of the current batch within the epoch
             
         Returns:
             dict[str, float]: Dictionary containing the metrics for the epoch
         
         """
         computed_metrics: dict[str, float] = {}
-        # Prepare labels for decoding: replace -100 with pad_token_id (or eos if pad not set)
+        # Keep raw labels (with -100 prompt mask) so downstream metrics can drop prompt tokens
         tokenizer = dataloader.dataset.tokenizer  # type: ignore
-        pad_token_id = getattr(tokenizer, 'pad_token_id', None)
-        eos_token_id = getattr(tokenizer, 'eos_token_id', None)
-        if isinstance(eos_token_id, list):
-            eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
-        replacement_id = pad_token_id if pad_token_id is not None else eos_token_id
         labels_for_metrics = labels
-        if replacement_id is not None:
-            labels_for_metrics = labels.clone()
-            labels_for_metrics = torch.where(labels_for_metrics == -100, torch.as_tensor(replacement_id, device=labels.device, dtype=labels.dtype), labels_for_metrics)
 
         # Decode predictions, references and prompts for category metrics
         batch_predictions = []
@@ -1366,19 +1406,11 @@ class LLMFinetuningRunner(BaseRunner):
             generated_ids = outputs['generated_ids']
             
             for i in range(generated_ids.size(0)):
-                # Decode generated text
-                gen_tokens = generated_ids[i].tolist()
-                ref_tokens = labels_for_metrics[i].tolist()
-                
-                # Skip ECG tokens if in instruct mode
-                if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
-                    # In instruct mode, generation might already be trimmed or we need to handle it
-                    # For now, just decode as-is since the generation should be clean
-                    pass
-                
-                # Decode to strings
-                prediction = tokenizer.decode(gen_tokens, skip_special_tokens=True)
-                reference = tokenizer.decode(ref_tokens, skip_special_tokens=True)
+                gen_tensor = generated_ids[i].cpu()
+                label_tensor = labels[i].cpu()
+
+                prediction = self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                reference = tokenizer.decode(label_tensor[label_tensor != -100].tolist(), skip_special_tokens=True)
                 
                 # Get category if available
                 category = ""
@@ -1403,10 +1435,20 @@ class LLMFinetuningRunner(BaseRunner):
             )
 
         for metric in self.config.metrics:
+            metric_name_lower = metric.lower()
+            if metric_name_lower == 'bertscore':
+                limit = self.bertscore_max_batches
+                if limit is not None and batch_idx >= limit:
+                    if self.config.is_ref_device and not self._bertscore_skip_logged:
+                        print(f"Skipping BERTScore for batches >= {limit}; current batch {batch_idx} exceeds limit.")
+                        self._bertscore_skip_logged = True
+                    continue
+
             registered_metrics: Union[
                 RougeMetric, 
                 BleuMetric, 
-                MeteorMetric
+                MeteorMetric,
+                BertScoreMetric
             ] = MetricRegistry.get(metric)
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
