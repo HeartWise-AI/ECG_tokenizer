@@ -98,7 +98,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
     lora_dropout: float = 0.05
     lora_target_modules: Optional[list[str]] = None  # Will default to common targets
     lora_bias: str = "none"  # "none", "all", or "lora_only"
-    lora_config: Optional[Dict[str, Any]] = None  # Nested LoRA config
+    lora_config: Optional[Dict[str, Any]] = field(default=None)  # Nested LoRA config
     lora_top_k_layers: Optional[int] = None
     
     # Training optimization parameters (with defaults)
