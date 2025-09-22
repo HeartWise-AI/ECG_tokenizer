@@ -112,8 +112,8 @@ class ECGClinicalReportDataset(Dataset):
             
             # Check if the waveform path or answer is missing
             if pd.isnull(row[self.signal_path_column]) or pd.isnull(row[self.answer_column]):
-                print(f"Missing waveform_path or answer for index {idx}, skipping sample. "
-                      f"waveform_path: {row.get(self.signal_path_column)}, answer: {row.get(self.answer_column)}")
+                print(f"Missing {self.signal_path_column} or {self.answer_column} for index {idx}, skipping sample. "
+                      f"{self.signal_path_column}: {row.get(self.signal_path_column)}, {self.answer_column}: {row.get(self.answer_column)}")
                 return self.__getitem__((idx + 1) % len(self))
 
             # Load the waveform
