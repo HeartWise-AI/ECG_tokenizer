@@ -272,7 +272,7 @@ class ECGAnswerGenerator:
         
         # Check if this is a YES/NO question
         is_yes_no_question = any(phrase in prompt_text for phrase in [
-            'is there', 'are there', 'does this', 'does it', 
+            'is there', 'are there', 'are the', 'does this', 'does it', 
             'can you identify', 'do you see', 'is this'
         ])
         
@@ -288,26 +288,221 @@ class ECGAnswerGenerator:
             'pre-excitation': ['WPW', 'Wolff-Parkinson-White', 'Pre-excitation'],
             'heart block': ['First-degree AV block', 'Second-degree AV block', 'Third-degree AV block', 
                            'Complete heart block', 'AV block'],
-            'bundle branch': ['LBBB', 'RBBB', 'Left bundle branch block', 'Right bundle branch block'],
+            'bundle branch': ['LBBB', 'RBBB', 'Left bundle branch block', 'Right bundle branch block',
+                             'Left anterior fascicular block', 'Left posterior fascicular block', 
+                             'Fascicular block', 'LAFB', 'LPFB'],
             'atrial fibrillation': ['Afib', 'Atrial fibrillation'],
             'atrial flutter': ['Atrial flutter', 'Flutter'],
             'ischemia': ['ST elevation', 'ST depression', 'T wave inversion', 'Ischemia'],
             'infarction': ['MI', 'Myocardial infarction', 'Acute MI', 'Q waves'],
+            'acute mi': ['Acute MI', 'acute myocardial infarction', 'STEMI'],
             'hypertrophy': ['LVH', 'RVH', 'LAE', 'RAE', 'Hypertrophy', 'Enlargement'],
             'pericarditis': ['Pericarditis', 'Pericarditic'],
             'arrhythmia': ['Tachycardia', 'Bradycardia', 'Afib', 'Flutter', 'VT', 'SVT'],
             'st elevation': ['ST elevation', 'STEMI'],
             'st depression': ['ST depression'],
             'q waves': ['Q waves', 'Pathological Q'],
-            'axis deviation': ['Left axis deviation', 'Right axis deviation', 'Axis deviation']
+            'axis deviation': ['Left axis deviation', 'Right axis deviation', 'Axis deviation'],
+            'extreme axis': ['Extreme axis deviation', 'Northwest axis', 'No man\'s land']
         }
         
         # Check if prompt asks about a specific condition
         asked_condition = None
         matching_findings = []
         
+        # Special handling for general ischemia/infarction questions
+        if any(term in prompt_text for term in ['signs of ischemia or infarction', 'ischemia or infarction', 
+                                                  'ischemic or infarction', 'evidence of ischemia']):
+            asked_condition = 'ischemia_or_infarction'
+            
+            # Check for any signs of ischemia or infarction:
+            # 1. Any findings from INFARCT, ISCHEMIA category
+            if 'INFARCT, ISCHEMIA' in active_findings:
+                for finding in active_findings['INFARCT, ISCHEMIA']:
+                    formatted = self.format_finding_name(finding)
+                    if formatted not in matching_findings:
+                        matching_findings.append(formatted)
+            
+            # 2. Check for ST downsloping
+            if 'ST downsloping' in row.index and pd.notna(row['ST downsloping']):
+                try:
+                    if float(row['ST downsloping']) >= 1:
+                        matching_findings.append('ST downsloping')
+                except (ValueError, TypeError):
+                    pass
+            
+            # 3. Check for any ST depression columns
+            for col in row.index:
+                if 'ST depression' in str(col) and pd.notna(row[col]):
+                    try:
+                        if float(row[col]) >= 1:
+                            location = str(col).replace('ST depression', '').strip()
+                            if location.startswith('(') and location.endswith(')'):
+                                location = location[1:-1]
+                            matching_findings.append(f'ST depression in {location}')
+                    except (ValueError, TypeError):
+                        continue
+            
+            # 4. Check for any T wave inversion columns
+            for col in row.index:
+                if 'T wave inversion' in str(col) and pd.notna(row[col]):
+                    try:
+                        if float(row[col]) >= 1:
+                            location = str(col).replace('T wave inversion', '').strip()
+                            if location.startswith('(') and location.endswith(')'):
+                                location = location[1:-1]
+                            matching_findings.append(f'T wave inversion in {location}')
+                    except (ValueError, TypeError):
+                        continue
+            
+            # 5. Check for Q wave columns (sign of old infarction)
+            for col in row.index:
+                if 'Q wave' in str(col) and pd.notna(row[col]):
+                    try:
+                        if float(row[col]) >= 1:
+                            location = str(col).replace('Q wave', '').strip()
+                            if location.startswith('(') and location.endswith(')'):
+                                location = location[1:-1]
+                            matching_findings.append(f'Q waves in {location} (possible old infarct)')
+                    except (ValueError, TypeError):
+                        continue
+            
+            # 6. Check report for infarct mentions
+            if 'report' in row.index and pd.notna(row['report']):
+                report_lower = str(row['report']).lower()
+                if 'infarct' in report_lower:
+                    # Extract the infarct description
+                    import re
+                    infarct_patterns = re.findall(r'[^;]*infarct[^;]*', report_lower)
+                    for pattern in infarct_patterns:
+                        pattern = pattern.strip()
+                        if 'age undetermined' in pattern or 'old' in pattern or 'previous' in pattern:
+                            if 'Possible old infarction' not in matching_findings:
+                                matching_findings.append('Possible old infarction')
+                        elif 'acute' in pattern:
+                            if 'Possible acute infarction' not in matching_findings:
+                                matching_findings.append('Possible acute infarction')
+        
+        # Special handling for Acute MI questions
+        elif any(term in prompt_text for term in ['acute mi', 'acute myocardial', 'stemi', 'acute infarct']):
+            asked_condition = 'acute mi'
+            
+            # Check Acute_MI column
+            has_acute_mi_column = False
+            if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
+                try:
+                    has_acute_mi_column = float(row['Acute_MI']) >= 1
+                except (ValueError, TypeError):
+                    pass
+            if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
+                try:
+                    has_acute_mi_column = float(row['Acute MI']) >= 1
+                except (ValueError, TypeError):
+                    pass
+            
+            # Check report for acute MI mentions
+            has_acute_mi_report = False
+            if 'report' in row.index and pd.notna(row['report']):
+                report_text = str(row['report']).upper()
+                if any(phrase in report_text for phrase in [
+                    'CONSIDER ACUTE ST ELEVATION MI',
+                    'CONSIDER ACUTE INFARCT', 
+                    'ACUTE MI',
+                    'ACUTE MYOCARDIAL INFARCTION',
+                    'ACUTE STEMI'
+                ]):
+                    has_acute_mi_report = True
+            
+            # If either condition is true, there's probable acute MI
+            if has_acute_mi_column or has_acute_mi_report:
+                matching_findings.append('Probable acute myocardial infarction')
+                
+                # Also add any ST elevation or other acute findings
+                for cat_findings in active_findings.values():
+                    for finding in cat_findings:
+                        if any(term in finding.lower() for term in ['st elevation', 'acute mi', 'stemi']):
+                            formatted = self.format_finding_name(finding)
+                            if formatted not in matching_findings:
+                                matching_findings.append(formatted)
+        
+        # Special handling for sinus rhythm question
+        elif any(phrase in prompt_text for phrase in ['sinus rhythm or something else', 'is this sinus rhythm']):
+            asked_condition = 'sinus_rhythm'
+            
+            # Check the Sinusal column
+            is_sinus = False
+            if 'Sinusal' in row.index and pd.notna(row['Sinusal']):
+                try:
+                    is_sinus = float(row['Sinusal']) >= 1
+                except (ValueError, TypeError):
+                    pass
+            
+            if is_sinus:
+                matching_findings.append("sinus rhythm")
+            else:
+                # It's something else - check what rhythm it actually is
+                rhythm_findings = []
+                
+                # Check for specific rhythm abnormalities
+                rhythm_cols = ['Ectopic atrial rhythm (< 100 BPM)', 'Atrial tachycardia (>= 100 BPM)', 
+                              'Afib', 'Atrial flutter', 'Junctional rhythm', 'Ventricular rhythm',
+                              'Bradycardia', 'Tachycardia']
+                
+                for col in rhythm_cols:
+                    if col in row.index and pd.notna(row[col]):
+                        try:
+                            if float(row[col]) >= 1:
+                                rhythm_findings.append(col)
+                        except (ValueError, TypeError):
+                            continue
+                
+                if rhythm_findings:
+                    matching_findings.append(f"something else - {'; '.join(rhythm_findings)}")
+                else:
+                    # Check report for rhythm description
+                    if 'report' in row.index and pd.notna(row['report']):
+                        report_lower = str(row['report']).lower()
+                        if 'ectopic' in report_lower:
+                            matching_findings.append("something else - ectopic rhythm")
+                        elif 'junctional' in report_lower:
+                            matching_findings.append("something else - junctional rhythm")
+                        else:
+                            matching_findings.append("something else - non-sinus rhythm")
+                    else:
+                        matching_findings.append("something else - non-sinus rhythm")
+        
+        # Special handling for T wave questions
+        elif any(phrase in prompt_text for phrase in ['t waves normal', 't wave normal', 'are the t waves']):
+            asked_condition = 't_waves'
+            
+            # Check all T wave inversion columns
+            t_wave_inversions = []
+            
+            for col in row.index:
+                if 'T wave inversion' in col or 'T-wave inversion' in col:
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            # Extract location from column name (text in parentheses)
+                            if '(' in col and ')' in col:
+                                location = col[col.find('(')+1:col.find(')')]
+                                t_wave_inversions.append(location)
+                            else:
+                                t_wave_inversions.append(col)
+                    except (ValueError, TypeError):
+                        continue
+            
+            # Format the response
+            if t_wave_inversions:
+                # T waves are NOT normal - there are inversions
+                if len(t_wave_inversions) == 1:
+                    matching_findings.append(f"T wave inversions present in {t_wave_inversions[0]}")
+                else:
+                    locations = "; ".join(t_wave_inversions)
+                    matching_findings.append(f"T wave inversions present in {locations}")
+            # If no inversions found, T waves are normal - we'll handle this later
+        
         # Special handling for ectopic beats - only match PVCs and PACs
-        if 'ectopic' in prompt_text:
+        elif 'ectopic' in prompt_text:
             asked_condition = 'ectopic beat'
             # Only look for PVCs and PACs in the findings
             for cat_findings in active_findings.values():
@@ -318,6 +513,39 @@ class ECGAnswerGenerator:
             for condition_key, condition_variants in specific_conditions.items():
                 if condition_key in prompt_text:
                     asked_condition = condition_key
+                    
+                    # Special handling for any infarct-related question
+                    if condition_key in ['infarction', 'ischemia', 'st elevation']:
+                        # Check for acute MI indicators
+                        has_acute_mi = False
+                        
+                        # Check column
+                        if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
+                            try:
+                                if float(row['Acute_MI']) >= 1:
+                                    has_acute_mi = True
+                            except (ValueError, TypeError):
+                                pass
+                        if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
+                            try:
+                                if float(row['Acute MI']) >= 1:
+                                    has_acute_mi = True
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Check report
+                        if 'report' in row.index and pd.notna(row['report']):
+                            report_upper = str(row['report']).upper()
+                            if any(phrase in report_upper for phrase in [
+                                'CONSIDER ACUTE ST ELEVATION MI',
+                                'CONSIDER ACUTE INFARCT'
+                            ]):
+                                has_acute_mi = True
+                        
+                        # If acute MI detected, add to findings
+                        if has_acute_mi and 'Probable infarct' not in matching_findings:
+                            matching_findings.append('Probable infarct')
+                    
                     # Check if any variant exists in active findings
                     for cat_findings in active_findings.values():
                         for finding in cat_findings:
@@ -341,10 +569,25 @@ class ECGAnswerGenerator:
             if asked_condition:
                 # Specific condition asked
                 if matching_findings:
-                    return f"Yes - {'; '.join(matching_findings)}"
+                    # Special handling for specific conditions
+                    if asked_condition == 't_waves':
+                        return f"No - {'; '.join(matching_findings)}"
+                    elif asked_condition == 'sinus_rhythm':
+                        # Check if it's sinus or something else
+                        finding = matching_findings[0]
+                        if 'sinus rhythm' == finding:
+                            return "Yes - sinus rhythm"
+                        else:
+                            return f"No - {finding}"
+                    else:
+                        return f"Yes - {'; '.join(matching_findings)}"
                 else:
                     if asked_condition == 'ectopic beat':
                         return "No - no ectopic beats present"
+                    elif asked_condition == 't_waves':
+                        return "Yes - T waves are normal"
+                    elif asked_condition == 'sinus_rhythm':
+                        return "Unable to determine rhythm"
                     else:
                         return f"No - no evidence of {asked_condition.replace('_', ' ')}"
             else:
@@ -1005,46 +1248,294 @@ class ECGAnswerGenerator:
         
         return "Information not available"
     
+    def generate_random_finding_answer(self, row: pd.Series) -> str:
+        """
+        Generate YES/NO answer for random finding questions.
+        These questions ask about specific ECG findings like "Is there 1st degree AV block?"
+        Answer YES if the corresponding column value >= 1, NO otherwise.
+        """
+        prompt_text = row.get('prompt', '')
+        
+        # Extract the finding being asked about from the prompt
+        # Questions are like "Is there X?" where X is the finding
+        finding_name = None
+        
+        # Remove common prefixes to extract the finding
+        question_lower = prompt_text.lower()
+        if 'is there' in question_lower:
+            finding_name = prompt_text.split('Is there')[1].strip('? ')
+        elif 'are there' in question_lower:
+            finding_name = prompt_text.split('Are there')[1].strip('? ')
+        elif 'does this show' in question_lower:
+            finding_name = prompt_text.split('show')[1].strip('? ')
+        
+        if not finding_name:
+            return "Unable to determine finding from question"
+        
+        # Check columns for this finding
+        # Try different column name variations
+        finding_lower = finding_name.lower()
+        found = False
+        
+        # Special mappings for common findings - using EXACT column names from deepecg_categories.json
+        column_mappings = {
+            '1st degree av block': ['1st degree AV block'],
+            '2nd degree av block': ['2nd degree AV block - mobitz 1', '2nd degree AV block - mobitz 2'],
+            '3rd degree av block': ['Third Degree AV Block'],
+            'left bundle branch block': ['Left bundle branch block'],
+            'right bundle branch block': ['Right bundle branch block'],
+            'left anterior fascicular block': ['Left anterior fascicular block'],
+            'left posterior fascicular block': ['Left posterior fascicular block'],
+            'left ventricular hypertrophy': ['Left ventricular hypertrophy'],
+            'right ventricular hypertrophy': ['Right ventricular hypertrophy'],
+            'left atrial enlargement': ['Left atrial enlargement'],
+            'right atrial enlargement': ['Right atrial enlargement'],
+            'atrial fibrillation': ['Afib'],
+            'atrial flutter': ['Atrial flutter'],
+            'sinus bradycardia': ['Bradycardia'],
+            'sinus tachycardia': ['Atrial tachycardia (>= 100 BPM)'],
+            'ventricular tachycardia': ['Ventricular tachycardia'],
+            'premature ventricular complex': ['Premature ventricular complex'],
+            'premature atrial complex': ['Premature atrial complex'],
+            'st elevation in any leads': ['ST elevation'],  # Will check all ST elevation columns
+            'st depression in any leads': ['ST depression'],  # Will check all ST depression columns
+            'pathological q waves': ['Q wave'],  # Will check all Q wave columns
+            't wave inversion': ['T wave inversion'],  # Will check all T wave inversion columns
+            'left axis deviation': ['Left axis deviation'],
+            'right axis deviation': ['Right axis deviation'],
+            'extreme axis deviation': ['Right superior axis'],  # From CONDUCTION category
+            'pericarditis': ['Acute pericarditis'],
+            'early repolarization': ['Early repolarization'],
+            'wpw pattern': ['Wolff-Parkinson-White (Pre-excitation syndrome)', 'Delta wave'],
+            'long qt syndrome': ['Prolonged QT'],
+            'short qt syndrome': []  # Not in the categories
+        }
+        
+        # Check if we have a specific mapping for this finding
+        columns_to_check = []
+        for key, cols in column_mappings.items():
+            if key in finding_lower:
+                columns_to_check = cols
+                break
+        
+        # If no specific mapping, try the finding name directly
+        if not columns_to_check:
+            columns_to_check = [finding_name, finding_name.replace(' ', '_'), finding_lower.replace(' ', '_')]
+        
+        # Special handling for "any leads" questions
+        if 'st elevation' in finding_lower and 'any leads' in finding_lower:
+            # Check all ST elevation columns
+            for col in row.index:
+                if 'ST elevation' in str(col):
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            return "Yes"
+                    except (ValueError, TypeError):
+                        continue
+            return "No"
+        
+        elif 'st depression' in finding_lower and 'any leads' in finding_lower:
+            # Check all ST depression columns
+            for col in row.index:
+                if 'ST depression' in str(col):
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            return "Yes"
+                    except (ValueError, TypeError):
+                        continue
+            return "No"
+        
+        elif 'pathological q waves' in finding_lower or 'q waves' in finding_lower:
+            # Check all Q wave columns
+            for col in row.index:
+                if 'Q wave' in str(col):
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            return "Yes"
+                    except (ValueError, TypeError):
+                        continue
+            return "No"
+        
+        elif 't wave inversion' in finding_lower:
+            # Check all T wave inversion columns
+            for col in row.index:
+                if 'T wave inversion' in str(col):
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            return "Yes"
+                    except (ValueError, TypeError):
+                        continue
+            return "No"
+        
+        # Check the specific columns
+        for col_name in columns_to_check:
+            if col_name in row.index:
+                try:
+                    if pd.notna(row[col_name]) and float(row[col_name]) >= 1:
+                        return "Yes"
+                except (ValueError, TypeError):
+                    continue
+        
+        # If not found in exact matches, do a broader search
+        for col in row.index:
+            col_str = str(col)
+            for check_col in columns_to_check:
+                if check_col.lower() in col_str.lower():
+                    try:
+                        if pd.notna(row[col]) and float(row[col]) >= 1:
+                            return "Yes"
+                    except (ValueError, TypeError):
+                        continue
+        
+        return "No"
+    
+    def check_for_acute_mi_prefix(self, row: pd.Series) -> str:
+        """
+        Check if report indicates acute MI/STEMI and return appropriate prefix.
+        This will be prepended to ALL answers when acute MI is present.
+        """
+        # Check report for critical acute MI phrases
+        if 'report' in row.index and pd.notna(row['report']):
+            report_upper = str(row['report']).upper()
+            
+            # Check for critical STEMI indicators
+            if 'CONSIDER ACUTE ST ELEVATION MI' in report_upper:
+                # Extract ST elevation location from report
+                st_locations = []
+                report_lower = str(row['report']).lower()
+                
+                if 'lateral st elevation' in report_lower or 'lateral st-elevation' in report_lower:
+                    st_locations.append('lateral')
+                if 'inferior st elevation' in report_lower or 'inferior st-elevation' in report_lower:
+                    st_locations.append('inferior')
+                if 'anterior st elevation' in report_lower or 'anterior st-elevation' in report_lower:
+                    st_locations.append('anterior')
+                if 'anterolateral st elevation' in report_lower:
+                    st_locations.append('anterolateral')
+                
+                # Also check ST elevation columns
+                for col in row.index:
+                    if 'ST elevation' in col:
+                        try:
+                            if pd.notna(row[col]) and float(row[col]) >= 1:
+                                if '(' in col and ')' in col:
+                                    location = col[col.find('(')+1:col.find(')')]
+                                    # Check if this location isn't already in the list
+                                    location_lower = location.lower()
+                                    already_exists = any(loc.lower() in location_lower or location_lower in loc.lower() 
+                                                       for loc in st_locations)
+                                    if not already_exists:
+                                        st_locations.append(location)
+                        except (ValueError, TypeError):
+                            pass
+                
+                if st_locations:
+                    location_str = ', '.join(st_locations)
+                    return f"*** ACUTE STEMI ({location_str}) *** - "
+                else:
+                    return "*** ACUTE STEMI *** - "
+            
+            elif 'CONSIDER ACUTE INFARCT' in report_upper:
+                # Similar logic for acute infarct
+                return "*** ACUTE MI/INFARCT *** - "
+        
+        # Also check Acute_MI column
+        if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
+            try:
+                if float(row['Acute_MI']) >= 1:
+                    return "*** ACUTE MI *** - "
+            except (ValueError, TypeError):
+                pass
+        
+        if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
+            try:
+                if float(row['Acute MI']) >= 1:
+                    return "*** ACUTE MI *** - "
+            except (ValueError, TypeError):
+                pass
+        
+        return ""  # No acute MI prefix needed
+    
     def generate_answer(self, row: pd.Series) -> str:
         """
         Main function to generate appropriate answer based on prompt type.
+        ALWAYS mentions acute MI/STEMI first if present in report.
         """
         prompt_category = row.get('prompt_category', '')
         prompt_type = row.get('prompt_type', '')
         
+        # Check for acute MI/STEMI FIRST - this takes precedence over everything
+        acute_mi_prefix = self.check_for_acute_mi_prefix(row)
+        
         # Route to appropriate generator based on prompt category
+        base_answer = ""
+        
         if prompt_category == 'json_interpretation':
-            return self.generate_json_interpretation(row)
+            base_answer = self.generate_json_interpretation(row)
         
         elif 'interpretation' in prompt_category:
-            return self.generate_interpretation_answer(row)
+            base_answer = self.generate_interpretation_answer(row)
         
         elif prompt_category == 'heart_rate':
             # Heart rate is its own category now
-            return self.generate_heart_rate_answer(row)
+            base_answer = self.generate_heart_rate_answer(row)
         
         elif 'demographic' in prompt_category:
             # Extract the demographic type (e.g., 'demographic_gender' -> 'gender')
             demo_type = prompt_category.replace('demographic_', '')
-            return self.generate_demographic_answer(row, demo_type)
+            base_answer = self.generate_demographic_answer(row, demo_type)
         
         elif 'localization' in prompt_category:
             # Extract the finding type from category (e.g., 'localization_q_wave' -> 'q_wave')
             finding_type = prompt_category.replace('localization_', '')
-            return self.generate_localization_answer(row, finding_type)
+            base_answer = self.generate_localization_answer(row, finding_type)
         
         elif 'category' in prompt_category:
-            return self.generate_category_answer(row, prompt_category)
+            base_answer = self.generate_category_answer(row, prompt_category)
         
         elif 'classification' in prompt_category:
-            return self.generate_classification_answer(row)
+            base_answer = self.generate_classification_answer(row)
         
         elif 'urgency' in prompt_category:
-            return self.generate_urgency_answer(row)
+            base_answer = self.generate_urgency_answer(row)
+        
+        elif 'random_finding' in prompt_category:
+            base_answer = self.generate_random_finding_answer(row)
         
         else:
             # Default to interpretation
-            return self.generate_interpretation_answer(row)
+            base_answer = self.generate_interpretation_answer(row)
+        
+        # Handle acute MI prefix if present (but not for JSON)
+        if acute_mi_prefix and prompt_category != 'json_interpretation':
+            # Don't add prefix if it's an interpretation that starts with the report text
+            if not base_answer.startswith('*** CONSIDER ACUTE'):
+                # Also check if answer doesn't already have our prefix
+                if not base_answer.startswith('*** ACUTE STEMI'):
+                    # For certain question types, simplify the answer when STEMI is present
+                    prompt_text = row.get('prompt', '').lower()
+                    
+                    # Urgency questions - just confirm it's urgent
+                    if 'urgency' in prompt_category or 'urgent' in prompt_text or 'emergency' in prompt_text:
+                        return acute_mi_prefix + "Yes, immediate intervention required"
+                    
+                    # ST elevation questions - just confirm yes
+                    elif 'st elevation' in prompt_text:
+                        return acute_mi_prefix + "Yes"
+                    
+                    # Q wave questions
+                    elif 'q wave' in prompt_text:
+                        # Check if Q waves are actually present
+                        if 'Yes' in base_answer:
+                            return acute_mi_prefix + "Yes"
+                        else:
+                            return acute_mi_prefix + "No"
+                    
+                    # For other questions, add the full answer
+                    else:
+                        return acute_mi_prefix + base_answer
+        
+        return base_answer
     
     def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """

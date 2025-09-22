@@ -73,7 +73,11 @@ class LLMFinetuningConfig(HeartWiseConfig):
     bridge_num_heads: int = 8
     bridge_dropout: float = 0.1
     bridge_num_special_tokens: int = 4
+    use_ecg_image_projection: bool = False
+    ecg_projection_config: Optional[Dict[str, Any]] = None
     bertscore_max_batches: Optional[int] = 5
+    processor_name: Optional[str] = None
+    use_auto_processor: bool = False
     
     # Per-category metrics configuration (with defaults)
     compute_category_metrics: bool = False

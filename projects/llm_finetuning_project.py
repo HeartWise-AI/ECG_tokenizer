@@ -11,7 +11,7 @@ except (ImportError, AttributeError):  # pragma: no cover - fallback for older t
     _GRAD_SCALER_ARGS = ()
 from torch.optim.lr_scheduler import LRScheduler
 
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 
 from utils.ddp import DistributedUtils
 from utils.schedulers import get_scheduler
@@ -19,7 +19,7 @@ from utils.registry import (
     ModelRegistry,
     ProjectRegistry
 )
-from utils.enums import ProjectName
+from utils.enums import ProjectName, ModelName
 from utils.wandb_wrapper import WandbWrapper
 from utils.config import LLMFinetuningConfig, ECGTokenizerTrainingConfig
 from projects.base_project import BaseProject
@@ -117,8 +117,10 @@ class LLMFinetuningProject(BaseProject):
 
         # Load the tokenizer first (may add special tokens)
         tokenizer_name = self.config.tokenizer_name
-        # No need to append -Instruct since we're using the correct model name directly
-        tokenizer = self._get_tokenizer(tokenizer_name)
+        tokenizer, processor = self._get_tokenizer(tokenizer_name)
+        self.config.tokenizer = tokenizer  # type: ignore[attr-defined]
+        if processor is not None:
+            self.config.processor = processor  # type: ignore[attr-defined]
         
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
@@ -132,17 +134,23 @@ class LLMFinetuningProject(BaseProject):
             huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
             tokenizer=tokenizer,
+            processor=processor,
             num_visual_tokens=self.config.bridge_num_visual_tokens or self.config.num_ecg_tokens,
             bridge_mid_dim=self.config.bridge_mid_dim,
             bridge_num_heads=self.config.bridge_num_heads,
             bridge_dropout=self.config.bridge_dropout,
             bridge_num_special_tokens=self.config.bridge_num_special_tokens,
+            ecg_waveform_length=self.config.ecg_waveform_length,
+            ecg_num_leads=self.config.ecg_num_leads,
+            use_ecg_image_projection=getattr(self.config, 'use_ecg_image_projection', False),
+            ecg_projection_config=getattr(self.config, 'ecg_projection_config', None),
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             use_lora=self.config.use_lora,
             lora_config=lora_config
         ).to(self.config.device)
         
         # Resize model embeddings if new tokens were added
-        if getattr(self.config, 'instruct_mode', False):
+        if getattr(self.config, 'instruct_mode', False) and hasattr(ecg_tokenizer.decoder, 'llm_model'):
             ecg_tokenizer.decoder.llm_model.resize_token_embeddings(len(tokenizer))
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
@@ -158,9 +166,21 @@ class LLMFinetuningProject(BaseProject):
             pretrained_state_dict = state_dict['model_state_dict']
             ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
         
-        # Print training configuration
+        training_phases = getattr(self.config, 'training_phases', {}) or {}
+        phase1_cfg = training_phases.get('phase1_alignment', {}) or {}
+        phase2_cfg = training_phases.get('phase2_finetuning', {}) or {}
+        phase1_epochs = int(phase1_cfg.get('epochs', 0))
+
+        if resume_checkpoint_path and resume_epoch >= phase1_epochs and phase2_cfg:
+            initial_phase_cfg = phase2_cfg
+        else:
+            initial_phase_cfg = phase1_cfg
+
+        self._apply_model_phase_settings(ecg_tokenizer, initial_phase_cfg)
+
+        # Print training configuration using the pre-DDP model so parameter counts reflect freezing
         self._print_training_config(ecg_tokenizer)
-               
+
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
@@ -213,16 +233,7 @@ class LLMFinetuningProject(BaseProject):
 
         decoder_module = ecg_tokenizer.module.decoder
 
-        training_phases = getattr(self.config, 'training_phases', {}) or {}
-        phase1_cfg = training_phases.get('phase1_alignment', {}) or {}
-        phase2_cfg = training_phases.get('phase2_finetuning', {}) or {}
-        phase1_epochs = int(phase1_cfg.get('epochs', 0))
-
-        # Determine which phase produced the loaded checkpoint so optimizer groups align with state dict
-        if resume_checkpoint_path and resume_epoch >= phase1_epochs and phase2_cfg:
-            initial_phase_cfg = phase2_cfg
-        else:
-            initial_phase_cfg = phase1_cfg
+        # Ensure freeze settings also apply to the DDP-wrapped module
         self._apply_model_phase_settings(ecg_tokenizer.module, initial_phase_cfg)
 
         param_groups = self._build_optimizer_param_groups(
@@ -230,7 +241,20 @@ class LLMFinetuningProject(BaseProject):
             phase_overrides=initial_phase_cfg
         )
 
+        projection_module = getattr(ecg_tokenizer.module, 'ecg_image_projection', None)
+        if projection_module is not None:
+            projection_params = [p for p in projection_module.parameters() if p.requires_grad]
+            if projection_params:
+                ecg_proj_lr = float(initial_phase_cfg.get('ecg_embedding_lr', self.config.llm_lr))
+                ecg_proj_wd = float(initial_phase_cfg.get('ecg_embedding_weight_decay', self.config.llm_weight_decay))
+                param_groups.append({
+                    "params": projection_params,
+                    "lr": ecg_proj_lr,
+                    "weight_decay": ecg_proj_wd,
+                    "name": "ecg_projection"
+                })
 
+        
         # Get the optimizer
         optimizer_class = getattr(torch.optim, self.config.optimizer)
         optimizer: Optimizer = optimizer_class(param_groups)
@@ -553,6 +577,8 @@ class LLMFinetuningProject(BaseProject):
             print(f"Checkpoint has LoRA weights: {checkpoint_has_lora}")
             print(f"Using LoRA for inference: {use_lora_for_inference}")
         
+        infer_tokenizer, infer_processor = self._get_tokenizer(self.config.tokenizer_name)
+
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
             encoder_name=pretrained_config.encoder_name,
             quantizer_name=pretrained_config.quantizer_name,
@@ -563,7 +589,8 @@ class LLMFinetuningProject(BaseProject):
             adapter_name=pretrained_config.adapter_name,
             huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
             llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
-            tokenizer=self._get_tokenizer(self.config.tokenizer_name),
+            tokenizer=infer_tokenizer,
+            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': pretrained_config.lora_r if hasattr(pretrained_config, 'lora_r') else 16,
@@ -587,7 +614,10 @@ class LLMFinetuningProject(BaseProject):
         ecg_tokenizer.eval()
         
         # Load the tokenizer
-        tokenizer = self._get_tokenizer(self.config.tokenizer_name)
+        tokenizer, processor = self._get_tokenizer(self.config.tokenizer_name)
+        self.config.tokenizer = tokenizer  # type: ignore[attr-defined]
+        if processor is not None:
+            self.config.processor = processor  # type: ignore[attr-defined]
         
         # Get the dataloaders
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -631,23 +661,22 @@ class LLMFinetuningProject(BaseProject):
         """        
         raise NotImplementedError("Extraction is not implemented for this project")
     
-    def _get_tokenizer(self, tokenizer_name: str):
-        """Get the appropriate tokenizer using AutoTokenizer for all models."""
-        # Use AutoTokenizer which works for all Hugging Face models
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    def _get_tokenizer(self, tokenizer_name: str) -> tuple[Any, Optional[Any]]:
+        """Return the text tokenizer and optional processor based on configuration."""
 
-        if getattr(self.config, 'instruct_mode', False):
-        # Override chat template to remove system additions
-            # custom_template = """<|begin_of_text|>{% for message in messages %}{% if message['role'] == 'system' %}<|start_header_id|>system<|end_header_id|>
+        use_processor = getattr(self.config, 'use_auto_processor', False)
 
-            #     {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'user' %}<|start_header_id|>user<|end_header_id|>
+        processor = None
+        if use_processor:
+            processor_name = getattr(self.config, 'processor_name', None) or tokenizer_name
+            processor = AutoProcessor.from_pretrained(processor_name, trust_remote_code=True)
+            tokenizer = getattr(processor, 'tokenizer', None)
+            if tokenizer is None:
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-            #     {{ message['content'] }}<|eot_id|>{% elif message['role'] == 'assistant' %}<|start_header_id|>assistant<|end_header_id|>
-
-            #     {{ message['content'] }}<|eot_id|>{% endif %}{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>
-
-            #     {% endif %}"""
-
+        if getattr(self.config, 'instruct_mode', False) and processor is None:
             custom_template = (
                 "<|begin_of_text|>"
                 "{% for message in messages %}"
@@ -655,7 +684,6 @@ class LLMFinetuningProject(BaseProject):
                         "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'user' %}"
                         "<|start_header_id|>user<|end_header_id|>\n\n"
-                        # Add placeholders for the ECG tokens here
                         "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens)]) + "<|end_ecg|>\n"
                         "{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'assistant' %}"
@@ -665,31 +693,26 @@ class LLMFinetuningProject(BaseProject):
                 "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
             )
             tokenizer.chat_template = custom_template
-        
-        # Ensure pad token is set - use eos_token if no pad_token exists
-        if tokenizer.pad_token is None:
+
+        if hasattr(tokenizer, 'pad_token') and tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
-            
-        # Ensure pad_token_id is a single integer (not a list)
+
         if hasattr(tokenizer, 'pad_token_id') and isinstance(tokenizer.pad_token_id, list):
             tokenizer.pad_token_id = tokenizer.pad_token_id[0]
-            
-        # Add ECG special tokens for instruction mode
-        if getattr(self.config, 'instruct_mode', False):
+
+        if getattr(self.config, 'instruct_mode', False) and processor is None:
             special_tokens_dict = {
                 'additional_special_tokens': ['<|start_ecg|>', '<|end_ecg|>']
             }
             num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
             if num_added_tokens > 0 and self.config.is_ref_device:
                 print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
-        
-        # Add 128 position-specific ECG tokens and record their start id
-        if getattr(self.config, 'instruct_mode', False):
-            # Determine if tokens already exist
+
             ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]
             existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
-            if existing_id is None or existing_id == -1:
+            unk_id = getattr(tokenizer, 'unk_token_id', None)
+            if existing_id is None or existing_id == -1 or (unk_id is not None and int(existing_id) == int(unk_id)):
                 original_vocab_size = len(tokenizer)
                 tokenizer.add_tokens(ecg_tokens, special_tokens=True)
                 self.config.ecg_token_start_id = original_vocab_size
@@ -699,9 +722,7 @@ class LLMFinetuningProject(BaseProject):
                 self.config.ecg_token_start_id = int(existing_id)
                 if self.config.is_ref_device:
                     print(f"ECG position tokens already present starting at id {self.config.ecg_token_start_id}")
-        
-        # Ensure chat template exists for instruction tuning
-        if getattr(self.config, 'instruct_mode', False):
+
             chat_tmpl = getattr(tokenizer, 'chat_template', None)
             if not chat_tmpl and 'llama' in tokenizer_name.lower():
                 tokenizer.chat_template = (
@@ -712,10 +733,10 @@ class LLMFinetuningProject(BaseProject):
                     "{% endfor %}"
                     "{% if add_generation_prompt %}"
                     "<|start_header_id|>assistant<|end_header_id|>\n\n"
-                    "{% endif %}"
                 )
-            
-        return tokenizer
+
+        return tokenizer, processor if use_processor else None
+
     
     def _get_llm_parameters(self, decoder):
         """Get LLM parameters from the decoder's LLM model."""

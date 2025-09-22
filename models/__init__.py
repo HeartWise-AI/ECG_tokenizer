@@ -7,6 +7,8 @@ from models.adapters import (
 from models.bert_classifier import BertClassifier
 from models.gpt2_tokenizer_decoder import GPT2Decoder
 from models.llama32_tokenizer_decoder import Llama32Decoder
+from models.medgemma_decoder import MedGemmaDecoder
+from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig
 from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
     Conv_Encoder,
@@ -21,6 +23,7 @@ __all__ = [
     "SequenceAdapter",
     "GPT2Decoder",
     "Llama32Decoder",
+    "MedGemmaDecoder",
     "SimpleEmbeddingAdapter",
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
@@ -28,4 +31,6 @@ __all__ = [
     "Conv_Decoder",
     "ECG_Tokenizer_Quantizer",
     "ECG_Tokenizer_Quantizer_RVQ",
+    "ECG2ImageProjection",
+    "ECGImageProjectionConfig",
 ]

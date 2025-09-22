@@ -9,7 +9,7 @@ seed: !!int 42
 training_phases:
   phase1_alignment:
     epochs: !!int 2 # Alignment phase (ECG components only)
-    freeze_llm: !!bool true
+    freeze_llm: !!bool false
     use_lora: !!bool false
     ecg_embedding_lr: !!float 1e-4 # Reduced LR for stability
     adapter_lr: !!float 1e-4 # Reduced LR for stability
@@ -43,7 +43,7 @@ resume_checkpoint_path: !!str ""
 # wandb parameters
 wandb_project: !!str "ECG_tokenizer_LLM_finetuning_Llama32_1B_SequenceTokens"
 wandb_entity: !!str "mhi_ai"
-use_wandb: !!bool true
+use_wandb: !!bool false
 # training parameters (balanced for two-stage dynamics)
 llm_lr: !!float 1e-7 # Very low LR creates phase 1 alignment effect
 adapter_lr: !!float 3e-5 # Reduced from 1e-4 to prevent late-epoch overfitting

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, Union, cast
+from typing import Optional, Dict, Any, Union, cast, Tuple
 from models.local_residual_vq import ResidualVQ
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
 
@@ -8,6 +8,9 @@ from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
 from models.types import ModelT, ModelClassT
 import math
+from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig
+from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
+from utils.config.llm_finetuning_config import LLMFinetuningConfig
 
 try:
     from peft import LoraConfig, get_peft_model, TaskType
@@ -902,6 +905,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         use_lora: bool = False,
         lora_config: Optional[dict[str, Any]] = None,
         tokenizer: Optional[Any] = None,
+        processor: Optional[Any] = None,
+        ecg_token_start_id: Optional[int] = None,
+        ecg_waveform_length: int = 2500,
+        ecg_num_leads: int = 12,
+        use_ecg_image_projection: bool = False,
+        ecg_projection_config: Optional[Dict[str, Any]] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
         attention_log_frequency: int = 100
@@ -922,7 +931,24 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.decoder_name: str = decoder_name
         self.using_pretrained_weights: bool = False
         self.use_lora: bool = use_lora
-        
+        self.processor: Optional[Any] = processor
+        self.ecg_token_start_id = ecg_token_start_id
+        self.use_ecg_image_projection: bool = use_ecg_image_projection
+        self.ecg_image_projection: Optional[ECG2ImageProjection] = None
+        if self.use_ecg_image_projection:
+            projection_cfg = ecg_projection_config or {}
+            if isinstance(projection_cfg, ECGImageProjectionConfig):
+                config_obj = projection_cfg
+            else:
+                try:
+                    config_obj = ECGImageProjectionConfig(**projection_cfg)
+                except TypeError as exc:
+                    raise ValueError(
+                        "Invalid ecg_projection_config provided to ECG_Tokenizer_Wrapper"
+                    ) from exc
+
+            self.ecg_image_projection = ECG2ImageProjection(config=config_obj)
+
         # Use the DecoderMode enum instead of a string
         self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
 
@@ -959,9 +985,20 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     'tokenizer': tokenizer,
                     'enable_attention_visualization': enable_attention_visualization,
                     'attention_log_frequency': attention_log_frequency,
+                    'ecg_token_start_id': ecg_token_start_id,
                 }
 
                 if decoder_name == ModelName.LLAMA32_DECODER.value or decoder_name == "Llama32_Decoder":
+                    decoder_kwargs.update({
+                        'ecg_codebook_size': codebook_size,
+                        'num_visual_tokens': num_visual_tokens,
+                        'bridge_mid_dim': bridge_mid_dim,
+                        'bridge_num_heads': bridge_num_heads,
+                        'bridge_dropout': bridge_dropout,
+                        'bridge_num_special_tokens': bridge_num_special_tokens,
+                        'num_quantizers': num_quantizers,
+                    })
+                elif decoder_name == ModelName.MEDGEMMA_DECODER.value or decoder_name == "MedGemma_Decoder":
                     decoder_kwargs.update({
                         'ecg_codebook_size': codebook_size,
                         'num_visual_tokens': num_visual_tokens,
@@ -1407,6 +1444,109 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             codes = codes.squeeze(-1)
         return codes
 
+    def _module_device(self) -> torch.device:
+        """Return the device the wrapper currently resides on."""
+        try:
+            return next(self.parameters()).device
+        except StopIteration:  # pragma: no cover - defensive fallback
+            return torch.device('cpu')
+
+    def _get_text_tokenizer(self) -> Any:
+        """Fetch the tokenizer associated with the decoder or processor."""
+        tokenizer = getattr(self.decoder, 'tokenizer', None)
+        if tokenizer is not None:
+            return tokenizer
+        processor = getattr(self.decoder, 'processor', None)
+        if processor is not None and hasattr(processor, 'tokenizer'):
+            return processor.tokenizer
+        raise ValueError(
+            f"Decoder '{self.decoder_name}' does not expose a tokenizer for prompt preparation"
+        )
+
+    def _prepare_generation_inputs_from_config(
+        self,
+        config: LLMFinetuningConfig | dict[str, Any],
+        sample_idx: int = 0,
+        dataset_split: str = "validation",
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Dict[str, Any]]:
+        """Load ECG and prompt tokens from the parquet dataset defined in the config."""
+
+        def cfg_get(key: str, default: Any = None) -> Any:
+            if hasattr(config, key):
+                return getattr(config, key)
+            if isinstance(config, dict):
+                return config.get(key, default)
+            return default
+
+        split = dataset_split.lower()
+        if split not in {"train", "validation", "val", "dev"}:
+            raise ValueError(
+                f"Unsupported dataset split '{dataset_split}'. Use 'train' or 'validation'."
+            )
+
+        dataset_path = cfg_get('validation_dataset_path') if split != 'train' else cfg_get('train_dataset_path')
+        if dataset_path is None:
+            raise ValueError("Dataset path not specified in configuration for the requested split")
+
+        tokenizer = self._get_text_tokenizer()
+
+        dataset = ECGClinicalReportDataset(
+            dataset_path=dataset_path,
+            signal_path_column=cfg_get('signal_path_column'),
+            ecg_waveform_length=int(cfg_get('ecg_waveform_length')),
+            ecg_num_leads=int(cfg_get('ecg_num_leads')),
+            tokenizer=tokenizer,
+            max_length=int(cfg_get('max_length', cfg_get('max_token_length', 512))),
+            instruct_mode=bool(cfg_get('instruct_mode', False)),
+            num_ecg_tokens=int(cfg_get('num_ecg_tokens', 128)),
+            ecg_token_start_id=cfg_get('ecg_token_start_id'),
+            prompt_column=cfg_get('prompt_column', 'question'),
+            answer_column=cfg_get('answer_column', 'report'),
+            category_column=cfg_get('category_column', 'prompt_category'),
+        )
+
+        sample = dataset[sample_idx]
+        if sample is None:
+            raise ValueError(
+                f"Sample at index {sample_idx} could not be retrieved from dataset '{dataset_path}'."
+            )
+
+        device = self._module_device()
+        signal = sample['signal']
+        if isinstance(signal, torch.Tensor):
+            ecg_tensor = signal.to(device=device, dtype=torch.float32)
+        else:
+            ecg_tensor = torch.from_numpy(signal).to(device=device, dtype=torch.float32)
+        if ecg_tensor.dim() == 2:
+            ecg_tensor = ecg_tensor.unsqueeze(0)
+
+        prompt_input_ids = sample.get('prompt_input_ids')
+        if prompt_input_ids is not None:
+            if isinstance(prompt_input_ids, torch.Tensor):
+                if prompt_input_ids.dim() == 1:
+                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
+                prompt_input_ids = prompt_input_ids.to(device=device, dtype=torch.long)
+            else:
+                prompt_input_ids = torch.as_tensor(prompt_input_ids, dtype=torch.long, device=device).unsqueeze(0)
+
+        prompt_attention_mask = sample.get('prompt_attention_mask')
+        if prompt_attention_mask is not None:
+            if isinstance(prompt_attention_mask, torch.Tensor):
+                if prompt_attention_mask.dim() == 1:
+                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
+                prompt_attention_mask = prompt_attention_mask.to(device=device, dtype=torch.long)
+            else:
+                prompt_attention_mask = torch.as_tensor(prompt_attention_mask, dtype=torch.long, device=device).unsqueeze(0)
+
+        metadata = {
+            'dataset_path': dataset_path,
+            'dataset_split': split,
+            'sample_idx': sample_idx,
+            'raw_sample': sample,
+        }
+
+        return ecg_tensor, prompt_input_ids, prompt_attention_mask, metadata
+
     def forward(
         self, 
         ecg_signal: torch.Tensor, 
@@ -1446,19 +1586,28 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             all_codes = None
 
         quantized_code_ids = self._extract_primary_codes(indices)
+        pixel_values: Optional[torch.Tensor] = None
+        if self.ecg_image_projection is not None:
+            pixel_values = self.ecg_image_projection(quantized)
+            if pixel_values.dtype != quantized.dtype:
+                pixel_values = pixel_values.to(dtype=quantized.dtype)
 
         # Handle different decoder types
         if self.decoder_mode == DecoderMode.LLM:
             try:
-                decoder_output = self.decoder(
-                    quantized_features=quantized,
-                    quantized_codes=quantized_code_ids,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
-                    prompt_attention_mask=prompt_attention_mask
-                )
+                decoder_inputs = {
+                    'quantized_features': quantized,
+                    'quantized_codes': quantized_code_ids,
+                    'input_ids': input_ids,
+                    'attention_mask': attention_mask,
+                    'labels': labels,
+                    'prompt_input_ids': prompt_input_ids,
+                    'prompt_attention_mask': prompt_attention_mask,
+                }
+                if pixel_values is not None:
+                    decoder_inputs['pixel_values'] = pixel_values
+
+                decoder_output = self.decoder(**decoder_inputs)
 
                 if isinstance(decoder_output, dict):
                     return decoder_output
@@ -1482,46 +1631,100 @@ class ECG_Tokenizer_Wrapper(nn.Module):
     @torch.no_grad()
     def generate_report(
         self,
-        x: torch.Tensor,
+        x: Optional[torch.Tensor] = None,
         max_token_length: int = 512,
+        config: Optional[LLMFinetuningConfig | dict[str, Any]] = None,
+        sample_idx: int = 0,
+        dataset_split: str = "validation",
+        return_metadata: bool = False,
         **generate_kwargs
-    ) -> torch.Tensor:
-        """
-        Generate a clinical report from ECG signal using any LLM decoder.
-        Available when decoder_mode is LLM and decoder supports generation.
-        
-        Args:
-            x: ECG signal tensor
-            max_token_length: Maximum length of generated tokens
-            **generate_kwargs: Additional arguments for generation
-            
-        Returns:
-            Generated token IDs
-        """
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
+        """Generate a clinical report, optionally sourcing prompts directly from the configured dataset."""
+
         if self.decoder_mode != DecoderMode.LLM:
             raise ValueError("generate_report() is only available in LLM mode")
-        
         if self.decoder is None:
             raise ValueError("No decoder available for generation")
-            
-        # Ensure input is in the right dtype
-        x = x.to(dtype=torch.float32)
-        
-        # Get quantized features
+
+        prompt_input_ids = generate_kwargs.pop('prompt_input_ids', None)
+        prompt_attention_mask = generate_kwargs.pop('prompt_attention_mask', None)
+        metadata: Optional[Dict[str, Any]] = None
+
+        if config is not None:
+            x_cfg, prompt_ids_cfg, prompt_mask_cfg, metadata = self._prepare_generation_inputs_from_config(
+                config=config,
+                sample_idx=sample_idx,
+                dataset_split=dataset_split,
+            )
+            x = x_cfg
+            if prompt_input_ids is None:
+                prompt_input_ids = prompt_ids_cfg
+            if prompt_attention_mask is None:
+                prompt_attention_mask = prompt_mask_cfg
+            max_token_length = getattr(config, 'max_token_length', max_token_length)
+
+        if x is None:
+            raise ValueError(
+                "generate_report requires either an ECG tensor `x` or a configuration to load data from."
+            )
+
+        device = self._module_device()
+        x = x.to(device=device, dtype=torch.float32)
+
+        if prompt_input_ids is not None:
+            if isinstance(prompt_input_ids, torch.Tensor):
+                if prompt_input_ids.dim() == 1:
+                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
+                prompt_input_ids = prompt_input_ids.to(device=device, dtype=torch.long)
+            else:
+                prompt_input_ids = torch.as_tensor(prompt_input_ids, dtype=torch.long, device=device)
+                if prompt_input_ids.dim() == 1:
+                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
+
+        if prompt_attention_mask is not None:
+            if isinstance(prompt_attention_mask, torch.Tensor):
+                if prompt_attention_mask.dim() == 1:
+                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
+                prompt_attention_mask = prompt_attention_mask.to(device=device, dtype=torch.long)
+            else:
+                prompt_attention_mask = torch.as_tensor(prompt_attention_mask, dtype=torch.long, device=device)
+                if prompt_attention_mask.dim() == 1:
+                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
+
         features = self.encoder(x)
         quantized, indices, _ = self.quantizer(features)
         quantized_codes = self._extract_primary_codes(indices)
-        
-        # Check if decoder has a generate method
-        if not hasattr(self.decoder, 'generate_report'):
-            raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
-        
-        return self.decoder.generate_report(
-            quantized_features=quantized,
-            quantized_codes=quantized_codes,
-            max_token_length=max_token_length,
-            **generate_kwargs
-        )
+        pixel_values: Optional[torch.Tensor] = None
+        if self.ecg_image_projection is not None:
+            pixel_values = self.ecg_image_projection(quantized)
+            if pixel_values.dtype != quantized.dtype:
+                pixel_values = pixel_values.to(dtype=quantized.dtype)
+
+        decoder_inputs: Dict[str, Any] = {
+            'quantized_features': quantized,
+            'quantized_codes': quantized_codes,
+            'max_token_length': max_token_length,
+            **generate_kwargs,
+        }
+        if pixel_values is not None:
+            decoder_inputs['pixel_values'] = pixel_values
+
+        if prompt_input_ids is not None:
+            if not hasattr(self.decoder, 'generate_report_with_question'):
+                raise ValueError(
+                    f"Decoder '{self.decoder_name}' does not support question-conditioned generation"
+                )
+            decoder_inputs['prompt_input_ids'] = prompt_input_ids
+            decoder_inputs['prompt_attention_mask'] = prompt_attention_mask
+            generated_ids = self.decoder.generate_report_with_question(**decoder_inputs)
+        else:
+            if not hasattr(self.decoder, 'generate_report'):
+                raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
+            generated_ids = self.decoder.generate_report(**decoder_inputs)
+
+        if return_metadata:
+            return generated_ids, (metadata or {})
+        return generated_ids
 
     @torch.no_grad()
     def generate_report_with_question(
@@ -1533,24 +1736,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         **generate_kwargs
     ) -> torch.Tensor:
         """Generate conditioned on a chat-formatted question prompt."""
-        if self.decoder_mode != DecoderMode.LLM:
-            raise ValueError("generate_report_with_question() is only available in LLM mode")
-        if self.decoder is None:
-            raise ValueError("No decoder available for generation")
-
-        x = x.to(dtype=torch.float32)
-        features = self.encoder(x)
-        quantized, indices, _ = self.quantizer(features)
-        quantized_codes = self._extract_primary_codes(indices)
-
-        if not hasattr(self.decoder, 'generate_report_with_question'):
-            raise ValueError(f"Decoder '{self.decoder_name}' does not support question-conditioned generation")
-
-        return self.decoder.generate_report_with_question(
-            quantized_features=quantized,
-            quantized_codes=quantized_codes,
+        return self.generate_report(
+            x=x,
+            max_token_length=max_token_length,
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
-            max_token_length=max_token_length,
-            **generate_kwargs
+            **generate_kwargs,
         )

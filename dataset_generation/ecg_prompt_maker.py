@@ -57,7 +57,6 @@ class ECGPromptMaker:
                 "What type of rhythm is shown?",
                 "Is this sinus rhythm or something else?",
                 "Are there any ectopic beats?",
-                "What is the atrial rhythm?"
             ],
             "CONDUCTION": [
                 "Are there any conduction abnormalities?",
@@ -81,7 +80,6 @@ class ECGPromptMaker:
                 "What do the ST segments show?",
                 "Is there evidence of old or new infarction?",
                 "Are the T waves normal?",
-                "Does this suggest acute coronary syndrome?"
             ],
             "CHAMBER ENLARGEMENT": [
                 "Is there chamber enlargement or hypertrophy?",
@@ -174,7 +172,6 @@ class ECGPromptMaker:
                 "What type of axis deviation is present?",
                 "Is there left or right axis deviation?",
                 "What is the frontal plane QRS axis?",
-                "Is there extreme axis deviation?"
             ]
         }
         
@@ -214,12 +211,77 @@ class ECGPromptMaker:
             ]
         }
         
+        # Random YES/NO ECG finding questions (seed 42 for reproducibility)
+        self.random_finding_prompts = [
+            "Is there 1st degree AV block?",
+            "Is there 2nd degree AV block?",
+            "Is there 3rd degree AV block?",
+            "Is there left bundle branch block?",
+            "Is there right bundle branch block?",
+            "Is there left anterior fascicular block?",
+            "Is there left posterior fascicular block?",
+            "Is there left ventricular hypertrophy?",
+            "Is there right ventricular hypertrophy?",
+            "Is there left atrial enlargement?",
+            "Is there right atrial enlargement?",
+            "Is there atrial fibrillation?",
+            "Is there atrial flutter?",
+            "Is there sinus bradycardia?",
+            "Is there sinus tachycardia?",
+            "Is there ventricular tachycardia?",
+            "Is there premature ventricular complex?",
+            "Is there premature atrial complex?",
+            "Is there ST elevation in any leads?",
+            "Is there ST depression in any leads?",
+            "Are there pathological Q waves?",
+            "Is there T wave inversion?",
+            "Is there left axis deviation?",
+            "Is there right axis deviation?",
+            "Is there extreme axis deviation?",
+            "Is there pericarditis?",
+            "Is there early repolarization?",
+            "Is there WPW pattern?",
+            "Is there long QT syndrome?",
+            "Is there short QT syndrome?"
+        ]
+        
+        # Map questions to column names - EXACT matches from deepecg_categories.json
+        self.finding_to_column_map = {
+            "1st degree AV block": "1st degree AV block",
+            "2nd degree AV block": ["2nd degree AV block - mobitz 1", "2nd degree AV block - mobitz 2"],
+            "3rd degree AV block": "Third Degree AV Block",
+            "left bundle branch block": "Left bundle branch block",
+            "right bundle branch block": "Right bundle branch block",
+            "left anterior fascicular block": "Left anterior fascicular block",
+            "left posterior fascicular block": "Left posterior fascicular block",
+            "left ventricular hypertrophy": "Left ventricular hypertrophy",
+            "right ventricular hypertrophy": "Right ventricular hypertrophy",
+            "left atrial enlargement": "Left atrial enlargement",
+            "right atrial enlargement": "Right atrial enlargement",
+            "atrial fibrillation": "Afib",
+            "atrial flutter": "Atrial flutter",
+            "sinus bradycardia": "Bradycardia",
+            "sinus tachycardia": "Atrial tachycardia (>= 100 BPM)",
+            "ventricular tachycardia": "Ventricular tachycardia",
+            "premature ventricular complex": "Premature ventricular complex",
+            "premature atrial complex": "Premature atrial complex",
+            "extreme axis deviation": "Right superior axis",  # From CONDUCTION category
+            "pericarditis": "Acute pericarditis",
+            "early repolarization": "Early repolarization",
+            "left axis deviation": "Left axis deviation",
+            "right axis deviation": "Right axis deviation",
+            "wpw pattern": "Wolff-Parkinson-White (Pre-excitation syndrome)",
+            "long qt syndrome": "Prolonged QT",
+            "delta wave": "Delta wave"
+        }
+        
         # Prompt weights for sampling
         self.prompt_weights = {
             'interpretation': 0.35,  # 35% interpretation prompts
-            'category': 0.30,        # 30% category-specific
+            'category': 0.26,        # 26% category-specific (reduced from 30%)
             'classification': 0.20,  # 20% classification
-            'demographic': 0.15      # 15% demographic/HR questions
+            'demographic': 0.15,     # 15% demographic/HR questions
+            'random_finding': 0.04   # 4% random YES/NO finding questions
         }
     
     def determine_active_categories(self, row: pd.Series) -> Dict[str, List[str]]:
@@ -231,7 +293,25 @@ class ECGPromptMaker:
         
         for category, conditions in self.categories_dict.items():
             for condition in conditions:
-                # Check various column name formats
+                # Special handling for Acute MI
+                if condition == 'Acute MI':
+                    # Check the Acute_MI column
+                    if 'Acute_MI' in row.index:
+                        try:
+                            if pd.notna(row['Acute_MI']) and float(row['Acute_MI']) >= 1:
+                                active[category].append(condition)
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Also check if report contains acute MI references
+                    if 'report' in row.index and pd.notna(row['report']):
+                        report_text = str(row['report']).lower()
+                        if 'acute mi' in report_text or 'acute myocardial infarction' in report_text:
+                            active[category].append(condition)
+                            continue
+                
+                # Check various column name formats for other conditions
                 col_names = [
                     condition,
                     condition.replace(' ', '_'),
@@ -333,12 +413,12 @@ class ECGPromptMaker:
                                      key=lambda x: priority_order.index(x) 
                                      if x in priority_order else 999)
             
-            # Add prompts for each active category (up to 3 to avoid too many)
-            for i, category in enumerate(sorted_categories[:3]):
+            # Add prompts for each active category (up to 4 to compensate for fewer HR questions)
+            for i, category in enumerate(sorted_categories[:4]):
                 if category in self.category_specific_prompts:
                     cat_prompt = random.choice(self.category_specific_prompts[category])
                     # Higher weight for more critical categories
-                    weight = 0.8 if i == 0 else 0.6 if i == 1 else 0.4
+                    weight = 0.85 if i == 0 else 0.7 if i == 1 else 0.5 if i == 2 else 0.4
                     prompts.append((cat_prompt, f'category_{category.lower().replace(" ", "_").replace(",", "")}', weight))
         else:
             # If no specific findings, add a general rhythm question
@@ -373,18 +453,19 @@ class ECGPromptMaker:
         if 'age_at_ecg' in row.index and pd.notna(row.get('age_at_ecg')):
             demographic_types.append('AGE')
         
-        # ALWAYS add heart rate question if RR interval is available
+        # Add heart rate question with only 2% probability (reduced from always including it)
         if 'rr_interval' in row.index and pd.notna(row.get('rr_interval')):
-            hr_prompt = random.choice(self.demographic_prompts['HEART_RATE'])
-            prompts.append((hr_prompt, 'heart_rate', 0.7))  # Heart rate as its own category
+            if random.random() < 0.02:  # Only 2% chance to include heart rate question
+                hr_prompt = random.choice(self.demographic_prompts['HEART_RATE'])
+                prompts.append((hr_prompt, 'heart_rate', 0.7))  # Heart rate as its own category
         
-        # Randomly add 1 other demographic question if available
+        # Add other demographic questions with only 2% probability (gender, age)
         if demographic_types:
-            # 50% chance to add one more demographic question
-            if random.random() < 0.5:
+            # Only 2% chance to add demographic question (gender or age)
+            if random.random() < 0.02:
                 selected_type = random.choice(demographic_types)
                 demo_prompt = random.choice(self.demographic_prompts[selected_type])
-                prompts.append((demo_prompt, f'demographic_{selected_type.lower()}', 0.5))
+                prompts.append((demo_prompt, f'demographic_{selected_type.lower()}', 0.6))
         
         # 6. For complex ECGs with multiple categories, add an extra focused prompt
         if num_active_categories >= 3:
@@ -406,6 +487,22 @@ class ECGPromptMaker:
                     "What is the clinical urgency of this ECG?",
                 ]
                 prompts.append((random.choice(urgency_prompts), 'urgency_assessment', 1.0))
+        
+        # 6. Add random YES/NO finding questions (4-5% of prompts)
+        # Use deterministic selection based on ECG identifier for reproducibility
+        ecg_id = str(row.get('waveform_name', row.get('npy_id', '')))
+        
+        if ecg_id:
+            # Create a deterministic hash-based selection
+            import hashlib
+            hash_val = int(hashlib.md5((ecg_id + 'random_finding').encode()).hexdigest()[:8], 16)
+            
+            # Approximately 5% chance (modulo 20 gives 0-19, so < 1 is 5%)
+            if hash_val % 20 < 1:
+                # Select question based on hash (deterministic but varied)
+                question_idx = hash_val % len(self.random_finding_prompts)
+                selected_question = self.random_finding_prompts[question_idx]
+                prompts.append((selected_question, 'random_finding_question', 0.85))
         
         return prompts
     

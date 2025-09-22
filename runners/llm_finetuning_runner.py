@@ -1,13 +1,22 @@
 import os
 import json
+import re
+import time
 import torch
 import pandas as pd
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - visualization is optional
+    matplotlib = None
+    plt = None
 from torch.optim.adamw import AdamW
 from torch.utils.data import DataLoader
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.optim.lr_scheduler import LRScheduler
-from transformers import GPT2Tokenizer
 
 from utils.enums import RunMode, RunnerName
 from utils.ddp import DistributedUtils
@@ -97,6 +106,10 @@ class LLMFinetuningRunner(BaseRunner):
         # Control expensive metric evaluation (e.g., BERTScore) across validation batches
         self.bertscore_max_batches: Optional[int] = getattr(self.config, 'bertscore_max_batches', None)
         self._bertscore_skip_logged: bool = False
+
+        # Persist the original debug configuration so phase overrides can be merged cleanly.
+        base_debug_config = getattr(self.config, 'debug_config', None) or {}
+        self._base_debug_config: dict[str, Any] = dict(base_debug_config)
         
     def execute(
         self, 
@@ -184,6 +197,15 @@ class LLMFinetuningRunner(BaseRunner):
                     self._set_param_group_lr('ecg_embeddings', float(phase_config['ecg_embedding_lr']))
                 elif freeze_llm is True:
                     self._set_param_group_lr('ecg_embeddings', 0.0)
+
+        # Merge phase-specific debug overrides (e.g., gradient logging) on top of the base config.
+        debug_overrides = phase_config.get('debug_config')
+        if debug_overrides is not None:
+            merged_debug_config = dict(self._base_debug_config)
+            merged_debug_config.update(debug_overrides)
+            self.config.debug_config = merged_debug_config
+        else:
+            self.config.debug_config = dict(self._base_debug_config) if self._base_debug_config else None
 
         if self.config.is_ref_device:
             log_bits = []
@@ -610,7 +632,7 @@ class LLMFinetuningRunner(BaseRunner):
             self._bertscore_skip_logged = False
             worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
             # Initialize JSON file for incremental writing
-            json_path = f"./ECG_tokenizer/val_generations/val_generations_epoch_{epoch}.json"
+            json_path = self._get_val_generation_json_path(epoch)
             os.makedirs(os.path.dirname(json_path), exist_ok=True)
             # Initialize with empty dict
             if self.config.is_ref_device:
@@ -698,19 +720,18 @@ class LLMFinetuningRunner(BaseRunner):
             mean_loss: float = total_loss / (batch_idx + 1)
             
             # Log the loss to wandb
+            log_dict: dict[str, float] | None = None
             if mode == RunMode.TRAIN:
                 if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
                     log_dict = {
                         f"{mode}/loss": gathered_metrics[f'{mode}/loss'],  # Log the gathered loss for current batch
                         f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
                     }
-                    
+
                     # Add learning rate metrics to log_dict
                     for key, value in gathered_metrics.items():
                         if f"{mode}/lr_" in key:
                             log_dict[key] = value
-                            
-                    self.wandb_wrapper.log(log_dict)
             
             # Sync after logging
             DistributedUtils.sync_process_group(
@@ -725,10 +746,10 @@ class LLMFinetuningRunner(BaseRunner):
             }
             
             # Add gradient norms if debugging
-            debug_config = getattr(self.config, 'debug_config', {})
+            debug_config = getattr(self.config, 'debug_config', None) or {}
             if debug_config.get('log_gradient_norms', False) and mode == RunMode.TRAIN:
                 model = self.model.module if hasattr(self.model, 'module') else self.model
-                
+
                 # Calculate gradient norms for different components
                 grad_norms = {}
                 if hasattr(model, 'decoder'):
@@ -759,6 +780,13 @@ class LLMFinetuningRunner(BaseRunner):
                 # Add to epoch metrics for wandb logging
                 for key, value in grad_norms.items():
                     epoch_metrics[f"{mode}/{key}"] = value
+
+                if log_dict is not None:
+                    for key, value in grad_norms.items():
+                        log_dict[f"{mode}/{key}"] = float(value)
+
+            if log_dict is not None and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+                self.wandb_wrapper.log(log_dict)
             
             data_iter.set_postfix(postfix_dict)
             
@@ -774,7 +802,7 @@ class LLMFinetuningRunner(BaseRunner):
                     )
         
         # Show epoch summary with debugging info
-        debug_config = getattr(self.config, 'debug_config', {})
+        debug_config = getattr(self.config, 'debug_config', None) or {}
         if debug_config.get('verbose_loss_logging', False) and self.config.is_ref_device:
             self._log_epoch_summary(mode, epoch, epoch_metrics, total_loss, len(dataloader))
         
@@ -856,7 +884,65 @@ class LLMFinetuningRunner(BaseRunner):
         # Normalize the epoch metrics
         for k in epoch_metrics:
             epoch_metrics[k] /= len(dataloader)
-        
+
+        # Create per-epoch validation metric plots on the reference device
+        if mode == RunMode.VALIDATE and self.config.is_ref_device:
+            metric_key_map = {
+                "ROUGE-1": f"{RunMode.VALIDATE}/rouge1",
+                "ROUGE-L": f"{RunMode.VALIDATE}/rougeL",
+                "BLEU-4": f"{RunMode.VALIDATE}/bleu4",
+                "METEOR": f"{RunMode.VALIDATE}/meteor",
+            }
+            metric_values = {}
+            for label, key in metric_key_map.items():
+                value = epoch_metrics.get(key)
+                if isinstance(value, (int, float)):
+                    metric_values[label] = float(value)
+
+            if metric_values and plt is not None:
+                plot_dir = os.path.join(self._get_val_generations_dir(), "plots")
+                os.makedirs(plot_dir, exist_ok=True)
+                plot_path = os.path.join(plot_dir, f"epoch_{epoch:03d}_metrics.png")
+
+                labels = list(metric_values.keys())
+                scores = [metric_values[label] for label in labels]
+
+                fig, ax = plt.subplots(figsize=(6, 4))
+                bar_container = ax.bar(labels, scores, color="#4C72B0")
+                upper_ylim = min(1.1, max(scores) + 0.05)
+                upper_ylim = max(upper_ylim, 0.2)
+                ax.set_ylim(0.0, upper_ylim)
+                ax.set_ylabel("Score")
+                ax.set_title(f"Validation Metrics - Epoch {epoch}")
+                ax.tick_params(axis='x', rotation=20)
+                for rect, score in zip(bar_container, scores):
+                    text_y = min(score + 0.02, upper_ylim - 0.02)
+                    ax.text(
+                        rect.get_x() + rect.get_width() / 2,
+                        text_y,
+                        f"{score:.3f}",
+                        ha='center',
+                        va='bottom',
+                        fontsize=9
+                    )
+
+                fig.tight_layout()
+                fig.savefig(plot_path, dpi=200)
+                plt.close(fig)
+
+                if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                    try:
+                        import wandb
+                        self.wandb_wrapper.log({
+                            f"val/metrics_plot_epoch_{epoch}": wandb.Image(plot_path)
+                        })
+                    except Exception as exc:
+                        print(f"Warning: Failed to log validation metrics plot to Weights & Biases: {exc}")
+
+                print(f"Saved validation metric plot: {plot_path}")
+            elif metric_values:
+                print("matplotlib is unavailable; skipping validation metric plot generation.")
+
         # Return the epoch metrics
         return epoch_metrics
     
@@ -865,14 +951,126 @@ class LLMFinetuningRunner(BaseRunner):
         if generated_ids is None:
             return ""
 
-        # Determine where assistant labels begin so we can drop the prompt portion
-        first_assistant_idx = 0
-        non_ignored = (label_ids != -100).nonzero(as_tuple=False)
-        if non_ignored.numel() > 0:
-            first_assistant_idx = int(non_ignored[0].item())
+        mask = label_ids != -100
 
-        trimmed_ids = generated_ids[first_assistant_idx:]
-        return tokenizer.decode(trimmed_ids.tolist(), skip_special_tokens=True)
+        # Fast path when mask and generated ids align as expected
+        if mask.shape == generated_ids.shape:
+            assistant_tokens = generated_ids[mask]
+        else:
+            # Fall back to slicing using the first/last valid label positions
+            mask_flat = mask.view(-1)
+            generated_flat = generated_ids.view(-1)
+
+            valid_positions = torch.nonzero(mask_flat, as_tuple=False).flatten()
+
+            if valid_positions.numel() == 0:
+                assistant_tokens = generated_flat
+            else:
+                start_idx = int(valid_positions[0])
+                end_idx = int(valid_positions[-1]) + 1
+
+                if start_idx >= generated_flat.size(0):
+                    assistant_tokens = generated_flat
+                else:
+                    end_idx = min(end_idx, generated_flat.size(0))
+                    assistant_tokens = generated_flat[start_idx:end_idx]
+
+        if assistant_tokens.numel() == 0:
+            return ""
+
+        return tokenizer.decode(assistant_tokens.tolist(), skip_special_tokens=True)
+
+    @staticmethod
+    def _sanitize_chat_text(text: str, max_length: int = 512) -> str:
+        """Trim special chat tokens, collapse whitespace, and optionally truncate."""
+        if not text:
+            return ""
+
+        cleaned = str(text)
+
+        # Remove any known chat delimiters and everything after the first end-of-turn marker
+        for delimiter in ("<|eot_id|>", "|eot_id|>"):
+            if delimiter in cleaned:
+                cleaned = cleaned.split(delimiter, 1)[0]
+        # Strip remaining special header markers
+        special_tokens = (
+            "<|start_header_id|>",
+            "<|end_header_id|>",
+            "<|assistant|>",
+            "<|user|>",
+            "<|system|>",
+            "<|start_of_turn|>",
+            "<|end_of_turn|>",
+        )
+        for token in special_tokens:
+            cleaned = cleaned.replace(token, "")
+
+        # Strip common HTML fragments the model sometimes emits
+        cleaned = re.sub(r"<\s*br\s*/?>", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</?p[^>]*>", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</?div[^>]*>", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"</?span[^>]*>", " ", cleaned, flags=re.IGNORECASE)
+        # Remove any remaining generic tags
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+
+        cleaned = cleaned.strip()
+        if cleaned:
+            cleaned = " ".join(cleaned.split())
+
+        if max_length is not None and len(cleaned) > max_length:
+            cleaned = cleaned[: max_length - 1].rstrip() + "…"
+
+        return cleaned
+
+    def _decode_prompt_from_ids(
+        self,
+        tokenizer,
+        prompt_ids: torch.Tensor,
+        prompt_mask: Optional[torch.Tensor] = None
+    ) -> str:
+        ids_cpu = prompt_ids.detach().cpu()
+        if prompt_mask is not None:
+            mask_cpu = prompt_mask.detach().cpu().bool()
+            if mask_cpu.shape == ids_cpu.shape:
+                ids_cpu = ids_cpu[mask_cpu]
+        else:
+            pad_id = getattr(tokenizer, 'pad_token_id', None)
+            if pad_id is not None:
+                ids_cpu = ids_cpu[ids_cpu != pad_id]
+        decoded = tokenizer.decode(ids_cpu.tolist(), skip_special_tokens=True)
+        return self._sanitize_chat_text(decoded)
+
+    def _extract_prompt_text(
+        self,
+        tokenizer,
+        batch: dict[str, Any],
+        index: int
+    ) -> str:
+        prompt_candidates: list[Any] = []
+        for key in ('prompt_text', 'prompt', 'question'):
+            value = batch.get(key)
+            if isinstance(value, (list, tuple)) and index < len(value):
+                prompt_candidates.append(value[index])
+            elif value is not None and not isinstance(value, (list, tuple)) and index == 0:
+                prompt_candidates.append(value)
+
+        for candidate in prompt_candidates:
+            if candidate is None:
+                continue
+            cleaned = self._sanitize_chat_text(str(candidate))
+            if cleaned:
+                return cleaned
+
+        if 'prompt_input_ids' in batch:
+            prompt_ids = batch['prompt_input_ids'][index]
+            prompt_mask = None
+            if 'prompt_attention_mask' in batch:
+                prompt_mask = batch['prompt_attention_mask'][index]
+            decoded = self._decode_prompt_from_ids(tokenizer, prompt_ids, prompt_mask)
+            if decoded:
+                return decoded
+
+        return ""
 
     def _log_sample_generation(self, outputs: dict, labels: torch.Tensor, epoch: int, batch_idx: int):
         """Log sample generations for debugging."""
@@ -884,8 +1082,12 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                generated_text = self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
-                label_text = tokenizer.decode(label_ids[label_ids != -100].tolist(), skip_special_tokens=True)
+                generated_text = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
+                )
+                label_text = self._sanitize_chat_text(
+                    tokenizer.decode(label_ids[label_ids != -100].tolist(), skip_special_tokens=True)
+                )
 
                 print("\n" + "="*60)
                 print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
@@ -1028,53 +1230,22 @@ class LLMFinetuningRunner(BaseRunner):
             )
             loss: torch.Tensor = outputs['loss']
             
-            # Time the generate_report function
             if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
-                # Build begin_suppress_tokens to prevent leaking headers like 'assistant' at start
-                tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
-                # begin_suppress_tokens: list[int] = []
-                # try:
-                #     # Special header tokens
-                #     for tok in ["<|start_header_id|>", "<|end_header_id|>"]:
-                #         tok_id = tokenizer.convert_tokens_to_ids(tok)
-                #         if tok_id is not None and tok_id != -1:
-                #             begin_suppress_tokens.append(int(tok_id))
-                #     # Note: do not suppress 'assistant' token forms for now
-                # except Exception:
-                #     pass
-                
-                # Ensure model is in eval mode for generation
-                self.model.eval()
-                
-                if hasattr(self.model, 'module'):
-                    gen_ids_q = self.model.module.generate_report_with_question(
-                        ecg_signal,
-                        prompt_input_ids=prompt_input_ids,
-                        prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length
-                        # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
-                    )
-                else:
-                    gen_ids_q = self.model.generate_report_with_question(
-                        ecg_signal,
-                        prompt_input_ids=prompt_input_ids,
-                        prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length
-                        # begin_suppress_tokens=begin_suppress_tokens if len(begin_suppress_tokens) > 0 else None
-                    )
-                generated_ids = gen_ids_q
+                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+                model_for_generation.eval()
+                generated_ids = model_for_generation.generate_report_with_question(
+                    ecg_signal,
+                    prompt_input_ids=prompt_input_ids,
+                    prompt_attention_mask=prompt_attention_mask,
+                    max_token_length=self.config.max_token_length
+                )
             else:
-                if hasattr(self.model, 'module'):
-                    gen_ids = self.model.module.generate_report(
-                        ecg_signal, 
-                        max_token_length=self.config.max_token_length
-                    )
-                else:
-                    gen_ids = self.model.generate_report(
-                        ecg_signal, 
-                        max_token_length=self.config.max_token_length
-                    )
-                generated_ids = gen_ids
+                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+                model_for_generation.eval()
+                generated_ids = model_for_generation.generate_report(
+                    ecg_signal,
+                    max_token_length=self.config.max_token_length
+                )
 
             # Get learning rate metrics
             lr_metrics = {}
@@ -1097,18 +1268,8 @@ class LLMFinetuningRunner(BaseRunner):
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """
-        Inference a single step of the model.
-        
-        Args:
-            ecg_signal: Input tensor of shape (batch_size, 12, length)
-            input_ids: Input IDs for the LLM
-            attention_mask: Attention mask for the LLM
-            labels: Labels for the LLM
-            
-        Returns:
-            dict[str, torch.Tensor]: Output from the model
-        """
+        """Inference step that generates text using the model's decoder."""
+
         with torch.no_grad():
             outputs: dict[str, torch.Tensor] = self.model(
                 ecg_signal=ecg_signal,
@@ -1119,37 +1280,24 @@ class LLMFinetuningRunner(BaseRunner):
                 prompt_attention_mask=prompt_attention_mask
             )
             loss: torch.Tensor = outputs['loss']
-            
-            # Time the generate_report function
+
             if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
-                if hasattr(self.model, 'module'):
-                    gen_ids_q = self.model.module.generate_report_with_question(
-                        ecg_signal,
-                        prompt_input_ids=prompt_input_ids,
-                        prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length
-                    )
-                else:
-                    gen_ids_q = self.model.generate_report_with_question(
-                        ecg_signal,
-                        prompt_input_ids=prompt_input_ids,
-                        prompt_attention_mask=prompt_attention_mask,
-                        max_token_length=self.config.max_token_length
-                    )  
-                generated_ids = gen_ids_q
+                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+                model_for_generation.eval()
+                generated_ids = model_for_generation.generate_report_with_question(
+                    ecg_signal,
+                    prompt_input_ids=prompt_input_ids,
+                    prompt_attention_mask=prompt_attention_mask,
+                    max_token_length=self.config.max_token_length
+                )
             else:
-                if hasattr(self.model, 'module'):
-                    gen_ids = self.model.module.generate_report(
-                        ecg_signal, 
-                        max_token_length=self.config.max_token_length
-                    )
-                else:
-                    gen_ids = self.model.generate_report(
-                        ecg_signal, 
-                        max_token_length=self.config.max_token_length
-                    )  
-                generated_ids = gen_ids
-            
+                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+                model_for_generation.eval()
+                generated_ids = model_for_generation.generate_report(
+                    ecg_signal,
+                    max_token_length=self.config.max_token_length
+                )
+
             return {
                 "loss": loss,
                 "generated_ids": generated_ids
@@ -1167,7 +1315,7 @@ class LLMFinetuningRunner(BaseRunner):
         predicted_reports: list[str] = []
         reference_reports: list[str] = []
         waveform_names: list[str] = []   
-        tokenizer: GPT2Tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
+        tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
         
         # Create a progress bar
         data_iter: tqdm = tqdm(
@@ -1207,32 +1355,16 @@ class LLMFinetuningRunner(BaseRunner):
             })
             batch_waveform_names: list[str] = batch['waveform_name']
             for idx in range(len(batch_waveform_names)):
-                gen = generated_ids[idx]
-                lab = labels[idx]
+                gen = generated_ids[idx].detach().cpu()
+                lab = labels[idx].detach().cpu()
                 filename = batch_waveform_names[idx]
 
-                # Decode only newly generated tokens (skip input portion)
-                gen_list = gen.tolist()
+                valid_mask = lab != -100
+                pred_tokens = gen[valid_mask]
+                ref_tokens = lab[valid_mask]
 
-                # In instruction mode, skip ECG token + prompt; in normal mode, skip just ECG token
-                if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
-                    prompt_row = batch['prompt_input_ids'][idx]
-                    if hasattr(tokenizer, 'pad_token_id') and tokenizer.pad_token_id is not None:
-                        prompt_len = (prompt_row != tokenizer.pad_token_id).sum().item()
-                    else:
-                        prompt_len = int((prompt_row != 0).sum().item())
-                    skip_tokens = prompt_len + 1  # +1 for ECG token
-                else:
-                    skip_tokens = 1  # Just skip ECG token
-
-                # Slice from the end of input to get only newly generated tokens
-                if len(gen_list) > skip_tokens:
-                    gen_list = gen_list[skip_tokens:]
-                else:
-                    gen_list = []  # No new tokens generated
-
-                decoded_prediction = tokenizer.decode(gen_list, skip_special_tokens=True)
-                decoded_reference  = tokenizer.decode(lab.tolist(), skip_special_tokens=True)
+                decoded_prediction = tokenizer.decode(pred_tokens.tolist(), skip_special_tokens=True) if pred_tokens.numel() > 0 else ""
+                decoded_reference = tokenizer.decode(ref_tokens.tolist(), skip_special_tokens=True) if ref_tokens.numel() > 0 else ""
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
                 waveform_names.append(filename)
@@ -1395,43 +1527,44 @@ class LLMFinetuningRunner(BaseRunner):
         tokenizer = dataloader.dataset.tokenizer  # type: ignore
         labels_for_metrics = labels
 
-        # Decode predictions, references and prompts for category metrics
-        batch_predictions = []
-        batch_references = []
-        batch_categories = []
-        batch_prompts = []
-        
-        if self.category_metrics_calculator is not None and batch is not None:
+        # Decode predictions, references and prompts for logging/metrics enrichment
+        batch_predictions: list[str] = []
+        batch_references: list[str] = []
+        batch_categories: list[str] = []
+        batch_prompts: list[str] = []
+
+        if batch is not None and 'generated_ids' in outputs:
             generated_ids = outputs['generated_ids']
-            
+
             for i in range(generated_ids.size(0)):
                 gen_tensor = generated_ids[i].cpu()
                 label_tensor = labels[i].cpu()
 
-                prediction = self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
-                reference = tokenizer.decode(label_tensor[label_tensor != -100].tolist(), skip_special_tokens=True)
-                
-                # Get category if available
+                prediction = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                )
+                reference = self._sanitize_chat_text(
+                    tokenizer.decode(label_tensor[label_tensor != -100].tolist(), skip_special_tokens=True)
+                )
+
                 category = ""
                 if 'prompt_category' in batch and i < len(batch['prompt_category']):
-                    category = batch['prompt_category'][i] if batch['prompt_category'][i] is not None else ""
-                
-                # Use original prompt text from batch
-                prompt = ""
-                if 'prompt_text' in batch and i < len(batch['prompt_text']):
-                    prompt = batch['prompt_text'][i] if batch['prompt_text'][i] is not None else ""
-                
+                    category_value = batch['prompt_category'][i]
+                    category = category_value if category_value is not None else ""
+
+                prompt = self._extract_prompt_text(tokenizer, batch, i)
+
                 batch_predictions.append(prediction)
                 batch_references.append(reference)
                 batch_categories.append(category)
                 batch_prompts.append(prompt)
-            
-            # Add to category metrics calculator
-            self.category_metrics_calculator.add_batch(
-                predictions=batch_predictions,
-                references=batch_references,
-                categories=batch_categories
-            )
+
+            if self.category_metrics_calculator is not None:
+                self.category_metrics_calculator.add_batch(
+                    predictions=batch_predictions,
+                    references=batch_references,
+                    categories=batch_categories
+                )
 
         for metric in self.config.metrics:
             metric_name_lower = metric.lower()
@@ -1457,6 +1590,13 @@ class LLMFinetuningRunner(BaseRunner):
             # Add prompts to metrics if available
             if batch_prompts:
                 LLM_metrics['prompts'] = batch_prompts
+
+            if 'predictions' in LLM_metrics:
+                LLM_metrics['predictions'] = [self._sanitize_chat_text(str(p)) for p in LLM_metrics['predictions']]
+            if 'references' in LLM_metrics:
+                LLM_metrics['references'] = [self._sanitize_chat_text(str(r)) for r in LLM_metrics['references']]
+            if 'prompts' in LLM_metrics:
+                LLM_metrics['prompts'] = [self._sanitize_chat_text(str(p)) for p in LLM_metrics['prompts']]
             for metric_name, metric_value in LLM_metrics.items():
                 if metric_name not in ('predictions', 'references', 'prompts'):
                     # Update the best metric
@@ -1522,6 +1662,51 @@ class LLMFinetuningRunner(BaseRunner):
             random_batch_idx = random.randint(0, len(dataloader) - 1)
             return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx
 
+    def _get_val_generations_dir(self) -> str:
+        """Return the directory where validation generations should be written."""
+        if not hasattr(self, "_val_generations_dir"):
+            output_dir = getattr(self.config, "output_dir", "")
+            if isinstance(output_dir, str):
+                output_dir = output_dir.strip()
+
+            if output_dir:
+                output_dir = os.path.expanduser(output_dir)
+                self._val_generations_dir = os.path.normpath(output_dir)
+            else:
+                run_identifier = ""
+
+                config_run_id = getattr(self.config, "run_id", None)
+                if isinstance(config_run_id, str) and config_run_id.strip():
+                    run_identifier = config_run_id.strip()
+
+                if not run_identifier and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                    try:
+                        run_identifier = str(self.wandb_wrapper.get_run_id())
+                    except Exception:
+                        run_identifier = ""
+
+                if not run_identifier:
+                    run_identifier = time.strftime("%Y%m%d-%H%M%S_no_run_id")
+
+                run_identifier = re.sub(r"[^A-Za-z0-9._-]", "_", run_identifier)
+                if not run_identifier:
+                    run_identifier = "run"
+
+                self._val_generations_dir = os.path.join(
+                    "ECG_tokenizer",
+                    "val_generations",
+                    run_identifier
+                )
+
+        return self._val_generations_dir
+
+    def _get_val_generation_json_path(self, epoch: int) -> str:
+        """Return the epoch-specific JSON path for validation generations."""
+        return os.path.join(
+            self._get_val_generations_dir(),
+            f"val_generations_epoch_{epoch}.json"
+        )
+
     def _append_batch_to_json(
         self,
         generated_ids: torch.Tensor,
@@ -1556,20 +1741,16 @@ class LLMFinetuningRunner(BaseRunner):
                 gen_tensor = generated_ids[i].detach().cpu()
                 label_tensor = labels[i].detach().cpu()
 
-                generation = self._extract_assistant_text(tokenizer, gen_tensor, label_tensor).strip()
+                generation = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                )
                 reference_tokens = label_tensor[label_tensor != -100].tolist()
-                ground_truth = tokenizer.decode(reference_tokens, skip_special_tokens=True).strip()
+                ground_truth = self._sanitize_chat_text(
+                    tokenizer.decode(reference_tokens, skip_special_tokens=True)
+                )
 
-                question = ""
-                if isinstance(prompt_texts, (list, tuple)) and i < len(prompt_texts):
-                    raw_question = prompt_texts[i]
-                    if raw_question is not None:
-                        question = str(raw_question).strip()
-                elif isinstance(question_fallback, (list, tuple)) and i < len(question_fallback):
-                    raw_question = question_fallback[i]
-                    if raw_question is not None:
-                        question = str(raw_question).strip()
-                else:
+                question = self._extract_prompt_text(tokenizer, batch, i)
+                if not question:
                     try:
                         ds = self.validation_dataloader.dataset  # type: ignore
                         df = getattr(ds, 'df', None)
@@ -1577,14 +1758,12 @@ class LLMFinetuningRunner(BaseRunner):
                             wf_name = waveform_names[i] if isinstance(waveform_names, (list, tuple)) else waveform_names
                             question_row = df[df['waveform_name'] == wf_name]
                             if not question_row.empty:
-                                q_val = None
                                 for col in ['question', 'prompt_text', 'prompt']:
                                     if col in question_row.columns:
                                         q_val = question_row[col].iloc[0]
                                         if not pd.isna(q_val):
+                                            question = self._sanitize_chat_text(str(q_val))
                                             break
-                                if q_val is not None and not pd.isna(q_val):
-                                    question = str(q_val).strip()
                     except Exception:
                         pass
 

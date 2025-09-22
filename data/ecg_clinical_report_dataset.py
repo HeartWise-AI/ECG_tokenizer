@@ -3,11 +3,15 @@ import torch
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
-from typing import Optional, cast, List
+from typing import Any, Dict, Optional, Sequence, cast, List
 from transformers import PreTrainedTokenizerBase
+try:
+    from transformers import ProcessorMixin
+except ImportError:  # pragma: no cover
+    ProcessorMixin = PreTrainedTokenizerBase  # type: ignore[misc,assignment]
 
 from utils.ddp import DistributedUtils
-from transformers import GPT2Tokenizer, BatchEncoding
+from transformers import BatchEncoding
 from torch.utils.data import Dataset, DataLoader, default_collate
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
 from models.types import AutoTokenizerT
@@ -52,8 +56,12 @@ class ECGClinicalReportDataset(Dataset):
         
         self.ecg_waveform_length: int = ecg_waveform_length
         self.ecg_num_leads: int = ecg_num_leads
-        self.tokenizer: AutoTokenizerT = tokenizer
-        self._pt_tokenizer: PreTrainedTokenizerBase = cast(PreTrainedTokenizerBase, tokenizer)
+
+        if not isinstance(tokenizer, PreTrainedTokenizerBase):
+            raise ValueError("Tokenizer must be a PreTrainedTokenizerBase")
+
+        self.tokenizer: AutoTokenizerT = cast(AutoTokenizerT, tokenizer)
+        self._pt_tokenizer: PreTrainedTokenizerBase = tokenizer
         self.max_length: int = max_length
         self.signal_path_column: str = signal_path_column
         self.instruct_mode: bool = instruct_mode
@@ -66,7 +74,14 @@ class ECGClinicalReportDataset(Dataset):
         self.category_column: str = category_column
         if self.instruct_mode:
             if self.ecg_token_start_id is None:
-                raise ValueError("ecg_token_start_id is required in instruct_mode")
+                start_token = f"<|ecg_pos_{0}|>"
+                token_id = self._pt_tokenizer.convert_tokens_to_ids(start_token)
+                unk_id = getattr(self._pt_tokenizer, 'unk_token_id', None)
+                if token_id is None or token_id == -1 or (unk_id is not None and int(token_id) == int(unk_id)):
+                    raise ValueError(
+                        "ecg_token_start_id is required in instruct_mode when tokenizer is missing ECG position tokens"
+                    )
+                self.ecg_token_start_id = int(token_id)
             self.ecg_token_ids = list(range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens))
         else:
             self.ecg_token_start_id = 0
@@ -133,8 +148,9 @@ class ECGClinicalReportDataset(Dataset):
                 
                 # User message with ECG placeholder and prompt - focused on findings format
                 # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{prompt_text}" if prompt_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
-                
-                user_content = prompt_text if prompt_text else "Analyze this ECG and list the clinical findings."
+                if not prompt_text:
+                    raise ValueError(f"No prompt_text found for index {idx}. Cannot proceed without a prompt.")
+                user_content = prompt_text
                 
                 # Create messages for chat template
                 messages_prompt = [

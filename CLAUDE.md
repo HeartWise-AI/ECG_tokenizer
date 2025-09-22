@@ -76,3 +76,4 @@ Key components:
 - Configured via `CUDA_VISIBLE_DEVICES` or `--selected_gpus`
 - Checkpoint management with resume capability
 - Weights & Biases integration for experiment tracking
+- Success criteria for ECG prompt is if you show me 3-4 questiosn & answers for each of my promtps

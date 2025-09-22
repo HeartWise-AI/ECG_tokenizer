@@ -1,7 +1,11 @@
 import torch.nn as nn
 from typing import Union, Type, Protocol, Any, Iterator, TYPE_CHECKING
 from abc import abstractmethod
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase
+try:  # transformers < 4.43 fallback
+    from transformers import ProcessorMixin
+except ImportError:  # pragma: no cover
+    ProcessorMixin = PreTrainedTokenizerBase  # type: ignore[misc,assignment]
 
 if TYPE_CHECKING:
     from models import (
@@ -89,3 +93,4 @@ ModelClassUnionT = Type[ModelUnionT]
 
 # Tokenizer types for type safety across different LLM tokenizers
 AutoTokenizerT = Union[AutoTokenizer, PreTrainedTokenizerBase]
+AutoProcessorT = Union[AutoProcessor, ProcessorMixin]
