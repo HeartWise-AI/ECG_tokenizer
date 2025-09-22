@@ -238,6 +238,55 @@ class ECGAnswerGenerator:
         
         return None
     
+    def check_st_segment_context(self, row: pd.Series) -> tuple:
+        """
+        Check context for ST segment changes.
+        Returns (has_acute_mi, has_early_repol, has_lvh, st_locations)
+        """
+        has_acute_mi = False
+        has_early_repol = False  
+        has_lvh = False
+        st_locations = []
+        
+        # Check for Acute MI
+        if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
+            try:
+                has_acute_mi = float(row['Acute_MI']) >= 1
+            except (ValueError, TypeError):
+                pass
+        if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
+            try:
+                has_acute_mi = float(row['Acute MI']) >= 1
+            except (ValueError, TypeError):
+                pass
+                
+        # Check for Early Repolarization
+        if 'Early repolarization' in row.index and pd.notna(row['Early repolarization']):
+            try:
+                has_early_repol = float(row['Early repolarization']) >= 1
+            except (ValueError, TypeError):
+                pass
+                
+        # Check for LVH
+        if 'Left ventricular hypertrophy' in row.index and pd.notna(row['Left ventricular hypertrophy']):
+            try:
+                has_lvh = float(row['Left ventricular hypertrophy']) >= 1
+            except (ValueError, TypeError):
+                pass
+                
+        # Check for ST elevations
+        for col in row.index:
+            if 'ST elevation' in str(col) and pd.notna(row[col]):
+                try:
+                    if float(row[col]) >= 1:
+                        if '(' in str(col) and ')' in str(col):
+                            location = str(col)[str(col).find('(')+1:str(col).find(')')]
+                            st_locations.append(location)
+                except (ValueError, TypeError):
+                    continue
+                    
+        return has_acute_mi, has_early_repol, has_lvh, st_locations
+    
     def generate_category_answer(self, row: pd.Series, category: str) -> str:
         """
         Generate category-specific answer.
@@ -310,18 +359,55 @@ class ECGAnswerGenerator:
         asked_condition = None
         matching_findings = []
         
+        # Special handling for early repolarization question
+        if 'early repolarization' in prompt_text:
+            asked_condition = 'early_repolarization'
+            # Check the Early repolarization column directly
+            if 'Early repolarization' in row.index and pd.notna(row['Early repolarization']):
+                try:
+                    if float(row['Early repolarization']) >= 1:
+                        matching_findings.append('Early repolarization')
+                except (ValueError, TypeError):
+                    pass
+        
         # Special handling for general ischemia/infarction questions
-        if any(term in prompt_text for term in ['signs of ischemia or infarction', 'ischemia or infarction', 
-                                                  'ischemic or infarction', 'evidence of ischemia']):
+        elif any(term in prompt_text for term in ['signs of ischemia or infarction', 'ischemia or infarction', 
+                                                  'ischemic or infarction', 'evidence of ischemia',
+                                                  'st elevation or depression', 'st segment',
+                                                  'signs of myocardial injury']):
             asked_condition = 'ischemia_or_infarction'
             
-            # Check for any signs of ischemia or infarction:
-            # 1. Any findings from INFARCT, ISCHEMIA category
-            if 'INFARCT, ISCHEMIA' in active_findings:
-                for finding in active_findings['INFARCT, ISCHEMIA']:
-                    formatted = self.format_finding_name(finding)
-                    if formatted not in matching_findings:
-                        matching_findings.append(formatted)
+            # Get ST segment context for hard negatives
+            has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
+            
+            # If there are ST changes but they're due to early repolarization or LVH without acute MI
+            if st_locations and not has_acute_mi:
+                if has_early_repol:
+                    matching_findings = ["ST changes due to early repolarization (benign). No evidence of STEMI"]
+                elif has_lvh:
+                    matching_findings = ["ST segment changes likely due to left ventricular hypertrophy. No evidence of acute MI"]
+                else:
+                    # Check for any signs of ischemia or infarction:
+                    # 1. Any findings from INFARCT, ISCHEMIA category
+                    if 'INFARCT, ISCHEMIA' in active_findings:
+                        for finding in active_findings['INFARCT, ISCHEMIA']:
+                            formatted = self.format_finding_name(finding)
+                            if formatted not in matching_findings:
+                                matching_findings.append(formatted)
+            elif has_acute_mi:
+                # Acute MI is present - report it
+                if 'INFARCT, ISCHEMIA' in active_findings:
+                    for finding in active_findings['INFARCT, ISCHEMIA']:
+                        formatted = self.format_finding_name(finding)
+                        if formatted not in matching_findings:
+                            matching_findings.append(formatted)
+            else:
+                # No ST changes - check for other ischemia/infarction signs
+                if 'INFARCT, ISCHEMIA' in active_findings:
+                    for finding in active_findings['INFARCT, ISCHEMIA']:
+                        formatted = self.format_finding_name(finding)
+                        if formatted not in matching_findings:
+                            matching_findings.append(formatted)
             
             # 2. Check for ST downsloping
             if 'ST downsloping' in row.index and pd.notna(row['ST downsloping']):
@@ -384,23 +470,13 @@ class ECGAnswerGenerator:
                                 matching_findings.append('Possible acute infarction')
         
         # Special handling for Acute MI questions
-        elif any(term in prompt_text for term in ['acute mi', 'acute myocardial', 'stemi', 'acute infarct']):
+        elif any(term in prompt_text for term in ['acute mi', 'acute myocardial', 'stemi', 'acute infarct', 'does this ecg show acute mi']):
             asked_condition = 'acute mi'
             
-            # Check Acute_MI column
-            has_acute_mi_column = False
-            if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
-                try:
-                    has_acute_mi_column = float(row['Acute_MI']) >= 1
-                except (ValueError, TypeError):
-                    pass
-            if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
-                try:
-                    has_acute_mi_column = float(row['Acute MI']) >= 1
-                except (ValueError, TypeError):
-                    pass
+            # Get ST segment context
+            has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
             
-            # Check report for acute MI mentions
+            # Check report for acute MI mentions as additional confirmation
             has_acute_mi_report = False
             if 'report' in row.index and pd.notna(row['report']):
                 report_text = str(row['report']).upper()
@@ -413,17 +489,16 @@ class ECGAnswerGenerator:
                 ]):
                     has_acute_mi_report = True
             
-            # If either condition is true, there's probable acute MI
-            if has_acute_mi_column or has_acute_mi_report:
+            # Determine if there's truly an acute MI
+            if has_acute_mi or has_acute_mi_report:
+                # Just report acute MI once, ST locations are already in the prefix
                 matching_findings.append('Probable acute myocardial infarction')
-                
-                # Also add any ST elevation or other acute findings
-                for cat_findings in active_findings.values():
-                    for finding in cat_findings:
-                        if any(term in finding.lower() for term in ['st elevation', 'acute mi', 'stemi']):
-                            formatted = self.format_finding_name(finding)
-                            if formatted not in matching_findings:
-                                matching_findings.append(formatted)
+            elif st_locations and not has_acute_mi:
+                # ST changes present but not acute MI
+                if has_early_repol:
+                    matching_findings = []  # Will return "No - no evidence of acute mi" with early repol explanation
+                elif has_lvh:
+                    matching_findings = []  # Will return "No - no evidence of acute mi" with LVH explanation
         
         # Special handling for sinus rhythm question
         elif any(phrase in prompt_text for phrase in ['sinus rhythm or something else', 'is this sinus rhythm']):
@@ -514,37 +589,51 @@ class ECGAnswerGenerator:
                 if condition_key in prompt_text:
                     asked_condition = condition_key
                     
+                    # Special handling for ST elevation questions
+                    if condition_key == 'st elevation':
+                        # Get ST segment context for hard negatives
+                        has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
+                        
+                        if st_locations:
+                            # ST elevation is present - check context
+                            if not has_acute_mi:
+                                if has_early_repol:
+                                    matching_findings.append("ST elevation due to early repolarization (benign)")
+                                elif has_lvh:
+                                    matching_findings.append("ST elevation associated with left ventricular hypertrophy")
+                                else:
+                                    # Report the ST elevation locations
+                                    for location in st_locations:
+                                        matching_findings.append(f"ST elevation in {location}")
+                            else:
+                                # Acute MI present with ST elevation
+                                for location in st_locations:
+                                    matching_findings.append(f"ST elevation in {location}")
+                                if 'Acute STEMI' not in str(matching_findings):
+                                    matching_findings.append("Consistent with acute STEMI")
+                    
                     # Special handling for any infarct-related question
-                    if condition_key in ['infarction', 'ischemia', 'st elevation']:
-                        # Check for acute MI indicators
-                        has_acute_mi = False
-                        
-                        # Check column
-                        if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
-                            try:
-                                if float(row['Acute_MI']) >= 1:
-                                    has_acute_mi = True
-                            except (ValueError, TypeError):
-                                pass
-                        if 'Acute MI' in row.index and pd.notna(row['Acute MI']):
-                            try:
-                                if float(row['Acute MI']) >= 1:
-                                    has_acute_mi = True
-                            except (ValueError, TypeError):
-                                pass
-                        
-                        # Check report
-                        if 'report' in row.index and pd.notna(row['report']):
-                            report_upper = str(row['report']).upper()
-                            if any(phrase in report_upper for phrase in [
-                                'CONSIDER ACUTE ST ELEVATION MI',
-                                'CONSIDER ACUTE INFARCT'
-                            ]):
-                                has_acute_mi = True
+                    elif condition_key in ['infarction', 'ischemia']:
+                        # Get ST segment context
+                        has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
                         
                         # If acute MI detected, add to findings
-                        if has_acute_mi and 'Probable infarct' not in matching_findings:
+                        if has_acute_mi:
                             matching_findings.append('Probable infarct')
+                        elif st_locations and not has_acute_mi:
+                            # ST changes without acute MI
+                            if has_early_repol:
+                                # Don't report as ischemia if it's early repolarization
+                                pass
+                            elif has_lvh:
+                                # Don't report as ischemia if it's LVH-related
+                                pass
+                            else:
+                                # Check for other ischemic changes
+                                for cat_findings in active_findings.values():
+                                    for finding in cat_findings:
+                                        if any(variant.lower() in finding.lower() for variant in condition_variants):
+                                            matching_findings.append(self.format_finding_name(finding))
                     
                     # Check if any variant exists in active findings
                     for cat_findings in active_findings.values():
@@ -570,7 +659,9 @@ class ECGAnswerGenerator:
                 # Specific condition asked
                 if matching_findings:
                     # Special handling for specific conditions
-                    if asked_condition == 't_waves':
+                    if asked_condition == 'early_repolarization':
+                        return "Yes - Early repolarization present"
+                    elif asked_condition == 't_waves':
                         return f"No - {'; '.join(matching_findings)}"
                     elif asked_condition == 'sinus_rhythm':
                         # Check if it's sinus or something else
@@ -582,7 +673,26 @@ class ECGAnswerGenerator:
                     else:
                         return f"Yes - {'; '.join(matching_findings)}"
                 else:
-                    if asked_condition == 'ectopic beat':
+                    # No matching findings - but check for hard negatives
+                    if asked_condition == 'acute mi':
+                        # Check if ST changes are due to early repol or LVH
+                        has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
+                        if st_locations and not has_acute_mi:
+                            if has_early_repol:
+                                return "No - ST changes are due to early repolarization (benign). No evidence of acute MI"
+                            elif has_lvh:
+                                return "No - ST segment changes likely due to left ventricular hypertrophy. No evidence of acute MI"
+                        return "No - no evidence of acute mi"
+                    elif asked_condition == 'early_repolarization':
+                        return "No - no early repolarization"
+                    elif asked_condition == 'ischemia_or_infarction':
+                        # Check if already handled as hard negative
+                        if matching_findings and "early repolarization" in str(matching_findings[0]).lower():
+                            return f"No - {matching_findings[0]}"
+                        elif matching_findings and "left ventricular hypertrophy" in str(matching_findings[0]).lower():
+                            return f"No - {matching_findings[0]}"
+                        return "No - no evidence of ischemia or infarction"
+                    elif asked_condition == 'ectopic beat':
                         return "No - no ectopic beats present"
                     elif asked_condition == 't_waves':
                         return "Yes - T waves are normal"
@@ -1034,6 +1144,17 @@ class ECGAnswerGenerator:
         if finding_type == 'qrs_axis':
             return self.generate_qrs_axis_answer(row)
         
+        # For ST elevation questions, check context
+        if finding_type == 'st_elevation':
+            has_acute_mi, has_early_repol, has_lvh, st_locations = self.check_st_segment_context(row)
+            
+            if st_locations:
+                if not has_acute_mi:
+                    if has_early_repol:
+                        return f"Yes - ST elevation due to early repolarization (benign) in {', '.join(st_locations)}"
+                    elif has_lvh:
+                        return f"Yes - ST elevation associated with left ventricular hypertrophy in {', '.join(st_locations)}"
+        
         # Map finding types to column patterns
         pattern_map = {
             'q_wave': 'Q wave',
@@ -1430,7 +1551,9 @@ class ECGAnswerGenerator:
                             pass
                 
                 if st_locations:
-                    location_str = ', '.join(st_locations)
+                    # Remove duplicates and format locations
+                    unique_locations = list(dict.fromkeys(st_locations))  # Preserve order, remove duplicates
+                    location_str = ', '.join(unique_locations)
                     return f"*** ACUTE STEMI ({location_str}) *** - "
                 else:
                     return "*** ACUTE STEMI *** - "

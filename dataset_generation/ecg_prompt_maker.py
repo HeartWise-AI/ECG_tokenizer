@@ -157,13 +157,6 @@ class ECGPromptMaker:
                 "Can you identify T wave changes?",
                 "Are the T waves abnormal in any leads?"
             ],
-            "ST_MORPHOLOGY": [
-                "What is the ST segment morphology?",
-                "Is there ST downsloping or upsloping?",
-                "Are there any ST segment abnormalities?",
-                "Describe the ST segment characteristics.",
-                "Is there early repolarization pattern?"
-            ],
             "QRS_AXIS": [
                 "What is the QRS axis?",
                 "Is there axis deviation?",
@@ -339,7 +332,6 @@ class ECGPromptMaker:
             'ST_ELEVATION': [],
             'ST_DEPRESSION': [],
             'T_WAVE': [],
-            'ST_MORPHOLOGY': [],
             'QRS_AXIS': []
         }
         
@@ -361,10 +353,6 @@ class ECGPromptMaker:
                             localization_findings['ST_DEPRESSION'].append(location)
                         elif 'T wave' in col_str:
                             localization_findings['T_WAVE'].append(location)
-                    
-                    # Check for morphology patterns
-                    if col_str in ['ST downsloping', 'ST upslopping', 'Early repolarization']:
-                        localization_findings['ST_MORPHOLOGY'].append(col_str)
                     
                     # Check for axis deviation
                     if 'axis deviation' in col_str.lower():
