@@ -1,8 +1,11 @@
+"""Cross-attention modules for ECG-text multimodal processing."""
+
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
 from utils.registry import ModelRegistry
 from utils.enums import AdapterName
+
 
 @ModelRegistry.register(AdapterName.LLAMA32_SEQUENCE_TOKEN_ADAPTER)
 class CrossModalSequenceTokenAdapter(nn.Module):

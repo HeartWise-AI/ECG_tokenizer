@@ -18,7 +18,7 @@ from pathlib import Path
 import json
 
 # Import constants for category mappings
-from constants import ECG_CATEGORIES, ECG_PATTERNS_TRANSLATION
+from constants import DEEPECG_CATEGORIES, ECG_PATTERNS_TRANSLATION
 
 
 def load_parquet_data(train_path: str, test_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -107,7 +107,7 @@ def map_to_categories(detected_conditions: List[str]) -> Dict[str, List[str]]:
     """
     category_mapping = {}
     
-    for category, conditions in ECG_CATEGORIES.items():
+    for category, conditions in DEEPECG_CATEGORIES.items():
         category_conditions = [cond for cond in detected_conditions if cond in conditions]
         if category_conditions:
             category_mapping[category] = category_conditions

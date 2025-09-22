@@ -1,8 +1,11 @@
+"""ECG Adapter modules for connecting ECG features to LLM embedding space."""
+
 import torch
 import torch.nn as nn
 from typing import Optional
 from utils.registry import ModelRegistry
 from utils.enums import AdapterName
+
 
 @ModelRegistry.register(AdapterName.GPT2_LINEAR_ADAPTER)
 class LinearAdapter(nn.Module):
@@ -35,7 +38,8 @@ class LinearAdapter(nn.Module):
     def forward(self, x):
         """Forward pass through linear adapter."""
         return self.adapter(x) 
-    
+
+
 @ModelRegistry.register(AdapterName.GPT2_EMBEDDING_ADAPTER)
 @ModelRegistry.register(AdapterName.LLAMA32_EMBEDDING_ADAPTER)
 class EmbeddingAdapter(nn.Module):
@@ -103,6 +107,7 @@ class EmbeddingAdapter(nn.Module):
         x = self.fc_layers(x)
         return x  # Shape: (batch_size, 768)
 
+
 @ModelRegistry.register(AdapterName.GPT2_SIMPLE_EMBEDDING_ADAPTER)
 @ModelRegistry.register(AdapterName.LLAMA32_SIMPLE_EMBEDDING_ADAPTER)
 class SimpleEmbeddingAdapter(nn.Module):
@@ -136,7 +141,8 @@ class SimpleEmbeddingAdapter(nn.Module):
         x = self.fc(x)
         x = self.dropout(x)
         return x  # Output shape: (batch, output_size)
-    
+
+
 @ModelRegistry.register(AdapterName.GPT2_SEQUENCE_ADAPTER)
 @ModelRegistry.register(AdapterName.LLAMA32_SEQUENCE_ADAPTER)
 class SequenceAdapter(nn.Module):
@@ -217,6 +223,7 @@ class SequenceAdapter(nn.Module):
         x = self.final_projection(x)  # (batch, output_size)
 
         return x
+
 
 @ModelRegistry.register(AdapterName.GPT2_SEQUENCE_TOKEN_ADAPTER)
 @ModelRegistry.register(AdapterName.LLAMA32_SEQUENCE_TOKEN_ADAPTER)
@@ -472,4 +479,4 @@ class SimpleTokenAdapter(nn.Module):
             "token_dim": self.output_size,
             "token_type": "simple_sequence",
             "description": f"Simple linear projection: each of {self.seq_len} ECG positions -> separate token"
-        } 
+        }

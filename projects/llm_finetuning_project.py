@@ -142,7 +142,6 @@ class LLMFinetuningProject(BaseProject):
             bridge_num_special_tokens=self.config.bridge_num_special_tokens,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
-            use_ecg_image_projection=getattr(self.config, 'use_ecg_image_projection', False),
             ecg_projection_config=getattr(self.config, 'ecg_projection_config', None),
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             use_lora=self.config.use_lora,
@@ -173,6 +172,16 @@ class LLMFinetuningProject(BaseProject):
 
         if resume_checkpoint_path and resume_epoch >= phase1_epochs and phase2_cfg:
             initial_phase_cfg = phase2_cfg
+            # Check if we're transitioning from phase 1 (no LoRA) to phase 2 (with LoRA)
+            # The checkpoint from phase 1 won't have LoRA weights, but phase 2 needs them
+            phase2_needs_lora = phase2_cfg.get('use_lora', False)
+            if phase2_needs_lora and self.config.use_lora and lora_config:
+                # Re-apply LoRA after loading checkpoint since phase 1 didn't have it
+                if not hasattr(ecg_tokenizer, '_lora_applied') or not ecg_tokenizer._lora_applied:
+                    if self.config.is_ref_device:
+                        print("📝 Transitioning to phase 2: Initializing LoRA adapters...")
+                    ecg_tokenizer._apply_lora(lora_config)
+                    ecg_tokenizer._lora_applied = True
         else:
             initial_phase_cfg = phase1_cfg
 
@@ -241,7 +250,7 @@ class LLMFinetuningProject(BaseProject):
             phase_overrides=initial_phase_cfg
         )
 
-        projection_module = getattr(ecg_tokenizer.module, 'ecg_image_projection', None)
+        projection_module = None  # getattr(ecg_tokenizer.module, 'ecg_image_projection', None)  # Disabled
         if projection_module is not None:
             projection_params = [p for p in projection_module.parameters() if p.requires_grad]
             if projection_params:
@@ -284,16 +293,10 @@ class LLMFinetuningProject(BaseProject):
                 self._load_optimizer_state_dict(optimizer, optimizer_state)
             scheduler_state = state_dict.get('scheduler_state_dict')
             if scheduler_state is not None and scheduler is not None:
-                try:
-                    scheduler.load_state_dict(scheduler_state)
-                except Exception as exc:
-                    print(f"⚠️ Could not load scheduler state from checkpoint: {exc}")
+                scheduler.load_state_dict(scheduler_state)
             scaler_state = state_dict.get('scaler_state_dict')
             if scaler_state is not None and scaler is not None:
-                try:
-                    scaler.load_state_dict(scaler_state)
-                except Exception as exc:
-                    print(f"⚠️ Could not load scaler state from checkpoint: {exc}")
+                scaler.load_state_dict(scaler_state)
 
         return {
             "optimizer": optimizer,
@@ -534,10 +537,18 @@ class LLMFinetuningProject(BaseProject):
             elif hasattr(model.decoder, 'llm'):
                 llm_model = model.decoder.llm
             
-            if llm_model and hasattr(llm_model, 'peft_config'):
-                total_llm_params = sum(p.numel() for p in llm_model.parameters())
-                trainable_llm_params = sum(p.numel() for p in llm_model.parameters() if p.requires_grad)
-                print(f"  LoRA trainable parameters: {trainable_llm_params:,}/{total_llm_params:,} ({100 * trainable_llm_params / total_llm_params:.2f}%)")
+            if llm_model:
+                # Check if this is a PEFT model (has peft_config or is a PeftModel)
+                is_peft_model = hasattr(llm_model, 'peft_config') or hasattr(llm_model, 'base_model')
+                if is_peft_model:
+                    total_llm_params = sum(p.numel() for p in llm_model.parameters())
+                    trainable_llm_params = sum(p.numel() for p in llm_model.parameters() if p.requires_grad)
+                    lora_params = trainable_llm_params  # In PEFT models, trainable params are LoRA params
+                    base_model_params = total_llm_params - lora_params
+                    if total_llm_params > 0:
+                        print(f"  LoRA trainable parameters: {lora_params:,}/{total_llm_params:,} ({100 * lora_params / total_llm_params:.2f}%)")
+                else:
+                    print(f"  LoRA not detected in model")
         
         print("\nComponent-wise breakdown:")
         print(f"  Encoder: {training_info['encoder']['trainable']:,}/{training_info['encoder']['total']:,} trainable")

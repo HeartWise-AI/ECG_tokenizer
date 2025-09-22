@@ -4,6 +4,10 @@ ECG Prompt Maker - Generates multiple prompts per ECG based on findings.
 Creates 1-N prompts depending on ECG characteristics and categories present.
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import pandas as pd
 import numpy as np
@@ -11,17 +15,17 @@ import random
 from typing import Dict, List, Tuple
 from collections import defaultdict
 from dataset_column_mappings import DatasetColumnMapper
+from utils.constants import DEEPECG_CATEGORIES
 
 
 class ECGPromptMaker:
     """Generate diverse prompts for ECG interpretation tasks"""
     
-    def __init__(self, categories_json_path: str = '/volume/ECG_tokenizer/dictionary/deepecg_categories.json', dataset: str = 'mimic'):
+    def __init__(self, dataset: str = 'mimic'):
         """Initialize with category definitions"""
         
-        # Load category definitions
-        with open(categories_json_path, 'r') as f:
-            self.categories_dict = json.load(f)  # The JSON is already the categories dict
+        # Load category definitions from constants
+        self.categories_dict = DEEPECG_CATEGORIES
         
         # Initialize column mapper for dataset-specific columns
         self.dataset = dataset

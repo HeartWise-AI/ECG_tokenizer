@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from transformers import AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 
-from models.llama32_tokenizer_decoder import ECGCodeBridge, ECGProjectionBridge
+from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge
 from utils.enums import AdapterName, ModelName
 from utils.registry import ModelRegistry
 

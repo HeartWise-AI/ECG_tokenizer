@@ -76,8 +76,8 @@ lora_config:
     - up_proj
     - down_proj
   bias: "none"
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_qa_800k.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_qa_10k.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_qa_0k.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_qa_0k.parquet"
 prompt_column: "prompt"
 answer_column: "generated_answer"
 category_column: "prompt_category"
@@ -101,4 +101,6 @@ dataloader_pin_memory: true
 max_sequence_length: 768
 enable_attention_visualization: false
 attention_log_frequency: 200
-use_ecg_image_projection: false
+plot_validation_ecgs: true
+num_validation_plots: 6
+plot_selection_strategy: "worst_random_best"

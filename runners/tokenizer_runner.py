@@ -23,8 +23,9 @@ from utils.config import ECGTokenizerTrainingConfig
 from utils.metrics.ecg_metrics import compute_metrics
 from utils.schedulers import scheduler_is_per_iteration
 from utils.enums import RunMode, DecoderMode, RunnerName
-from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
-from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper, ResidualVQ
+from utils.constants import DEEPECG_CATEGORIES, ECG_PATTERNS
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+from models.local_residual_vq import ResidualVQ
 from runners.base_runner import BaseRunner
 
 
@@ -329,7 +330,7 @@ class ECGTokenizerRunner(BaseRunner):
             metrics_dict = compute_metrics(labels_df, pred_df)
             
             # Add metrics to gathered_metrics
-            for category in ECG_CATEGORIES:
+            for category in DEEPECG_CATEGORIES:
                 for metric_name in metrics_dict[category]:
                     gathered_metrics[f"{mode}/{category}_{metric_name}"] = metrics_dict[category][metric_name]
         

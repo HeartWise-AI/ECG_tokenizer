@@ -4,37 +4,40 @@ ECG Answer Generator - Creates appropriate answers for each prompt type.
 Generates interpretation reports, category-specific answers, and classifications.
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import pandas as pd
 import numpy as np
+import re
 from typing import Dict, List, Optional
 from dataset_column_mappings import DatasetColumnMapper
+from utils.constants import DEEPECG_CATEGORIES, DEEPECG_DIAGNOSIS_TRANSLATION
+
+# Compile regex patterns at module level for better performance
+LEAD_NAME_PATTERN = re.compile(r'(V\d+|aV[RLF]|I{1,3})(?=[Vv]|aV|I{1,3})')
 
 
 class ECGAnswerGenerator:
     """Generate appropriate answers for different ECG prompt types"""
     
     def __init__(self, 
-                 categories_json_path: str = '/volume/ECG_tokenizer/dictionary/deepecg_categories.json',
-                 translation_json_path: str = '/volume/ECG_tokenizer/dictionary/deepecg_diagnosis_translation.json',
                  language: str = 'en',
                  dataset: str = 'mimic'):
         """Initialize with category definitions and translations
         
         Args:
-            categories_json_path: Path to categories JSON
-            translation_json_path: Path to translation JSON
             language: 'en' for English, 'fr' for French
             dataset: Dataset name ('mimic' or others) for metadata merging
         """
         
-        # Load category definitions
-        with open(categories_json_path, 'r') as f:
-            self.categories_dict = json.load(f)
+        # Load category definitions from constants
+        self.categories_dict = DEEPECG_CATEGORIES
         
-        # Load translations
-        with open(translation_json_path, 'r') as f:
-            trans_data = json.load(f)
+        # Load translations from constants
+        trans_data = DEEPECG_DIAGNOSIS_TRANSLATION
         
         # Create translation lookup dictionary
         self.translations = {}
@@ -370,6 +373,87 @@ class ECGAnswerGenerator:
                 except (ValueError, TypeError):
                     pass
         
+        # Special handling for pericarditis and diffuse ST elevation
+        elif 'diffuse st elevation' in prompt_text or 'pericarditis' in prompt_text:
+            asked_condition = 'pericarditis_st_elevation'
+            # Check for pericarditis
+            if 'Acute pericarditis' in row.index and pd.notna(row['Acute pericarditis']):
+                try:
+                    if float(row['Acute pericarditis']) >= 1:
+                        # Check for ST elevations in multiple leads (diffuse)
+                        st_elevation_count = 0
+                        st_locations = []
+                        for col in row.index:
+                            if 'ST elevation' in str(col) and pd.notna(row[col]):
+                                try:
+                                    if float(row[col]) >= 1:
+                                        st_elevation_count += 1
+                                        location = str(col).replace('ST elevation', '').strip()
+                                        if location.startswith('(') and location.endswith(')'):
+                                            location = location[1:-1]
+                                        st_locations.append(location)
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        if st_elevation_count >= 2:  # Multiple leads = diffuse
+                            matching_findings.append(f"diffuse ST elevation consistent with pericarditis")
+                        else:
+                            matching_findings.append("pericarditis with ST changes")
+                except (ValueError, TypeError):
+                    pass
+            
+            # Even if no pericarditis, check for diffuse ST elevation pattern
+            if not matching_findings:
+                st_elevation_count = 0
+                st_locations = []
+                for col in row.index:
+                    if 'ST elevation' in str(col) and pd.notna(row[col]):
+                        try:
+                            if float(row[col]) >= 1:
+                                st_elevation_count += 1
+                                location = str(col).replace('ST elevation', '').strip()
+                                if location.startswith('(') and location.endswith(')'):
+                                    location = location[1:-1]
+                                st_locations.append(location)
+                        except (ValueError, TypeError):
+                            continue
+                
+                if st_elevation_count >= 3:  # 3+ leads suggests diffuse pattern
+                    matching_findings.append(f"diffuse ST elevation in {', '.join(st_locations)}")
+        
+        # Special handling for LVH/RVH questions
+        elif 'lvh or rvh' in prompt_text or 'ventricular hypertrophy' in prompt_text:
+            asked_condition = 'lvh_or_rvh'
+            # Only check for LVH and RVH specifically
+            if 'Left ventricular hypertrophy' in row.index and pd.notna(row['Left ventricular hypertrophy']):
+                try:
+                    if float(row['Left ventricular hypertrophy']) >= 1:
+                        matching_findings.append('LVH')
+                except (ValueError, TypeError):
+                    pass
+            
+            if 'Right ventricular hypertrophy' in row.index and pd.notna(row['Right ventricular hypertrophy']):
+                try:
+                    if float(row['Right ventricular hypertrophy']) >= 1:
+                        matching_findings.append('RVH')
+                except (ValueError, TypeError):
+                    pass
+            
+            # Early return for LVH/RVH questions to avoid showing other chamber enlargements
+            if is_yes_no_question:
+                if matching_findings:
+                    if len(matching_findings) == 1:
+                        return f"Yes - {matching_findings[0]}"
+                    elif len(matching_findings) == 2:
+                        return "Yes - both LVH and RVH"
+                else:
+                    return "No - no ventricular hypertrophy"
+            else:
+                if matching_findings:
+                    return "; ".join(matching_findings)
+                else:
+                    return "No ventricular hypertrophy"
+        
         # Special handling for general ischemia/infarction questions
         elif any(term in prompt_text for term in ['signs of ischemia or infarction', 'ischemia or infarction', 
                                                   'ischemic or infarction', 'evidence of ischemia',
@@ -661,6 +745,16 @@ class ECGAnswerGenerator:
                     # Special handling for specific conditions
                     if asked_condition == 'early_repolarization':
                         return "Yes - Early repolarization present"
+                    elif asked_condition == 'pericarditis_st_elevation':
+                        return f"Yes - {'; '.join(matching_findings)}"
+                    elif asked_condition == 'lvh_or_rvh':
+                        # Format the response appropriately
+                        if len(matching_findings) == 1:
+                            return f"Yes - {matching_findings[0]}"
+                        elif len(matching_findings) == 2:
+                            return "Yes - both LVH and RVH"
+                        else:
+                            return f"Yes - {'; '.join(matching_findings)}"
                     elif asked_condition == 't_waves':
                         return f"No - {'; '.join(matching_findings)}"
                     elif asked_condition == 'sinus_rhythm':
@@ -685,6 +779,10 @@ class ECGAnswerGenerator:
                         return "No - no evidence of acute mi"
                     elif asked_condition == 'early_repolarization':
                         return "No - no early repolarization"
+                    elif asked_condition == 'pericarditis_st_elevation':
+                        return "No - no evidence of diffuse ST elevation"
+                    elif asked_condition == 'lvh_or_rvh':
+                        return "No - no ventricular hypertrophy"
                     elif asked_condition == 'ischemia_or_infarction':
                         # Check if already handled as hard negative
                         if matching_findings and "early repolarization" in str(matching_findings[0]).lower():
@@ -1251,9 +1349,8 @@ class ECGAnswerGenerator:
                     else:
                         # Try to clean up any other format
                         # Replace "V1V2" with "V1, V2"
-                        import re
                         # Add spaces between lead names
-                        clean_loc = re.sub(r'(V\d+|aV[RLF]|I{1,3})(?=[Vv]|aV|I{1,3})', r'\1, ', clean_loc)
+                        clean_loc = LEAD_NAME_PATTERN.sub(r'\1, ', clean_loc)
                         # Clean up double spaces
                         clean_loc = ' '.join(clean_loc.split())
                     

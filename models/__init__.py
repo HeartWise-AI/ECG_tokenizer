@@ -1,14 +1,24 @@
-from models.adapters import (
+from models.adapter import (
+    # Adapters
     LinearAdapter, 
     EmbeddingAdapter, 
     SequenceAdapter,
     SimpleEmbeddingAdapter,
+    SequenceTokenAdapter,
+    SimpleTokenAdapter,
+    # Bridges
+    ECGCodeBridge,
+    ECGProjectionBridge,
+    # Cross-attention
+    CrossModalSequenceTokenAdapter,
+    CrossAttentionLayer,
 )
 from models.bert_classifier import BertClassifier
-from models.gpt2_tokenizer_decoder import GPT2Decoder
-from models.llama32_tokenizer_decoder import Llama32Decoder
-from models.medgemma_decoder import MedGemmaDecoder
-from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig
+from models.decoder import (
+    GPT2Decoder,
+    Llama32Decoder,
+    MedGemmaDecoder,
+)
 from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
     Conv_Encoder,
@@ -16,21 +26,32 @@ from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Quantizer,
     ECG_Tokenizer_Quantizer_RVQ
 )
+from models.local_residual_vq import ResidualVQ
 
 __all__ = [
+    # Adapters
     "LinearAdapter", 
     "EmbeddingAdapter", 
     "SequenceAdapter",
+    "SimpleEmbeddingAdapter",
+    "SequenceTokenAdapter",
+    "SimpleTokenAdapter",
+    # Bridges
+    "ECGCodeBridge",
+    "ECGProjectionBridge",
+    # Cross-attention
+    "CrossModalSequenceTokenAdapter",
+    "CrossAttentionLayer",
+    # Decoders
     "GPT2Decoder",
     "Llama32Decoder",
     "MedGemmaDecoder",
-    "SimpleEmbeddingAdapter",
+    # Other models
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
     "Conv_Encoder",
     "Conv_Decoder",
     "ECG_Tokenizer_Quantizer",
     "ECG_Tokenizer_Quantizer_RVQ",
-    "ECG2ImageProjection",
-    "ECGImageProjectionConfig",
+    "ResidualVQ",
 ]

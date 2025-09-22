@@ -4,6 +4,10 @@ Generate train and test datasets with enhanced prompts and answers.
 Drops the existing question column and generates new comprehensive Q&A pairs.
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 import sys
 import json
@@ -77,19 +81,15 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
     # 3a. Generate ecg_type column based on deepecg.json
     print(f"\n2a. Generating ecg_type column based on pathological/limit classifications...")
     
-    # Load deepecg dictionary and categories
-    with open('/volume/ECG_tokenizer/dictionary/deepecg.json', 'r') as f:
-        deepecg = json.load(f)['deepecg']
+    # Load deepecg dictionary and categories from constants
+    from utils.constants import DEEPECG_PATHOLOGICAL_LIMIT, DEEPECG_CATEGORIES
     
-    with open('/volume/ECG_tokenizer/dictionary/deepecg_categories.json', 'r') as f:
-        deepecg_categories = json.load(f)
-    
-    pathological_cols = deepecg['pathological']
-    limit_cols = deepecg['limit']
+    pathological_cols = DEEPECG_PATHOLOGICAL_LIMIT['deepecg']['pathological']
+    limit_cols = DEEPECG_PATHOLOGICAL_LIMIT['deepecg']['limit']
     
     # Get all diagnostic columns from deepecg_categories
     all_diagnosis_cols = []
-    for category, diagnoses in deepecg_categories.items():
+    for category, diagnoses in DEEPECG_CATEGORIES.items():
         all_diagnosis_cols.extend(diagnoses)
     
     # Initialize ecg_type as normal

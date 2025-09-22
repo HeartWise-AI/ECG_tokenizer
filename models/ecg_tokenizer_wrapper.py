@@ -8,7 +8,7 @@ from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
 from models.types import ModelT, ModelClassT
 import math
-from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig
+# from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
 
@@ -909,7 +909,6 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         ecg_token_start_id: Optional[int] = None,
         ecg_waveform_length: int = 2500,
         ecg_num_leads: int = 12,
-        use_ecg_image_projection: bool = False,
         ecg_projection_config: Optional[Dict[str, Any]] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
@@ -933,9 +932,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.use_lora: bool = use_lora
         self.processor: Optional[Any] = processor
         self.ecg_token_start_id = ecg_token_start_id
-        self.use_ecg_image_projection: bool = use_ecg_image_projection
-        self.ecg_image_projection: Optional[ECG2ImageProjection] = None
-        if self.use_ecg_image_projection:
+        # ECG image projection disabled - module not available
+        self.ecg_image_projection = None
+        if False:  # Disabled ecg_image_projection:
             projection_cfg = ecg_projection_config or {}
             if isinstance(projection_cfg, ECGImageProjectionConfig):
                 config_obj = projection_cfg
@@ -947,10 +946,13 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         "Invalid ecg_projection_config provided to ECG_Tokenizer_Wrapper"
                     ) from exc
 
-            self.ecg_image_projection = ECG2ImageProjection(config=config_obj)
+            pass  # self.ecg_image_projection = ECG2ImageProjection(config=config_obj)
 
         # Use the DecoderMode enum instead of a string
         self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
+        
+        # Track if LoRA has been applied
+        self._lora_applied = False
 
         # Retrieve the components from the registry using the provided names
         encoder_class: ModelClassT = ModelRegistry.get(encoder_name)
@@ -1014,6 +1016,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 # Apply LoRA to the LLM if requested
                 if use_lora and lora_config:
                     self._apply_lora(lora_config)
+                    self._lora_applied = True
                     
             except TypeError as e:
                 raise ValueError(
@@ -1086,6 +1089,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             self._freeze_lower_lora_layers(top_k_layers)
 
         print(f"Applied LoRA to LLM with config: {lora_config_obj}")
+        self._lora_applied = True
 
     def _freeze_lower_lora_layers(self, top_k_layers: int) -> None:
         """Freeze LoRA parameters outside the top-k decoder layers."""
@@ -1587,8 +1591,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
         quantized_code_ids = self._extract_primary_codes(indices)
         pixel_values: Optional[torch.Tensor] = None
-        if self.ecg_image_projection is not None:
-            pixel_values = self.ecg_image_projection(quantized)
+        # ECG image projection disabled
+        if False:  # self.ecg_image_projection is not None:
+            pass  # pixel_values = self.ecg_image_projection(quantized)
             if pixel_values.dtype != quantized.dtype:
                 pixel_values = pixel_values.to(dtype=quantized.dtype)
 
@@ -1597,13 +1602,18 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             try:
                 decoder_inputs = {
                     'quantized_features': quantized,
-                    'quantized_codes': quantized_code_ids,
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
                     'labels': labels,
                     'prompt_input_ids': prompt_input_ids,
                     'prompt_attention_mask': prompt_attention_mask,
                 }
+                
+                # Only add quantized_codes for decoders that support it
+                # GPT2 decoder doesn't accept quantized_codes
+                if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:
+                    decoder_inputs['quantized_codes'] = quantized_code_ids
+                
                 if pixel_values is not None:
                     decoder_inputs['pixel_values'] = pixel_values
 
@@ -1695,17 +1705,23 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         quantized, indices, _ = self.quantizer(features)
         quantized_codes = self._extract_primary_codes(indices)
         pixel_values: Optional[torch.Tensor] = None
-        if self.ecg_image_projection is not None:
-            pixel_values = self.ecg_image_projection(quantized)
+        # ECG image projection disabled
+        if False:  # self.ecg_image_projection is not None:
+            pass  # pixel_values = self.ecg_image_projection(quantized)
             if pixel_values.dtype != quantized.dtype:
                 pixel_values = pixel_values.to(dtype=quantized.dtype)
 
         decoder_inputs: Dict[str, Any] = {
             'quantized_features': quantized,
-            'quantized_codes': quantized_codes,
             'max_token_length': max_token_length,
             **generate_kwargs,
         }
+        
+        # Only add quantized_codes for decoders that support it
+        # GPT2 decoder doesn't accept quantized_codes
+        if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:
+            decoder_inputs['quantized_codes'] = quantized_codes
+            
         if pixel_values is not None:
             decoder_inputs['pixel_values'] = pixel_values
 

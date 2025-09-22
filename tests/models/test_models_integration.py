@@ -2,8 +2,8 @@ import unittest
 import torch
 from unittest.mock import patch, MagicMock
 
-from models.gpt2_tokenizer_decoder import GPT2Decoder
-from models.adapters import (
+from models.decoder import GPT2Decoder
+from models.adapter import (
     EmbeddingAdapter, 
     LinearAdapter, 
     SimpleEmbeddingAdapter
@@ -13,7 +13,7 @@ from utils.enums import AdapterName
 
 class TestModelsIntegration(unittest.TestCase):
     
-    @patch('models.gpt2_tokenizer_decoder.GPT2LMHeadModel')
+    @patch('models.decoder.gpt2_decoder.GPT2LMHeadModel')
     def setUp(self, mock_gpt2):
         # Mock GPT2 model to avoid loading from HuggingFace
         self.mock_gpt2_instance = mock_gpt2.from_pretrained.return_value

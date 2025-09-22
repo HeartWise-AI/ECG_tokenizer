@@ -73,7 +73,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
     bridge_num_heads: int = 8
     bridge_dropout: float = 0.1
     bridge_num_special_tokens: int = 4
-    use_ecg_image_projection: bool = False
     ecg_projection_config: Optional[Dict[str, Any]] = None
     bertscore_max_batches: Optional[int] = 5
     processor_name: Optional[str] = None
@@ -114,6 +113,11 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Checkpoint management
     resume_checkpoint_path: Optional[str] = None
+    
+    # ECG plotting configuration for validation
+    plot_validation_ecgs: bool = False
+    num_validation_plots: int = 6
+    plot_selection_strategy: str = "worst_random_best"  # "worst_random_best", "random", "all"
     
     def __post_init__(self):
         """Process nested lora_config if provided"""

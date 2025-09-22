@@ -2,6 +2,7 @@ import os
 import json
 import re
 import time
+import traceback
 import torch
 import pandas as pd
 try:
@@ -46,8 +47,18 @@ from typing import (
     Any, 
     Union, 
     Callable,
-    Optional
+    Optional,
+    Dict,
+    List,
+    Tuple
 )
+from pathlib import Path
+import numpy as np
+import sys
+
+# Add DeepECG_Preprocess to path for ECG plotting
+sys.path.append('/volume/ECG_tokenizer/DeepECG_Preprocess')
+sys.path.append('/volume/ECG_tokenizer/DeepECG_Preprocess/ecg_plotter')
 
 
 @RunnerRegistry.register(RunnerName.LLM_FINETUNING)
@@ -867,7 +878,6 @@ class LLMFinetuningRunner(BaseRunner):
                     
                 except Exception as e:
                     print(f"Warning: Failed to compute category metrics: {e}")
-                    import traceback
                     traceback.print_exc()
             
             # Log everything to wandb
@@ -879,6 +889,11 @@ class LLMFinetuningRunner(BaseRunner):
             })
             
             # JSON export is done incrementally during validation
+            
+            # Plot ECG waveforms with Q&A annotations if configured
+            json_path = self._get_val_generation_json_path(epoch)
+            if os.path.exists(json_path):
+                self._plot_validation_ecgs(epoch, json_path)
         # === End new block ===
                 
         # Normalize the epoch metrics
@@ -1792,5 +1807,151 @@ class LLMFinetuningRunner(BaseRunner):
                 
         except Exception as e:
             print(f"❌ Failed to append batch to JSON: {e}")
-            import traceback
+            traceback.print_exc()
+    
+    def _plot_validation_ecgs(self, epoch: int, json_path: str) -> None:
+        """
+        Plot ECG waveforms with Q&A annotations for validation results.
+        Selects 6 ECGs based on strategy: 2 worst, 2 random, 2 best.
+        
+        Args:
+            epoch: Current epoch number
+            json_path: Path to validation JSON file
+        """
+        if not self.config.plot_validation_ecgs or not self.config.is_ref_device:
+            return
+        
+        try:
+            # Import plotter only when needed
+            from ecg_plotter.core import NPYECGPlotter
+            import wandb
+            
+            # Load validation JSON
+            with open(json_path, 'r', encoding='utf-8') as f:
+                val_data = json.load(f)
+            
+            if not val_data:
+                print("No validation data to plot")
+                return
+            
+            # Calculate scores for each ECG based on generated vs ground truth
+            ecg_scores = []
+            for ecg_name, ecg_info in val_data.items():
+                # Simple scoring based on exact match (could be enhanced with metrics)
+                generated = ecg_info.get('Generation', '').lower()
+                ground_truth = ecg_info.get('Ground truth', '').lower()
+                
+                # Simple score: 1 if exact match, 0 otherwise
+                # Could be enhanced with ROUGE/BLEU scores
+                score = 1.0 if generated == ground_truth else 0.0
+                
+                # Check for critical misses (e.g., missing STEMI)
+                if 'stemi' in ground_truth and 'stemi' not in generated:
+                    score = -1.0  # Very bad miss
+                elif 'urgent' in ground_truth and 'no' in generated:
+                    score = -0.5  # Bad miss
+                    
+                ecg_scores.append((ecg_name, score, ecg_info))
+            
+            # Sort by score
+            ecg_scores.sort(key=lambda x: x[1])
+            
+            # Select ECGs based on strategy
+            selected_ecgs = []
+            if self.config.plot_selection_strategy == "worst_random_best":
+                # 2 worst
+                selected_ecgs.extend(ecg_scores[:2])
+                # 2 random from middle
+                middle_start = len(ecg_scores) // 3
+                middle_end = 2 * len(ecg_scores) // 3
+                if middle_end > middle_start:
+                    random_indices = random.sample(
+                        range(middle_start, middle_end), 
+                        min(2, middle_end - middle_start)
+                    )
+                    selected_ecgs.extend([ecg_scores[i] for i in random_indices])
+                # 2 best
+                selected_ecgs.extend(ecg_scores[-2:])
+            elif self.config.plot_selection_strategy == "random":
+                # Random selection
+                num_to_select = min(self.config.num_validation_plots, len(ecg_scores))
+                selected_ecgs = random.sample(ecg_scores, num_to_select)
+            else:
+                # Take first N
+                selected_ecgs = ecg_scores[:self.config.num_validation_plots]
+            
+            # Create plots
+            plot_images = []
+            plot_dir = os.path.join(self._get_val_generations_dir(), f"ecg_plots_epoch_{epoch}")
+            os.makedirs(plot_dir, exist_ok=True)
+            
+            for i, (ecg_name, score, ecg_info) in enumerate(selected_ecgs):
+                try:
+                    # Get ECG path from parquet if available
+                    ecg_path = ecg_info.get('waveform_path')
+                    if not ecg_path:
+                        # Try to reconstruct path for MIMIC dataset
+                        ecg_path = f"/media/data1/datasets/MIMIC-IV/adjusted_signals/test/{ecg_name}"
+                    
+                    if not os.path.exists(ecg_path):
+                        print(f"ECG file not found: {ecg_path}")
+                        continue
+                    
+                    # Create plotter with FFT normalization for MIMIC
+                    plotter = NPYECGPlotter(
+                        npy_path=ecg_path,
+                        dataset="MIMICIV",
+                        out_dir=plot_dir,
+                        width=2500,
+                        fft_normalized=True,  # CRITICAL for MIMIC preprocessed data
+                        amplitude_factor=1200  # 1.2 * 1000 for FFT normalized
+                    )
+                    
+                    # Format Q&A for title
+                    question = ecg_info.get('Question', 'N/A')[:100]
+                    generated = ecg_info.get('Generation', 'N/A')[:150]
+                    ground_truth = ecg_info.get('Ground truth', 'N/A')[:150]
+                    
+                    if len(generated) > 150:
+                        generated = generated[:147] + "..."
+                    if len(ground_truth) > 150:
+                        ground_truth = ground_truth[:147] + "..."
+                    
+                    title = f"ECG: {ecg_name} (Score: {score:.2f})\n"
+                    title += f"Q: {question}\n"
+                    title += f"Generated: {generated}\n"
+                    title += f"Ground Truth: {ground_truth}"
+                    
+                    # Plot without auto-save
+                    img, _ = plotter.plot_ecg(
+                        title=title,
+                        save=False,
+                        anonymize=True,
+                        show_diagnosis=False
+                    )
+                    
+                    if img:
+                        # Save with meaningful name
+                        category = "worst" if i < 2 else ("random" if i < 4 else "best")
+                        save_path = os.path.join(
+                            plot_dir, 
+                            f"{category}_{i:02d}_{ecg_name.replace('.npy', '')}.png"
+                        )
+                        img.save(save_path, dpi=(240, 240))
+                        plot_images.append(wandb.Image(img, caption=f"{category}: {ecg_name}"))
+                        print(f"✓ Plotted ECG {i+1}/{len(selected_ecgs)}: {save_path}")
+                        
+                except Exception as e:
+                    print(f"Failed to plot ECG {ecg_name}: {e}")
+                    continue
+            
+            # Log to wandb as a grid
+            if plot_images and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                self.wandb_wrapper.log({
+                    f"val/ecg_plots_epoch_{epoch}": plot_images
+                })
+                print(f"✓ Logged {len(plot_images)} ECG plots to WandB")
+                
+        except Exception as e:
+            print(f"Error in ECG plotting: {e}")
             traceback.print_exc()
