@@ -1903,8 +1903,7 @@ class LLMFinetuningRunner(BaseRunner):
                         dataset="MIMICIV",
                         out_dir=plot_dir,
                         width=2500,
-                        fft_normalized=True,  # CRITICAL for MIMIC preprocessed data
-                        amplitude_factor=1200  # 1.2 * 1000 for FFT normalized
+                        fft_normalized=True  # CRITICAL for MIMIC preprocessed data - auto-calculates amplitude
                     )
                     
                     # Format Q&A for title
