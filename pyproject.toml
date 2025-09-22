@@ -23,6 +23,8 @@ dependencies = [
     "transformers>=4.46.2",
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
+    "xmltodict>=0.12.0",
+    "pywavelets>=1.1.0",
 ]
 
 [tool.setuptools]
