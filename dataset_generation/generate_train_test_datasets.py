@@ -21,9 +21,9 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
     """
     Apply stratified sampling for MHI special questions to achieve specific ratios:
     - Ensure at least target_special_questions (default 1000) special questions
-    - AFib risk: 50% high risk, 50% low risk  
+    - AFib risk: 50% high risk, 50% low risk
     - SHD: 50% normal, 50% abnormal
-    - ACS: 25% acute coronary occlusion, 75% non-acute
+    - ACS: 50% acute coronary occlusion, 50% non-acute
     - LVEF: keep natural distribution
     
     ECGs can count for multiple categories. Since 1 prompt per ECG, we need 1000 ECGs with special questions.
@@ -101,41 +101,57 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
     
     # Sample special ECGs with stratification targets
     sampled_special = set()
+    special_category_by_ecg = {}
     
-    # Target distribution for 1000 special questions:
-    # - AFib risk: 250 (125 high, 125 low)
-    # - SHD: 250 (125 abnormal, 125 normal)
-    # - ACS: 250 (62 acute, 188 non-acute)
-    # - LVEF: 250
+    # Target distribution for the special-question pool (e.g. 1000 -> 250 each category):
+    # - AFib risk: 50% high risk, 50% low risk
+    # - SHD: 50% abnormal, 50% normal
+    # - ACS: 50% acute, 50% non-acute
+    # - LVEF: natural distribution (no enforced split)
     per_category = special_ecgs_needed // 4  # 250 each for test, proportional for train
-    
+
+    def split_evenly(total):
+        """Return two integers that sum to total while staying as close to 50/50 as possible."""
+        half = total // 2
+        return half, total - half
+
+    afib_high_target, afib_low_target = split_evenly(per_category)
+    shd_abnormal_target, shd_normal_target = split_evenly(per_category)
+    acs_acute_target, acs_non_acute_target = split_evenly(per_category)
+
     categories = [
-        (afib_high_risk_ecgs, per_category // 2),      # 125 high risk AFib
-        (afib_low_risk_ecgs, per_category // 2),       # 125 low risk AFib
-        (shd_abnormal_ecgs, per_category // 2),        # 125 abnormal SHD
-        (shd_normal_ecgs, per_category // 2),          # 125 normal SHD
-        (acs_acute_ecgs, per_category // 4),           # 62 acute ACS (25% of ACS)
-        (acs_non_acute_ecgs, (per_category * 3) // 4), # 188 non-acute ACS (75% of ACS)
-        (lvef_ecgs, per_category)                      # 250 LVEF
+        (afib_high_risk_ecgs, afib_high_target, 'afib_high'),          # 50% high-risk AFib
+        (afib_low_risk_ecgs, afib_low_target, 'afib_low'),             # 50% low-risk AFib
+        (shd_abnormal_ecgs, shd_abnormal_target, 'shd_abnormal'),      # 50% abnormal SHD
+        (shd_normal_ecgs, shd_normal_target, 'shd_normal'),            # 50% normal SHD
+        (acs_acute_ecgs, acs_acute_target, 'acs_acute'),               # 50% acute ACS
+        (acs_non_acute_ecgs, acs_non_acute_target, 'acs_non_acute'),   # 50% non-acute ACS
+        (lvef_ecgs, per_category, 'lvef')                               # Natural LVEF distribution
     ]
-    
-    for ecg_set, target_count in categories:
+
+    for ecg_set, target_count, category_label in categories:
         available = list(ecg_set - sampled_special)
         if available:
             sample_count = min(len(available), target_count)
             if sample_count > 0:
                 sampled = np.random.choice(available, size=sample_count, replace=False)
                 sampled_special.update(sampled)
+                for ecg in sampled:
+                    special_category_by_ecg[ecg] = category_label
     
     # Fill remaining special slots if needed
     remaining_special_needed = special_ecgs_needed - len(sampled_special)
     if remaining_special_needed > 0:
         available = list(special_ecgs - sampled_special)
         if available:
-            additional = np.random.choice(available, 
-                                        size=min(remaining_special_needed, len(available)), 
-                                        replace=False)
+            additional = np.random.choice(
+                available,
+                size=min(remaining_special_needed, len(available)),
+                replace=False
+            )
             sampled_special.update(additional)
+            for ecg in additional:
+                special_category_by_ecg.setdefault(ecg, 'general_special')
     
     # Now add non-special ECGs to reach target_samples
     all_ecgs = df_mhi['waveform_name'].unique()
@@ -179,12 +195,53 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
     
     # Mark special ECGs for tracking
     sampled_df['has_special_question'] = sampled_df['waveform_name'].isin(sampled_special)
-    
+    sampled_df['special_question_category'] = sampled_df['waveform_name'].map(special_category_by_ecg)
+
     print(f"     Final sample: {len(sampled_df)} ECGs")
     print(f"       - Special question ECGs: {sampled_df['has_special_question'].sum()} ({sampled_df['has_special_question'].sum()/len(sampled_df)*100:.1f}%)")
     print(f"       - Regular ECGs: {(~sampled_df['has_special_question']).sum()} ({(~sampled_df['has_special_question']).sum()/len(sampled_df)*100:.1f}%)")
     
     return sampled_df.head(target_samples)  # Ensure exactly target_samples
+
+
+def enrich_special_question_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add derived columns used in downstream special-question logic."""
+    # Derive LVEF category labels when numeric estimates are available
+    if 'deepecho_Visually_Estimated_EF' in df.columns:
+        lvef_numeric = pd.to_numeric(df['deepecho_Visually_Estimated_EF'], errors='coerce')
+        conditions = [
+            lvef_numeric >= 55,
+            (lvef_numeric >= 45) & (lvef_numeric < 55),
+            (lvef_numeric >= 30) & (lvef_numeric < 45),
+            lvef_numeric < 30
+        ]
+        choices = ['normal', 'mildly reduced', 'moderately reduced', 'severely reduced']
+        lvef_categories = np.select(conditions, choices, default=None)
+        lvef_series = pd.Series(lvef_categories, index=df.index, dtype='object')
+        lvef_series[lvef_numeric.isna()] = pd.NA
+        df['lvef_category'] = lvef_series
+        df['lvef_Category'] = df['lvef_category']
+
+    # Structural heart disease binary helper (1 abnormal, 0 normal)
+    if 'echonext_shd' in df.columns:
+        shd_numeric = pd.to_numeric(df['echonext_shd'], errors='coerce')
+        shd_binary = pd.Series(pd.NA, index=df.index, dtype='Int64')
+        valid_mask = shd_numeric.notna()
+        if valid_mask.any():
+            shd_binary.loc[valid_mask] = (shd_numeric.loc[valid_mask] >= 1).astype('int64')
+        df['echonext_shd_binary'] = shd_binary
+
+    # Flag acute ACS conditions directly for sampling/analytics convenience
+    if 'acs_condition_severity' in df.columns:
+        from utils.constants import ACS_ACUTE_CONDITIONS
+        severity_series = df['acs_condition_severity']
+        acute_binary = pd.Series(pd.NA, index=df.index, dtype='Int64')
+        if severity_series.notna().any():
+            acute_mask = severity_series.isin(ACS_ACUTE_CONDITIONS)
+            acute_binary.loc[severity_series.notna()] = acute_mask.loc[severity_series.notna()].astype('int64')
+        df['acs_condition_is_acute'] = acute_binary
+
+    return df
 
 
 def process_dataset(input_path: str, output_path: str, dataset_name: str, sample_size: int = None, dataset_type: str = 'mimic-iv', max_prompts_per_ecg: int = None, max_normal_percentage: float = 0.05, min_samples_per_diagnosis: int = 1, mimic_samples: int = None, mhi_samples: int = None):
@@ -457,7 +514,10 @@ def process_dataset(input_path: str, output_path: str, dataset_name: str, sample
     
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
-    
+
+    # Add derived clinical categories that drive special question balancing
+    df_merged = enrich_special_question_columns(df_merged)
+
     # Report demographic data availability
     for col in ['gender', 'age_at_ecg', 'rr_interval']:
         if col in df_merged.columns:

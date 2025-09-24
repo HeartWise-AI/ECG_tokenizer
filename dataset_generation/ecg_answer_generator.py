@@ -2144,19 +2144,45 @@ class ECGAnswerGenerator:
         # Import ACS constants
         from utils.constants import ACS_ACUTE_CONDITIONS
         
-        # Check if it's an acute occlusion
+        # Check if it's an acute occlusion and report its type
         if acs_condition in ACS_ACUTE_CONDITIONS:
-            return "Yes - there is an acute coronary occlusion requiring urgent intervention"
-        else:
-            # Not an acute occlusion
-            if acs_condition == 'No Coronary Disease':
-                return "No - no evidence of coronary disease"
-            elif 'Obstructive' in acs_condition:
-                return "No - there is obstructive coronary disease but no acute occlusion"
-            elif 'Chronic' in acs_condition:
-                return "No - there is chronic total occlusion but not acute"
+            if acs_condition == 'Acute Complete Coronary Occlusion':
+                occlusion_phrase = 'acute complete coronary occlusion'
+            elif acs_condition == 'Acute Incomplete Coronary Occlusion':
+                occlusion_phrase = 'acute incomplete coronary occlusion'
             else:
-                return "No - no acute coronary occlusion identified"
+                occlusion_phrase = 'acute coronary occlusion'
+
+            # Include culprit hint if PCI regions are available
+            culprit_hint = ''
+            if 'acs_pci_regions' in row.index and pd.notna(row.get('acs_pci_regions')):
+                import ast
+                regions_raw = row.get('acs_pci_regions')
+                try:
+                    if isinstance(regions_raw, str):
+                        regions_clean = regions_raw.strip("'\"")
+                        region_list = ast.literal_eval(regions_clean)
+                    else:
+                        region_list = regions_raw
+
+                    if region_list:
+                        from utils.constants import ACS_ARTERY_MAPPING
+                        primary_region = region_list[0] if isinstance(region_list, list) else str(region_list)
+                        mapped_region = ACS_ARTERY_MAPPING.get(primary_region, primary_region)
+                        culprit_hint = f" Most likely culprit artery: {mapped_region}."
+                except (ValueError, SyntaxError, TypeError):
+                    pass
+
+            return f"Yes - {occlusion_phrase}.{culprit_hint}".strip()
+
+        # Not an acute occlusion
+        if acs_condition == 'No Coronary Disease':
+            return "No - no evidence of coronary disease"
+        if 'Obstructive' in acs_condition:
+            return "No - obstructive coronary disease without acute occlusion"
+        if 'Chronic' in acs_condition:
+            return "No - chronic occlusion without acute findings"
+        return "No - no acute coronary occlusion identified"
     
     def generate_culprit_artery_answer(self, row: pd.Series) -> str:
         """
@@ -2165,22 +2191,30 @@ class ECGAnswerGenerator:
         Returns None if data is not available or not an acute occlusion.
         """
         # First check if there is an acute occlusion
-        if 'acs_condition_severity' not in row.index or 'acs_pci_regions' not in row.index:
-            return None  # This question should be dropped
-        
+        if 'acs_condition_severity' not in row.index:
+            return "Coronary occlusion severity data is not available for this patient"
+        if 'acs_pci_regions' not in row.index:
+            return "Culprit artery information is not available for this patient"
+
         acs_condition = row.get('acs_condition_severity')
         acs_regions = row.get('acs_pci_regions')
-        
+
         # Check for null values
-        if pd.isna(acs_condition) or pd.isna(acs_regions):
-            return None  # This question should be dropped
-        
+        if pd.isna(acs_condition):
+            return "Coronary occlusion severity is not documented"
+        if pd.isna(acs_regions):
+            # If we know there is no occlusion, return that explicitly
+            from utils.constants import ACS_ACUTE_CONDITIONS
+            if acs_condition not in ACS_ACUTE_CONDITIONS:
+                return "There is no acute coronary occlusion, so no culprit artery is identified"
+            return "An acute coronary occlusion is present, but the culprit artery is not documented"
+
         # Import ACS constants
         from utils.constants import ACS_ACUTE_CONDITIONS, ACS_ARTERY_MAPPING
-        
+
         # Only answer if it's an acute occlusion
         if acs_condition not in ACS_ACUTE_CONDITIONS:
-            return None  # This question should be dropped - no acute occlusion
+            return "There is no acute coronary occlusion, so no culprit artery is identified"
         
         # Parse the acs_pci_regions string (it's in list format)
         import ast
@@ -2213,7 +2247,10 @@ class ECGAnswerGenerator:
             return f"The culprit artery is the {standard_name} with {occlusion_type}"
             
         except (ValueError, SyntaxError, TypeError):
-            return "The culprit artery information could not be parsed"
+            from utils.constants import ACS_ACUTE_CONDITIONS
+            if acs_condition in ACS_ACUTE_CONDITIONS:
+                return "An acute coronary occlusion is present, but the culprit artery information could not be parsed"
+            return "There is no acute coronary occlusion, so no culprit artery is identified"
     
     def generate_afib_risk_answer(self, row: pd.Series) -> str:
         """

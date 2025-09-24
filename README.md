@@ -46,18 +46,63 @@
 
 ### Generate Q&A Datasets for LLM Fine-tuning
 
-The system can generate comprehensive question-answer datasets from ECG data with multiple prompt types:
+The system can generate comprehensive question-answer datasets from ECG data with multiple prompt types. For production use, generate combined MIMIC-IV and MHI datasets with balanced special questions.
+
+#### Standard Production Dataset (400k train + 10k test)
 
 ```bash
-# Generate datasets with default settings (MIMIC dataset)
-python dataset_generation/generate_train_test_datasets.py
+# Generate 400k training samples (200k MIMIC + 200k MHI)
+# MHI includes 20% special questions: 5% ACS, 5% LVEF, 5% AFib risk, 5% SHD
+python dataset_generation/generate_train_test_datasets.py \
+  --dataset combined \
+  --mimic_train_samples 200000 \
+  --mhi_train_samples 200000 \
+  --test_samples 0 \
+  --max_prompts_per_ecg 1 \
+  --max_normal_percentage 0.05
 
-# Generate with specific dataset type
-python dataset_generation/generate_train_test_datasets.py --dataset mimic
-
-# Generate with sample size for testing
-python dataset_generation/generate_train_test_datasets.py --dataset mimic --sample_size 100
+# Generate 10k test samples (5k MIMIC + 5k MHI)
+python dataset_generation/generate_train_test_datasets.py \
+  --dataset combined \
+  --train_samples 0 \
+  --mimic_test_samples 5000 \
+  --mhi_test_samples 5000 \
+  --max_prompts_per_ecg 1 \
+  --max_normal_percentage 0.05
 ```
+
+#### Single Dataset Generation
+
+```bash
+# MIMIC-IV only dataset
+python dataset_generation/generate_train_test_datasets.py \
+  --dataset mimic-iv \
+  --train_samples 200000 \
+  --test_samples 10000 \
+  --max_prompts_per_ecg 1
+
+# MHI only dataset
+python dataset_generation/generate_train_test_datasets.py \
+  --dataset mhi \
+  --train_samples 200000 \
+  --test_samples 10000 \
+  --max_prompts_per_ecg 1
+```
+
+#### Key Parameters
+
+- `--dataset`: Choose `combined`, `mimic-iv`, or `mhi`
+- `--max_prompts_per_ecg`: Set to 1 for one prompt per ECG (recommended)
+- `--max_normal_percentage`: Limit normal ECGs to 5% (default 0.05)
+- `--mimic_train_samples` / `--mhi_train_samples`: Specify samples per dataset for combined mode
+- `--mimic_test_samples` / `--mhi_test_samples`: Test set samples per dataset
+
+### Output Files
+
+Generated datasets are saved to `/volume/ECG_tokenizer/output/`:
+- Combined: `combined_train_qa_m200k_h200k.parquet`, `combined_test_qa_m5k_h5k.parquet`
+- MIMIC: `mimic_train_qa_200k.parquet`, `mimic_test_qa_10k.parquet`
+- MHI: `mhi_train_qa_200k.parquet`, `mhi_test_qa_10k.parquet`
 
 ### Prompt Types Generated
 
@@ -71,6 +116,11 @@ The dataset generator creates diverse prompts for each ECG:
 6. **Demographics**: Age and gender questions
 7. **JSON interpretation**: Structured JSON output of findings
 8. **QRS axis**: Axis deviation detection and classification
+9. **Special Questions (MHI only)**:
+   - **AFib Risk**: 2-year and 5-year atrial fibrillation risk prediction
+   - **LVEF**: Left ventricular ejection fraction estimation
+   - **ACS**: Acute coronary syndrome detection and culprit artery identification
+   - **SHD**: Structural heart disease assessment
 
 ### Adding Support for New Datasets
 

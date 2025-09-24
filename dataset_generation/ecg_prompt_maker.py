@@ -222,10 +222,10 @@ class ECGPromptMaker:
         
         # ACS severity prompts (MHI only - using acs_condition_severity)
         self.acs_severity_prompts = [
-            "Is there a STEMI or is there an acute coronary occlusion?",
-            "Does this patient have an acute coronary syndrome requiring urgent intervention?",
-            "Is there evidence of an acute coronary occlusion?",
-            "Is there an acute myocardial infarction due to coronary occlusion?"
+            "Is there an acute coronary occlusion, and if so is it complete or incomplete?",
+            "Does this patient have an acute complete or incomplete coronary artery occlusion?",
+            "Is there evidence of an acute coronary occlusion (complete vs incomplete)?",
+            "Is this an acute coronary occlusion? Specify whether it is complete or incomplete."
         ]
         
         # Culprit artery prompts (MHI only - follow-up when acute occlusion present)
@@ -441,29 +441,76 @@ class ECGPromptMaker:
         Generate ONE special question for ECGs marked as having special questions.
         This ensures marked ECGs ALWAYS get their special question.
         """
+        assigned_category = row.get('special_question_category')
+        
+        def afib_prompt_tuple():
+            afib_prompt = random.choice(self.afib_risk_prompts)
+            return (afib_prompt, 'afib_risk', 1.0)
+
+        def shd_prompt_tuple():
+            shd_prompt = random.choice(self.structural_heart_disease_prompts)
+            return (shd_prompt, 'structural_heart_disease', 1.0)
+
+        def lvef_prompt_tuple():
+            lvef_prompt = random.choice(self.lvef_prompts)
+            return (lvef_prompt, 'lvef', 1.0)
+
+        def acs_prompt_tuple():
+            acs_prompt = random.choice(self.acs_severity_prompts)
+            return (acs_prompt, 'acs_severity', 1.0)
+
+        def culprit_prompt_tuple():
+            culprit_prompt = random.choice(self.culprit_artery_prompts)
+            return (culprit_prompt, 'culprit_artery', 1.0)
+
+        def has_valid_pci_regions():
+            if 'acs_pci_regions' not in row.index or pd.isna(row.get('acs_pci_regions')):
+                return False
+            regions = str(row.get('acs_pci_regions')).strip()
+            return len(regions) > 2 and regions != '[]'
+
+        def category_available(check_column):
+            return check_column in row.index and pd.notna(row.get(check_column))
+
+        if assigned_category:
+            assigned_category = str(assigned_category).lower()
+            if assigned_category.startswith('afib') and category_available('afib_label_2y') and category_available('afib_label_5y'):
+                return afib_prompt_tuple()
+            if assigned_category.startswith('shd') and category_available('echonext_shd'):
+                return shd_prompt_tuple()
+            if assigned_category == 'lvef' and category_available('deepecho_Visually_Estimated_EF'):
+                return lvef_prompt_tuple()
+            if assigned_category.startswith('acs') and category_available('acs_condition_severity'):
+                from utils.constants import ACS_ACUTE_CONDITIONS
+                acs_condition = row.get('acs_condition_severity')
+                if acs_condition in ACS_ACUTE_CONDITIONS and has_valid_pci_regions():
+                    return culprit_prompt_tuple()
+                return acs_prompt_tuple()
+            # If assigned but data missing (e.g., due to merge issues), fall back to generic handling below
+
         # Check which special data this ECG has and return the first available
         
         # 1. Check AFib risk
         if ('afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and
             'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y'))):
-            afib_prompt = random.choice(self.afib_risk_prompts)
-            return (afib_prompt, 'afib_risk', 1.0)
+            return afib_prompt_tuple()
         
         # 2. Check SHD
         if 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')):
-            shd_prompt = random.choice(self.structural_heart_disease_prompts)
-            return (shd_prompt, 'structural_heart_disease', 1.0)
+            return shd_prompt_tuple()
         
         # 3. Check LVEF
         if 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')):
-            lvef_prompt = random.choice(self.lvef_prompts)
-            return (lvef_prompt, 'lvef', 1.0)
+            return lvef_prompt_tuple()
         
         # 4. Check ACS
         if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
-            acs_prompt = random.choice(self.acs_severity_prompts)
-            return (acs_prompt, 'acs_severity', 1.0)
-        
+            from utils.constants import ACS_ACUTE_CONDITIONS
+            acs_condition = row.get('acs_condition_severity')
+            if acs_condition in ACS_ACUTE_CONDITIONS and has_valid_pci_regions():
+                return culprit_prompt_tuple()
+            return acs_prompt_tuple()
+
         # Fallback - should not happen if marking is correct
         return None
     
