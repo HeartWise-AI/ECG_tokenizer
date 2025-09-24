@@ -129,38 +129,10 @@ class Llama32Decoder(nn.Module):
             num_ecg_tokens = quantized_feature_shape[0]  # Default to seq_len
         
         self.num_ecg_tokens = num_ecg_tokens
-        
+
         # Store reference to LLM for phase-based training
         self.llm = self.llm_model
-        
-        # Ensure ECG position tokens exist on shared tokenizer and get start id
-        ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(num_ecg_tokens)]
-        first_ecg_id = self.tokenizer.convert_tokens_to_ids(ecg_tokens[0])  # type: ignore[attr-defined]
-        if first_ecg_id is None or first_ecg_id == -1:
-            base_vocab_size = len(self.tokenizer)  # type: ignore[arg-type]
-            self.tokenizer.add_tokens(ecg_tokens, special_tokens=True)  # type: ignore[attr-defined]
-            self.ecg_token_start_id = base_vocab_size
-        else:
-            self.ecg_token_start_id = int(first_ecg_id)
-        
-        # Resize token embeddings to accommodate tokenizer size
-        self.llm_model.resize_token_embeddings(len(self.tokenizer), mean_resizing=True)  # type: ignore[arg-type]
 
-        # Initialize ECG token embeddings using text mean (scaled)
-        self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, num_ecg_tokens)
-
-        # Prepare gradient mask so only ECG rows stay trainable inside the shared embedding matrix
-        mask = torch.zeros(len(self.tokenizer), dtype=torch.bool)
-        mask[self.ecg_token_start_id:self.ecg_token_start_id + num_ecg_tokens] = True
-        self.register_buffer('_ecg_embedding_train_mask', mask, persistent=False)
-        self._ecg_embedding_hook_handle = None
-        self._apply_ecg_embedding_mask()
-        
-        # Set ECG token ID range
-        # ECG tokens added to vocabulary
-        print(f"   ECG token ID range: [{self.ecg_token_start_id}, {self.ecg_token_start_id + num_ecg_tokens - 1}]")
-        print(f"   New vocabulary size: {len(self.llm_model.get_input_embeddings().weight)}")
-        
         # Configure pad/eos token ids (coerce to ints)
         def _coerce_id(x):
             if x is None:
@@ -182,6 +154,7 @@ class Llama32Decoder(nn.Module):
             eos_id = pad_id
         self.pad_token_id = int(pad_id)
         self.eos_token_id = int(eos_id)
+        self.ecg_prefix_token_id = self.pad_token_id
         
         # Enhanced EOS token list for better stopping
         # Include multiple Llama 3.2 stop tokens for robust generation control
@@ -189,12 +162,6 @@ class Llama32Decoder(nn.Module):
             128009,  # <|eot_id|> - primary end of turn token
             128001,  # <|end_of_text|> - end of text token
         ]
-
-        # Pre-compute bad token ids so ECG position tokens never appear in free-form text
-        self.bad_ecg_token_ids = [[tid] for tid in range(
-            self.ecg_token_start_id,
-            self.ecg_token_start_id + num_ecg_tokens
-        )]
 
         # Tokens to suppress at the beginning of generation
         # This prevents the model from generating header tokens
@@ -214,7 +181,7 @@ class Llama32Decoder(nn.Module):
             "typical_p": 0.95,  # Encourage diverse but on-topic language
             # Length controls optimized for medical findings format
             "max_new_tokens": 160,  # Allow longer structured findings when needed
-            "min_new_tokens": 32,  # Prevent premature termination after a single token
+            "min_new_tokens": 5,  # Prevent premature termination after a single token
             "length_penalty": 1.05,
             # Moderate repetition control to allow medical terminology repetition
             "repetition_penalty": 1.1,  # Reduced penalty
@@ -223,7 +190,6 @@ class Llama32Decoder(nn.Module):
             "early_stopping": False,  # Let it finish naturally
             "pad_token_id": self.pad_token_id,
             "eos_token_id": self.eos_token_ids,
-            "bad_words_ids": self.bad_ecg_token_ids,
             # Suppress header tokens at the beginning
             "begin_suppress_tokens": self.begin_suppress_tokens,
         }
@@ -248,31 +214,6 @@ class Llama32Decoder(nn.Module):
         # If using PEFT/LoRA, the adapter would be enabled here
         pass
 
-    def _apply_ecg_embedding_mask(self):
-        """Ensure only ECG token rows receive gradients inside shared embeddings."""
-        if not hasattr(self, '_ecg_embedding_train_mask'):
-            return
-
-        embedding_weight = self.llm_model.get_input_embeddings().weight
-
-        # Remove prior hook to avoid stacking
-        if hasattr(self, '_ecg_embedding_hook_handle') and self._ecg_embedding_hook_handle is not None:
-            try:
-                self._ecg_embedding_hook_handle.remove()
-            except RuntimeError:
-                pass
-            finally:
-                self._ecg_embedding_hook_handle = None
-
-        mask_base = self._ecg_embedding_train_mask
-
-        def _mask_gradients(grad: torch.Tensor) -> torch.Tensor:
-            mask = mask_base.to(device=grad.device, dtype=grad.dtype).unsqueeze(1)
-            return grad * mask
-
-        self._ecg_embedding_hook_handle = embedding_weight.register_hook(_mask_gradients)
-        embedding_weight.requires_grad_(True)
-    
     def freeze_llm_parameters(self):
         """Freeze all LLM parameters (for phase 1 training)."""
         for param in self.llm_model.parameters():
@@ -293,31 +234,22 @@ class Llama32Decoder(nn.Module):
         if hasattr(self, 'adapter'):
             components['adapter'] = self.adapter
         
-        # Add ECG embeddings (part of LLM embeddings)
-        if hasattr(self.llm_model, 'get_input_embeddings'):
-            components['ecg_embeddings'] = self.llm_model.get_input_embeddings()
-        
         # Add cross-attention if available (part of adapter for SequenceTokenAdapter)
         if hasattr(self.adapter, 'cross_attention'):
             components['cross_attention'] = self.adapter.cross_attention
         
         return components
 
-    def _initialize_ecg_tokens_semantically(self, original_vocab_size: int, num_ecg_tokens: int):
-        """
-        Initialize ECG token embeddings using text embeddings' mean, scaled for stability.
-        """
-        print(f"🔄 Initializing {num_ecg_tokens} ECG tokens with scaled text mean embeddings...")
-        
-        with torch.no_grad():
-            # Get the current embedding weights
-            embeddings = self.llm_model.get_input_embeddings().weight
-            text_mean = embeddings[:original_vocab_size].mean(dim=0)
-            start = original_vocab_size
-            end = original_vocab_size + num_ecg_tokens
-
-            # Initialize ECG embeddings with better scale for learning
-            embeddings[start:end] = text_mean.unsqueeze(0).repeat(num_ecg_tokens, 1) * 0.2
+    def _mask_input_prefix(self, sequences: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Replace the prefix (ECG + prompt) tokens with pad so decoded text omits them."""
+        if mask is None:
+            return sequences
+        masked = sequences.clone()
+        prefix_lengths = mask.sum(dim=1)
+        for idx, length in enumerate(prefix_lengths.tolist()):
+            if length > 0:
+                masked[idx, :int(length)] = self.pad_token_id
+        return masked
 
     def forward(
         self, 
@@ -507,12 +439,12 @@ class Llama32Decoder(nn.Module):
         if ecg_embedding.dim() == 2:
             ecg_embedding = ecg_embedding.unsqueeze(1)
 
-        ecg_token_ids = torch.arange(
-            self.ecg_token_start_id,
-            self.ecg_token_start_id + num_ecg_tokens,
+        ecg_token_ids = torch.full(
+            (batch_size, num_ecg_tokens),
+            fill_value=self.ecg_prefix_token_id,
             dtype=torch.long,
             device=device
-        ).unsqueeze(0).expand(batch_size, -1)
+        )
         full_prompt_ids = torch.cat([ecg_token_ids, prompt_tensor], dim=1)
         attention_mask = torch.cat([torch.ones_like(ecg_token_ids, dtype=torch.long), prompt_mask], dim=1)
 
@@ -553,7 +485,12 @@ class Llama32Decoder(nn.Module):
                 **generation_params
             )
 
-        return result
+        sequences = result.sequences if hasattr(result, "sequences") else result
+        stripped = self._mask_input_prefix(sequences, attention_mask.to(sequences.device))
+        if hasattr(result, "sequences"):
+            result.sequences = stripped
+            return result
+        return stripped
 
     @torch.no_grad()
     def generate_report_with_question(
@@ -629,12 +566,12 @@ class Llama32Decoder(nn.Module):
         if ecg_embedding.dim() == 2:
             ecg_embedding = ecg_embedding.unsqueeze(1)
 
-        ecg_token_tensor = torch.arange(
-            self.ecg_token_start_id,
-            self.ecg_token_start_id + num_ecg_tokens,
+        ecg_token_tensor = torch.full(
+            (batch_size, num_ecg_tokens),
+            fill_value=self.ecg_prefix_token_id,
             dtype=torch.long,
             device=device
-        ).unsqueeze(0).expand(batch_size, -1)
+        )
         input_ids = torch.cat([ecg_token_tensor, prompt_trimmed], dim=1)
         attention_mask = torch.cat([torch.ones_like(ecg_token_tensor, dtype=torch.long), mask_trimmed], dim=1)
 
@@ -674,5 +611,9 @@ class Llama32Decoder(nn.Module):
                 inputs_embeds=input_embedding,
                 **generation_params
             )
-
-        return result
+        sequences = result.sequences if hasattr(result, "sequences") else result
+        stripped = self._mask_input_prefix(sequences, attention_mask.to(sequences.device))
+        if hasattr(result, "sequences"):
+            result.sequences = stripped
+            return result
+        return stripped

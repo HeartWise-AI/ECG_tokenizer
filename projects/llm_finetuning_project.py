@@ -634,8 +634,8 @@ class LLMFinetuningProject(BaseProject):
                         "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'user' %}"
                         "<|start_header_id|>user<|end_header_id|>\n\n"
-                        # Add placeholders for the ECG tokens here
-                        "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens)]) + "<|end_ecg|>\n"
+                        # Add placeholders for the ECG prefix (actual embeddings supplied externally)
+                        "<|start_ecg|><|end_ecg|>\n"
                         "{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'assistant' %}"
                         "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
@@ -663,21 +663,9 @@ class LLMFinetuningProject(BaseProject):
             if num_added_tokens > 0 and self.config.is_ref_device:
                 print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
         
-        # Add 128 position-specific ECG tokens and record their start id
+        # Prefix-tuning path: rely on per-example embeddings instead of dedicated vocab rows
         if getattr(self.config, 'instruct_mode', False):
-            # Determine if tokens already exist
-            ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]
-            existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
-            if existing_id is None or existing_id == -1:
-                original_vocab_size = len(tokenizer)
-                tokenizer.add_tokens(ecg_tokens, special_tokens=True)
-                self.config.ecg_token_start_id = original_vocab_size
-                if self.config.is_ref_device:
-                    print(f"Added {len(ecg_tokens)} ECG position tokens starting at id {self.config.ecg_token_start_id}")
-            else:
-                self.config.ecg_token_start_id = int(existing_id)
-                if self.config.is_ref_device:
-                    print(f"ECG position tokens already present starting at id {self.config.ecg_token_start_id}")
+            self.config.ecg_token_start_id = None
         
         # Ensure chat template exists for instruction tuning
         if getattr(self.config, 'instruct_mode', False):

@@ -174,10 +174,6 @@ class LLMFinetuningRunner(BaseRunner):
                     self._set_param_group_lr('adapter', float(phase_config['adapter_lr']))
                 if 'cross_attention_lr' in phase_config:
                     self._set_param_group_lr('cross_attention', float(phase_config['cross_attention_lr']))
-                if 'ecg_embedding_lr' in phase_config:
-                    self._set_param_group_lr('ecg_embeddings', float(phase_config['ecg_embedding_lr']))
-                elif freeze_llm is True:
-                    self._set_param_group_lr('ecg_embeddings', 0.0)
 
         if self.config.is_ref_device:
             log_bits = []
@@ -193,8 +189,6 @@ class LLMFinetuningRunner(BaseRunner):
                 log_bits.append(f"adapter_lr={float(phase_config['adapter_lr']):.2e}")
             if 'cross_attention_lr' in phase_config:
                 log_bits.append(f"cross_attention_lr={float(phase_config['cross_attention_lr']):.2e}")
-            if 'ecg_embedding_lr' in phase_config:
-                log_bits.append(f"ecg_embedding_lr={float(phase_config['ecg_embedding_lr']):.2e}")
             if log_bits:
                 print(f"   - Phase settings ({phase_name}): " + ', '.join(log_bits))
 
@@ -262,14 +256,6 @@ class LLMFinetuningRunner(BaseRunner):
         if llm_module is not None:
             llm_params = [p for p in llm_module.parameters() if p.requires_grad]
 
-        embedding_param = None
-        if hasattr(decoder, 'llm_model'):
-            embedding_param = decoder.llm_model.get_input_embeddings().weight
-            if embedding_param in llm_params:
-                llm_params = [p for p in llm_params if p is not embedding_param]
-            if embedding_param is not None and not embedding_param.requires_grad:
-                embedding_param = None
-
         adapter_params = [p for p in adapter_module.parameters() if p.requires_grad]
         cross_attention_params = []
         if hasattr(adapter_module, 'cross_attention_layers'):
@@ -296,12 +282,9 @@ class LLMFinetuningRunner(BaseRunner):
         llm_lr = float(phase_config.get('llm_lr', self.config.llm_lr))
         adapter_lr = float(phase_config.get('adapter_lr', self.config.adapter_lr))
         cross_attention_lr = float(phase_config.get('cross_attention_lr', adapter_lr))
-        ecg_embedding_lr = float(phase_config.get('ecg_embedding_lr', llm_lr))
-
         llm_weight_decay = float(phase_config.get('llm_weight_decay', self.config.llm_weight_decay))
         adapter_weight_decay = float(phase_config.get('adapter_weight_decay', self.config.adapter_weight_decay))
         cross_attention_weight_decay = float(phase_config.get('cross_attention_weight_decay', adapter_weight_decay))
-        ecg_embedding_weight_decay = float(phase_config.get('ecg_embedding_weight_decay', llm_weight_decay))
 
         param_groups = []
         if llm_params:
@@ -310,13 +293,6 @@ class LLMFinetuningRunner(BaseRunner):
                 'lr': llm_lr,
                 'weight_decay': llm_weight_decay,
                 'name': 'llm'
-            })
-        if embedding_param is not None:
-            param_groups.append({
-                'params': [embedding_param],
-                'lr': ecg_embedding_lr,
-                'weight_decay': ecg_embedding_weight_decay,
-                'name': 'ecg_embeddings'
             })
         if adapter_core_params:
             param_groups.append({
@@ -597,7 +573,7 @@ class LLMFinetuningRunner(BaseRunner):
         if mode == RunMode.VALIDATE:
             worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
             # Initialize JSON file for incremental writing
-            json_path = f"./ECG_tokenizer/val_generations/val_generations_epoch_{epoch}.json"
+            json_path = f"./ECG_tokenizer_complex_questions/val_generations/val_generations_epoch_{epoch}.json"
             os.makedirs(os.path.dirname(json_path), exist_ok=True)
             # Initialize with empty dict
             if self.config.is_ref_device:
