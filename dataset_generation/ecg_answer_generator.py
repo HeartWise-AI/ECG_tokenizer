@@ -80,6 +80,7 @@ class ECGAnswerGenerator:
     def get_active_findings(self, row: pd.Series) -> Dict[str, List[str]]:
         """
         Extract active findings from the row organized by category.
+        For MHI dataset, handles _bert_model columns which are logits (>0.5 = positive).
         Returns dict: category -> list of active condition names
         """
         active_findings = {}
@@ -95,12 +96,26 @@ class ECGAnswerGenerator:
                     condition.lower().replace(' ', '_')
                 ]
                 
+                # Also check for _bert_model columns (MHI dataset)
+                bert_col = f"{condition}_bert_model"
+                if bert_col in row.index:
+                    col_names.append(bert_col)
+                
                 for col in col_names:
                     if col in row.index:
                         try:
-                            if pd.notna(row[col]) and float(row[col]) >= 1:
-                                category_findings.append(condition)
-                                break
+                            value = row[col]
+                            if pd.notna(value):
+                                # For _bert_model columns (MHI), use 0.5 threshold
+                                if col.endswith('_bert_model'):
+                                    if float(value) > 0.5:
+                                        category_findings.append(condition)
+                                        break
+                                # For regular columns, use >= 1 threshold
+                                else:
+                                    if float(value) >= 1:
+                                        category_findings.append(condition)
+                                        break
                         except (ValueError, TypeError):
                             continue
             
@@ -154,8 +169,8 @@ class ECGAnswerGenerator:
         if report_col and report_col in row.index and pd.notna(row[report_col]) and str(row[report_col]).strip():
             report = str(row[report_col]).strip()
             
-            # Add heart rate if available
-            if heart_rate:
+            # Add heart rate if available (but not if it's 0/artifacts)
+            if heart_rate and heart_rate > 0:
                 # Check if report already contains heart rate info
                 if 'HR:' not in report and 'heart rate' not in report.lower():
                     # Find the first semicolon or end of first statement to insert HR
@@ -181,7 +196,7 @@ class ECGAnswerGenerator:
         
         if not active_findings:
             # Normal ECG
-            if heart_rate:
+            if heart_rate and heart_rate > 0:
                 return f"Normal sinus rhythm (HR: {heart_rate} bpm); Normal ECG"
             else:
                 return "Normal sinus rhythm; Normal ECG"
@@ -195,8 +210,8 @@ class ECGAnswerGenerator:
             if category in active_findings:
                 for finding in active_findings[category]:
                     formatted = self.format_finding_name(finding)
-                    # Add heart rate only once to the first rhythm finding
-                    if category == 'RHYTHM' and heart_rate and not heart_rate_added and 'rhythm' in formatted.lower():
+                    # Add heart rate only once to the first rhythm finding (if not artifacts)
+                    if category == 'RHYTHM' and heart_rate and heart_rate > 0 and not heart_rate_added and 'rhythm' in formatted.lower():
                         formatted += f" (HR: {heart_rate} bpm)"
                         heart_rate_added = True
                     report_parts.append(formatted)
@@ -213,14 +228,34 @@ class ECGAnswerGenerator:
     
     def calculate_heart_rate(self, row: pd.Series) -> Optional[float]:
         """
-        Calculate heart rate from RR interval if available.
+        Calculate heart rate from RR interval or ventricular rate.
         Returns heart rate in bpm or None if not available.
+        Special case: Returns 0 if MHI VentricularRate is 0 (artifacts).
         """
         # Check for heart rate column (might be already calculated)
         if 'heart_rate' in row.index and pd.notna(row['heart_rate']):
-            return float(row['heart_rate'])
+            hr = float(row['heart_rate'])
+            if hr > 0:
+                return hr
+            elif hr == 0:
+                return 0  # Special case for artifacts
         
-        # Check for RR interval columns
+        # For MHI dataset - check VentricularRate column
+        if 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+            try:
+                ventricular_rate = row['RestingECG_OriginalRestingECGMeasurements_VentricularRate']
+                if pd.notna(ventricular_rate):
+                    # Convert to float (it might be a string)
+                    hr = float(ventricular_rate)
+                    if hr == 0:
+                        return 0  # Special case: 0 indicates artifacts
+                    elif hr > 0:
+                        return round(hr, 1)
+            except (ValueError, TypeError):
+                pass
+        
+        
+        # Check for RR interval columns (for MIMIC dataset)
         rr_columns = ['rr_interval']
         for col in rr_columns:
             if col in row.index and pd.notna(row[col]):
@@ -251,7 +286,7 @@ class ECGAnswerGenerator:
         has_lvh = False
         st_locations = []
         
-        # Check for Acute MI
+        # Check for Acute MI (regular columns)
         if 'Acute_MI' in row.index and pd.notna(row['Acute_MI']):
             try:
                 has_acute_mi = float(row['Acute_MI']) >= 1
@@ -262,11 +297,25 @@ class ECGAnswerGenerator:
                 has_acute_mi = float(row['Acute MI']) >= 1
             except (ValueError, TypeError):
                 pass
+        
+        # Check for Acute MI _bert_model column (MHI dataset)
+        if not has_acute_mi and 'Acute_MI_bert_model' in row.index and pd.notna(row['Acute_MI_bert_model']):
+            try:
+                has_acute_mi = float(row['Acute_MI_bert_model']) > 0.5
+            except (ValueError, TypeError):
+                pass
                 
         # Check for Early Repolarization
         if 'Early repolarization' in row.index and pd.notna(row['Early repolarization']):
             try:
                 has_early_repol = float(row['Early repolarization']) >= 1
+            except (ValueError, TypeError):
+                pass
+        
+        # Check for Early Repolarization _bert_model (MHI)
+        if not has_early_repol and 'Early repolarization_bert_model' in row.index and pd.notna(row['Early repolarization_bert_model']):
+            try:
+                has_early_repol = float(row['Early repolarization_bert_model']) > 0.5
             except (ValueError, TypeError):
                 pass
                 
@@ -276,15 +325,39 @@ class ECGAnswerGenerator:
                 has_lvh = float(row['Left ventricular hypertrophy']) >= 1
             except (ValueError, TypeError):
                 pass
+        
+        # Check for LVH _bert_model (MHI)
+        if not has_lvh and 'Left ventricular hypertrophy_bert_model' in row.index and pd.notna(row['Left ventricular hypertrophy_bert_model']):
+            try:
+                has_lvh = float(row['Left ventricular hypertrophy_bert_model']) > 0.5
+            except (ValueError, TypeError):
+                pass
                 
-        # Check for ST elevations
+        # Check for ST elevations - regular columns
         for col in row.index:
             if 'ST elevation' in str(col) and pd.notna(row[col]):
+                # Skip _bert_model columns in this loop
+                if '_bert_model' in str(col):
+                    continue
                 try:
                     if float(row[col]) >= 1:
                         if '(' in str(col) and ')' in str(col):
                             location = str(col)[str(col).find('(')+1:str(col).find(')')]
                             st_locations.append(location)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Check for ST elevations - _bert_model columns (MHI)
+        for col in row.index:
+            if 'ST elevation' in str(col) and '_bert_model' in str(col) and pd.notna(row[col]):
+                try:
+                    if float(row[col]) > 0.5:  # Use 0.5 threshold for _bert_model
+                        # Extract location from column name
+                        # Format: "ST elevation (location)_bert_model"
+                        if '(' in str(col) and ')' in str(col):
+                            location = str(col)[str(col).find('(')+1:str(col).find(')')]
+                            if location not in st_locations:  # Avoid duplicates
+                                st_locations.append(location)
                 except (ValueError, TypeError):
                     continue
                     
@@ -834,8 +907,8 @@ class ECGAnswerGenerator:
                                 return "No - no ectopic beats present"
                         else:
                             # Not specifically asking about abnormalities or ectopic beats
-                            # Add heart rate to first rhythm finding only
-                            if mapped_category == 'RHYTHM' and heart_rate and is_rhythm_question:
+                            # Add heart rate to first rhythm finding only (if not artifacts)
+                            if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                                 findings_with_hr = []
                                 hr_added = False
                                 for f in findings:
@@ -850,8 +923,8 @@ class ECGAnswerGenerator:
                             return response
                 else:
                     response = self._get_negative_response(mapped_category)
-                    # Add heart rate for rhythm questions even when normal
-                    if mapped_category == 'RHYTHM' and heart_rate and is_rhythm_question:
+                    # Add heart rate for rhythm questions even when normal (if not artifacts)
+                    if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                         response = response.replace("normal sinus rhythm", f"normal sinus rhythm (HR: {heart_rate} bpm)")
                     return response
         
@@ -859,8 +932,8 @@ class ECGAnswerGenerator:
             # Not a YES/NO question - describe what's present
             if mapped_category and mapped_category in active_findings:
                 findings = [self.format_finding_name(f) for f in active_findings[mapped_category]]
-                # Add heart rate to first rhythm finding only
-                if mapped_category == 'RHYTHM' and heart_rate and is_rhythm_question:
+                # Add heart rate to first rhythm finding only (if not artifacts)
+                if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                     findings_with_hr = []
                     hr_added = False
                     for f in findings:
@@ -875,8 +948,8 @@ class ECGAnswerGenerator:
                 return response
             else:
                 response = self._get_negative_response(mapped_category)
-                # Add heart rate for rhythm questions even when normal
-                if mapped_category == 'RHYTHM' and heart_rate and is_rhythm_question:
+                # Add heart rate for rhythm questions even when normal (if not artifacts)
+                if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                     response = response.replace("normal sinus rhythm", f"normal sinus rhythm (HR: {heart_rate} bpm)")
                 return response
     
@@ -1076,7 +1149,58 @@ class ECGAnswerGenerator:
         """
         Generate urgency assessment answer.
         For prompts asking about clinical urgency.
+        Handles both MIMIC and MHI datasets.
         """
+        # First check for MHI-specific ACS conditions
+        is_mhi = False
+        if 'dataset' in row.index and row.get('dataset') == 'mhi':
+            is_mhi = True
+        elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
+            is_mhi = True
+        
+        if is_mhi:
+            # Check ACS condition severity for MHI
+            if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
+                acs_condition = str(row['acs_condition_severity'])
+                
+                # If ACS with acute occlusion - URGENT
+                if 'Acute' in acs_condition and 'Occlusion' in acs_condition:
+                    # Get culprit artery if available
+                    culprit = ""
+                    if 'acs_pci_regions' in row.index and pd.notna(row.get('acs_pci_regions')):
+                        regions = str(row['acs_pci_regions'])
+                        if 'IVA' in regions:
+                            culprit = " - LAD occlusion"
+                        elif 'CD' in regions:
+                            culprit = " - RCA occlusion"
+                        elif 'Cx' in regions:
+                            culprit = " - Circumflex occlusion"
+                    return f"URGENT: Immediate intervention required - Acute coronary occlusion{culprit}"
+            
+            # Check for Acute MI using _bert_model
+            has_acute_mi = False
+            if 'Acute_MI_bert_model' in row.index and pd.notna(row.get('Acute_MI_bert_model')):
+                try:
+                    if float(row['Acute_MI_bert_model']) > 0.5:
+                        has_acute_mi = True
+                except (ValueError, TypeError):
+                    pass
+            
+            if has_acute_mi:
+                # Check for ST elevation locations
+                _, _, _, st_locations = self.check_st_segment_context(row)
+                if st_locations:
+                    location_str = f" ({', '.join(st_locations[:2])})"
+                    return f"URGENT: Immediate intervention required - ST elevation{location_str}"
+                else:
+                    return "URGENT: Immediate intervention required - Acute MI"
+            
+            # If ST elevation present but no acute MI or ACS
+            _, _, _, st_locations = self.check_st_segment_context(row)
+            if st_locations:
+                return f"Consider ACS - ST elevation present in {', '.join(st_locations)} but does not meet STEMI criteria"
+        
+        # Standard urgency assessment for all datasets
         active_findings = self.get_active_findings(row)
         
         # Check for critical findings requiring immediate attention
@@ -1093,6 +1217,23 @@ class ECGAnswerGenerator:
                     critical_findings.append(finding)
         
         if critical_findings:
+            # For MHI with ST elevation but no acute MI/ACS
+            if is_mhi and 'ST elevation' in str(critical_findings):
+                # Check if we already have acute MI or ACS
+                has_acute_condition = False
+                if 'Acute MI' in str(critical_findings):
+                    has_acute_condition = True
+                elif 'acs_condition_severity' in row.index:
+                    acs = str(row.get('acs_condition_severity', ''))
+                    if 'Acute' in acs:
+                        has_acute_condition = True
+                
+                if not has_acute_condition:
+                    # ST elevation present but no acute condition
+                    _, _, _, st_locations = self.check_st_segment_context(row)
+                    if st_locations:
+                        return f"Consider ACS - ST elevation present in {', '.join(st_locations)} but does not meet STEMI criteria"
+            
             return f"URGENT: Immediate intervention required - {', '.join(critical_findings[:2])}"
         
         # Check for conditions requiring prompt attention
@@ -1408,10 +1549,12 @@ class ECGAnswerGenerator:
             if present_findings:
                 json_output[json_category] = present_findings
         
-        # Add heart rate if available (rounded to integer)
+        # Add heart rate if available (rounded to integer, but not if artifacts)
         heart_rate = self.calculate_heart_rate(row)
-        if heart_rate:
+        if heart_rate and heart_rate > 0:
             json_output["heart_rate_bpm"] = int(round(heart_rate))
+        elif heart_rate == 0:
+            json_output["heart_rate_bpm"] = "artifacts"
         
         # Add ECG classification
         ecg_type = row.get('ecg_type', 'unknown')
@@ -1424,11 +1567,226 @@ class ECGAnswerGenerator:
         """
         Generate answer for heart rate questions.
         This is now its own category separate from demographics.
+        Handles special case where HR=0 indicates artifacts in MHI dataset.
         """
         heart_rate = self.calculate_heart_rate(row)
-        if heart_rate:
+        if heart_rate == 0:
+            # Special case: 0 indicates artifacts in MHI dataset
+            return "Sorry, I can't determine the heart rate - the ECG has artifacts"
+        elif heart_rate:
             return f"{int(round(heart_rate))} bpm"
         return "Heart rate cannot be determined"
+    
+    def calculate_intervals(self, row: pd.Series) -> Dict[str, Optional[float]]:
+        """
+        Calculate PR and QT intervals from available data.
+        Returns dict with pr_interval, qt_interval, qtc_bazett, qtc_fridericia in milliseconds.
+        """
+        intervals = {
+            'pr_interval': None,
+            'qt_interval': None,
+            'qtc_bazett': None,
+            'qtc_fridericia': None,
+            'is_prolonged': False,
+            'gender': None
+        }
+        
+        # Get gender for QTc prolongation assessment
+        gender = row.get('gender', None)
+        if gender:
+            gender_str = str(gender).strip().lower()
+            if gender_str in ['m', 'male', '1', '1.0']:
+                intervals['gender'] = 'male'
+            elif gender_str in ['f', 'female', '0', '0.0']:
+                intervals['gender'] = 'female'
+        
+        # For MHI dataset - check RestingECG columns
+        if 'RestingECG_OriginalRestingECGMeasurements_PRInterval' in row.index:
+            try:
+                pr_val = row['RestingECG_OriginalRestingECGMeasurements_PRInterval']
+                if pd.notna(pr_val):
+                    intervals['pr_interval'] = float(pr_val)
+            except (ValueError, TypeError):
+                pass
+        
+        if 'RestingECG_OriginalRestingECGMeasurements_QTInterval' in row.index:
+            try:
+                qt_val = row['RestingECG_OriginalRestingECGMeasurements_QTInterval']
+                if pd.notna(qt_val):
+                    intervals['qt_interval'] = float(qt_val)
+            except (ValueError, TypeError):
+                pass
+        
+        if 'RestingECG_OriginalRestingECGMeasurements_QTCorrected' in row.index:
+            try:
+                qtc_val = row['RestingECG_OriginalRestingECGMeasurements_QTCorrected']
+                if pd.notna(qtc_val):
+                    intervals['qtc_bazett'] = float(qtc_val)
+            except (ValueError, TypeError):
+                pass
+        
+        if 'RestingECG_OriginalRestingECGMeasurements_QTcFrederica' in row.index:
+            try:
+                qtc_frid_val = row['RestingECG_OriginalRestingECGMeasurements_QTcFrederica']
+                if pd.notna(qtc_frid_val):
+                    intervals['qtc_fridericia'] = float(qtc_frid_val)
+            except (ValueError, TypeError):
+                pass
+        
+        # For MIMIC dataset - calculate from onset/offset if available
+        # Note: These columns might not exist in the current dataset structure
+        if intervals['pr_interval'] is None:
+            if 'p_onset' in row.index and 'qrs_onset' in row.index:
+                try:
+                    p_onset = float(row['p_onset'])
+                    qrs_onset = float(row['qrs_onset'])
+                    if pd.notna(p_onset) and pd.notna(qrs_onset):
+                        intervals['pr_interval'] = qrs_onset - p_onset
+                except (ValueError, TypeError):
+                    pass
+        
+        if intervals['qt_interval'] is None:
+            if 'qrs_onset' in row.index and 't_end' in row.index:
+                try:
+                    qrs_onset = float(row['qrs_onset'])
+                    t_end = float(row['t_end'])
+                    if pd.notna(qrs_onset) and pd.notna(t_end):
+                        intervals['qt_interval'] = t_end - qrs_onset
+                except (ValueError, TypeError):
+                    pass
+        
+        # Calculate QTc if we have QT interval and RR interval
+        if intervals['qt_interval'] and ('rr_interval' in row.index or 'RestingECG_QRSTimesTypes_GlobalRR' in row.index):
+            rr_interval = None
+            
+            # Try to get RR interval
+            if 'rr_interval' in row.index and pd.notna(row['rr_interval']):
+                try:
+                    rr_interval = float(row['rr_interval'])
+                except (ValueError, TypeError):
+                    pass
+            elif 'RestingECG_QRSTimesTypes_GlobalRR' in row.index:
+                try:
+                    rr_interval = float(row['RestingECG_QRSTimesTypes_GlobalRR'])
+                except (ValueError, TypeError):
+                    pass
+            
+            if rr_interval and rr_interval > 0:
+                # Convert to seconds for calculation
+                qt_sec = intervals['qt_interval'] / 1000.0
+                rr_sec = rr_interval / 1000.0
+                
+                # Bazett's formula: QTc = QT / sqrt(RR)
+                if intervals['qtc_bazett'] is None:
+                    qtc_bazett_sec = qt_sec / np.sqrt(rr_sec)
+                    intervals['qtc_bazett'] = qtc_bazett_sec * 1000  # Convert back to ms
+                
+                # Fridericia's formula: QTc = QT / (RR^(1/3))
+                if intervals['qtc_fridericia'] is None:
+                    qtc_fridericia_sec = qt_sec / (rr_sec ** (1/3))
+                    intervals['qtc_fridericia'] = qtc_fridericia_sec * 1000  # Convert back to ms
+        
+        # Determine if QTc is prolonged based on gender
+        qtc_to_check = intervals['qtc_bazett'] or intervals['qtc_fridericia']
+        if qtc_to_check:
+            if intervals['gender'] == 'male':
+                intervals['is_prolonged'] = qtc_to_check > 440
+            elif intervals['gender'] == 'female':
+                intervals['is_prolonged'] = qtc_to_check > 460
+            else:
+                # If gender unknown, use conservative threshold
+                intervals['is_prolonged'] = qtc_to_check > 440
+        
+        return intervals
+    
+    def generate_intervals_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for interval questions (PR, QT, QTc).
+        """
+        prompt_text = row.get('prompt', '').lower()
+        intervals = self.calculate_intervals(row)
+        heart_rate = self.calculate_heart_rate(row)
+        
+        # Determine which interval(s) are being asked about
+        asking_pr = 'pr' in prompt_text
+        asking_qt = 'qt' in prompt_text and 'qtc' not in prompt_text
+        asking_qtc = 'qtc' in prompt_text or 'corrected' in prompt_text
+        asking_prolonged = 'prolonged' in prompt_text or 'prolongation' in prompt_text
+        asking_bazett = 'bazett' in prompt_text
+        asking_fridericia = 'fridericia' in prompt_text or 'fredericia' in prompt_text
+        
+        response_parts = []
+        
+        # PR interval
+        if asking_pr or ('interval' in prompt_text and not asking_qt and not asking_qtc):
+            if intervals['pr_interval']:
+                pr_ms = int(round(intervals['pr_interval']))
+                response_parts.append(f"PR interval: {pr_ms} ms")
+                # Normal PR is 120-200 ms
+                if pr_ms < 120:
+                    response_parts[-1] += " (short)"
+                elif pr_ms > 200:
+                    response_parts[-1] += " (prolonged - first degree AV block)"
+            else:
+                if asking_pr and not (asking_qt or asking_qtc):
+                    return "PR interval cannot be determined"
+        
+        # QT interval
+        if asking_qt and not asking_qtc:
+            if intervals['qt_interval']:
+                qt_ms = int(round(intervals['qt_interval']))
+                response_parts.append(f"QT interval: {qt_ms} ms")
+            else:
+                if not asking_pr and not asking_qtc:
+                    return "QT interval cannot be determined"
+        
+        # QTc interval
+        if asking_qtc or asking_prolonged:
+            qtc_value = None
+            formula_used = ""
+            
+            if asking_fridericia and intervals['qtc_fridericia']:
+                qtc_value = intervals['qtc_fridericia']
+                formula_used = "Fridericia"
+            elif asking_bazett and intervals['qtc_bazett']:
+                qtc_value = intervals['qtc_bazett']
+                formula_used = "Bazett"
+            elif intervals['qtc_fridericia']:
+                # Prefer Fridericia for extreme heart rates
+                if heart_rate and heart_rate > 0 and (heart_rate < 60 or heart_rate > 100):
+                    qtc_value = intervals['qtc_fridericia']
+                    formula_used = "Fridericia"
+                elif intervals['qtc_bazett']:
+                    qtc_value = intervals['qtc_bazett']
+                    formula_used = "Bazett"
+            elif intervals['qtc_bazett']:
+                qtc_value = intervals['qtc_bazett']
+                formula_used = "Bazett"
+            
+            if qtc_value:
+                qtc_ms = int(round(qtc_value))
+                
+                if asking_prolonged:
+                    if intervals['is_prolonged']:
+                        hr_text = f" (at HR {int(round(heart_rate))} bpm)" if heart_rate and heart_rate > 0 else ""
+                        response_parts.append(f"QTc is {qtc_ms} ms{hr_text}; QT prolongation is present")
+                    else:
+                        response_parts.append(f"QTc is {qtc_ms} ms; No QT prolongation")
+                else:
+                    qtc_text = f"QTc ({formula_used}): {qtc_ms} ms"
+                    if heart_rate and heart_rate > 0:
+                        qtc_text += f" (at HR {int(round(heart_rate))} bpm)"
+                    if intervals['is_prolonged']:
+                        qtc_text += " - prolonged"
+                    response_parts.append(qtc_text)
+            else:
+                if not asking_pr and not asking_qt:
+                    return "QTc cannot be calculated - insufficient data"
+        
+        if response_parts:
+            return "; ".join(response_parts)
+        
+        return "Interval measurements not available"
     
     def generate_demographic_answer(self, row: pd.Series, demo_type: str) -> str:
         """
@@ -1460,7 +1818,9 @@ class ECGAnswerGenerator:
         
         elif 'heart_rate' in demo_type:
             heart_rate = self.calculate_heart_rate(row)
-            if heart_rate:
+            if heart_rate == 0:
+                return "Sorry, I can't determine the heart rate - the ECG has artifacts"
+            elif heart_rate:
                 return f"{heart_rate} bpm"
             return "Heart rate cannot be determined"
         
@@ -1611,8 +1971,30 @@ class ECGAnswerGenerator:
         """
         Check if report indicates acute MI/STEMI and return appropriate prefix.
         This will be prepended to ALL answers when acute MI is present.
+        EXCLUDES pericarditis cases which can also have diffuse ST elevation.
         """
-        # Check report for critical acute MI phrases
+        # First check if this is pericarditis - if so, don't flag as acute MI
+        has_pericarditis = False
+        
+        # Check pericarditis column
+        if 'Acute pericarditis' in row.index and pd.notna(row.get('Acute pericarditis')):
+            try:
+                if float(row['Acute pericarditis']) >= 1:
+                    has_pericarditis = True
+            except (ValueError, TypeError):
+                pass
+        
+        # Check report for pericarditis
+        if 'report' in row.index and pd.notna(row['report']):
+            report_lower = str(row['report']).lower()
+            if 'pericarditis' in report_lower:
+                has_pericarditis = True
+        
+        # If pericarditis is present, don't flag as acute MI
+        if has_pericarditis:
+            return ""
+        
+        # Now check report for critical acute MI phrases
         if 'report' in row.index and pd.notna(row['report']):
             report_upper = str(row['report']).upper()
             
@@ -1676,6 +2058,228 @@ class ECGAnswerGenerator:
         
         return ""  # No acute MI prefix needed
     
+    def generate_structural_heart_disease_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for structural heart disease questions (MHI dataset only).
+        Uses echonext_shd column: >= 1 means present, < 1 means absent.
+        Returns None if data is not available (which should drop the question).
+        """
+        # Check if echonext_shd column exists and has data
+        if 'echonext_shd' not in row.index:
+            return None  # This question should be dropped
+        
+        shd_value = row.get('echonext_shd')
+        
+        # If value is null/nan, we can't answer
+        if pd.isna(shd_value):
+            return None  # This question should be dropped
+        
+        try:
+            # Convert to float for comparison
+            shd_val = float(shd_value)
+            
+            # echonext_shd >= 1 means structural heart disease is present
+            if shd_val >= 1:
+                return "Yes - structural heart disease is present based on echocardiography"
+            else:
+                return "No - no structural heart disease detected on echocardiography"
+                
+        except (ValueError, TypeError):
+            # Can't convert to number, can't answer
+            return None  # This question should be dropped
+    
+    def generate_lvef_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for LVEF questions (MHI dataset only).
+        Uses deepecho_Visually_Estimated_EF column.
+        Returns None if data is not available (which should drop the question).
+        """
+        # Check if LVEF column exists and has data
+        if 'deepecho_Visually_Estimated_EF' not in row.index:
+            return None  # This question should be dropped
+        
+        lvef_value = row.get('deepecho_Visually_Estimated_EF')
+        
+        # If value is null/nan, we can't answer
+        if pd.isna(lvef_value):
+            return None  # This question should be dropped
+        
+        try:
+            # Convert to float and round to nearest percentage
+            lvef_val = float(lvef_value)
+            lvef_rounded = round(lvef_val)
+            
+            # Categorize the LVEF
+            if lvef_rounded >= 55:
+                category = "normal"
+            elif lvef_rounded >= 45:
+                category = "mildly reduced"
+            elif lvef_rounded >= 30:
+                category = "moderately reduced"
+            else:
+                category = "severely reduced"
+            
+            return f"The left ventricular ejection fraction is {lvef_rounded}% ({category})"
+                
+        except (ValueError, TypeError):
+            # Can't convert to number, can't answer
+            return None  # This question should be dropped
+    
+    def generate_acs_severity_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for ACS severity questions (MHI dataset only).
+        Checks if there is an acute coronary occlusion.
+        Returns None if data is not available (which should drop the question).
+        """
+        # Check if ACS condition severity column exists and has data
+        if 'acs_condition_severity' not in row.index:
+            return None  # This question should be dropped
+        
+        acs_condition = row.get('acs_condition_severity')
+        
+        # If value is null/nan, we can't answer
+        if pd.isna(acs_condition):
+            return None  # This question should be dropped
+        
+        # Import ACS constants
+        from utils.constants import ACS_ACUTE_CONDITIONS
+        
+        # Check if it's an acute occlusion
+        if acs_condition in ACS_ACUTE_CONDITIONS:
+            return "Yes - there is an acute coronary occlusion requiring urgent intervention"
+        else:
+            # Not an acute occlusion
+            if acs_condition == 'No Coronary Disease':
+                return "No - no evidence of coronary disease"
+            elif 'Obstructive' in acs_condition:
+                return "No - there is obstructive coronary disease but no acute occlusion"
+            elif 'Chronic' in acs_condition:
+                return "No - there is chronic total occlusion but not acute"
+            else:
+                return "No - no acute coronary occlusion identified"
+    
+    def generate_culprit_artery_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for culprit artery questions (MHI dataset only).
+        Only answers when there is an acute coronary occlusion.
+        Returns None if data is not available or not an acute occlusion.
+        """
+        # First check if there is an acute occlusion
+        if 'acs_condition_severity' not in row.index or 'acs_pci_regions' not in row.index:
+            return None  # This question should be dropped
+        
+        acs_condition = row.get('acs_condition_severity')
+        acs_regions = row.get('acs_pci_regions')
+        
+        # Check for null values
+        if pd.isna(acs_condition) or pd.isna(acs_regions):
+            return None  # This question should be dropped
+        
+        # Import ACS constants
+        from utils.constants import ACS_ACUTE_CONDITIONS, ACS_ARTERY_MAPPING
+        
+        # Only answer if it's an acute occlusion
+        if acs_condition not in ACS_ACUTE_CONDITIONS:
+            return None  # This question should be dropped - no acute occlusion
+        
+        # Parse the acs_pci_regions string (it's in list format)
+        import ast
+        try:
+            # Convert string representation of list to actual list
+            if isinstance(acs_regions, str):
+                # Remove any extra quotes if present
+                acs_regions = acs_regions.strip("'\"")
+                # Parse the list
+                artery_list = ast.literal_eval(acs_regions)
+            else:
+                artery_list = acs_regions
+            
+            # Check if there are any arteries specified
+            if not artery_list or (isinstance(artery_list, list) and len(artery_list) == 0):
+                return "The culprit artery could not be determined from the available data"
+            
+            # Get the first artery (primary culprit)
+            first_artery = artery_list[0] if isinstance(artery_list, list) else str(artery_list)
+            
+            # Map to standard name
+            standard_name = ACS_ARTERY_MAPPING.get(first_artery, first_artery)
+            
+            # Generate the answer
+            if 'Complete' in acs_condition:
+                occlusion_type = "complete occlusion"
+            else:
+                occlusion_type = "incomplete occlusion"
+            
+            return f"The culprit artery is the {standard_name} with {occlusion_type}"
+            
+        except (ValueError, SyntaxError, TypeError):
+            return "The culprit artery information could not be parsed"
+    
+    def generate_afib_risk_answer(self, row: pd.Series) -> str:
+        """
+        Generate answer for incident AFib risk questions (MHI dataset only).
+        Checks if patient is at risk for developing AFib in next 2-5 years.
+        Returns None if data is not available (which should drop the question).
+        """
+        # Check if AFib prediction columns exist
+        if 'afib_label_2y' not in row.index or 'afib_label_5y' not in row.index:
+            return None  # This question should be dropped
+        
+        afib_2y = row.get('afib_label_2y')
+        afib_5y = row.get('afib_label_5y')
+        
+        # If prediction values are null/nan, we can't answer
+        if pd.isna(afib_2y) or pd.isna(afib_5y):
+            return None  # This question should be dropped
+        
+        # First check if patient is ALREADY in AFib
+        # Check Afib column (>= 1 means current AFib)
+        current_afib = False
+        if 'Afib' in row.index and pd.notna(row.get('Afib')):
+            try:
+                if float(row['Afib']) >= 1:
+                    current_afib = True
+            except (ValueError, TypeError):
+                pass
+        
+        # Also check Afib_bert_model (> 0.5 threshold for MHI)
+        if not current_afib and 'Afib_bert_model' in row.index and pd.notna(row.get('Afib_bert_model')):
+            try:
+                if float(row['Afib_bert_model']) > 0.5:
+                    current_afib = True
+            except (ValueError, TypeError):
+                pass
+        
+        # If patient is already in AFib, they can't have "incident" AFib
+        if current_afib:
+            return "The patient is already in atrial fibrillation"
+        
+        # Now check future risk predictions
+        # Convert boolean values (they're stored as boolean in the data)
+        try:
+            # Handle both boolean and string representations
+            if isinstance(afib_2y, bool):
+                risk_2y = afib_2y
+            else:
+                risk_2y = str(afib_2y).lower() == 'true'
+            
+            if isinstance(afib_5y, bool):
+                risk_5y = afib_5y
+            else:
+                risk_5y = str(afib_5y).lower() == 'true'
+            
+            # Determine risk level
+            if risk_2y:
+                return "Yes - this patient has a high risk of developing atrial fibrillation within the next 2 years"
+            elif risk_5y:
+                return "Moderate risk - this patient is likely to develop atrial fibrillation within 5 years but not within 2 years"
+            else:
+                return "Low risk - this patient is unlikely to develop atrial fibrillation in the next 5 years"
+                
+        except (ValueError, TypeError):
+            # Can't parse the risk values
+            return None  # This question should be dropped
+    
     def generate_answer(self, row: pd.Series) -> str:
         """
         Main function to generate appropriate answer based on prompt type.
@@ -1697,8 +2301,22 @@ class ECGAnswerGenerator:
             base_answer = self.generate_interpretation_answer(row)
         
         elif prompt_category == 'heart_rate':
-            # Heart rate is its own category now
+            # Heart rate is its own category (legacy support)
             base_answer = self.generate_heart_rate_answer(row)
+        
+        elif prompt_category == 'intervals':
+            # Handle interval questions (legacy support)
+            base_answer = self.generate_intervals_answer(row)
+        
+        elif prompt_category == 'ecg_interval':
+            # Combined heart rate and interval questions
+            prompt_text = row.get('prompt', '').lower()
+            # Determine if asking about heart rate or intervals
+            if any(term in prompt_text for term in ['heart rate', 'hr', 'ventricular rate', 'pulse', 'bpm', 'beating']):
+                base_answer = self.generate_heart_rate_answer(row)
+            else:
+                # It's an interval question (PR, QT, QTc)
+                base_answer = self.generate_intervals_answer(row)
         
         elif 'demographic' in prompt_category:
             # Extract the demographic type (e.g., 'demographic_gender' -> 'gender')
@@ -1721,6 +2339,21 @@ class ECGAnswerGenerator:
         
         elif 'random_finding' in prompt_category:
             base_answer = self.generate_random_finding_answer(row)
+        
+        elif 'structural_heart_disease' in prompt_category:
+            base_answer = self.generate_structural_heart_disease_answer(row)
+        
+        elif 'lvef' in prompt_category:
+            base_answer = self.generate_lvef_answer(row)
+        
+        elif 'acs_severity' in prompt_category:
+            base_answer = self.generate_acs_severity_answer(row)
+        
+        elif 'culprit_artery' in prompt_category:
+            base_answer = self.generate_culprit_artery_answer(row)
+        
+        elif 'afib_risk' in prompt_category:
+            base_answer = self.generate_afib_risk_answer(row)
         
         else:
             # Default to interpretation

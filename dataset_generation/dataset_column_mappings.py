@@ -111,10 +111,14 @@ PTBXL_COLUMNS = {
 }
 
 
+# MHI dataset columns - uses same column names as MIMIC since the data is preprocessed
+MHI_COLUMNS = MIMIC_COLUMNS.copy()
+
 # Dataset registry
 DATASET_MAPPINGS = {
     "mimic": MIMIC_COLUMNS,
     "ptbxl": PTBXL_COLUMNS,
+    "mhi": MHI_COLUMNS,
     # "cpsc": CPSC_COLUMNS,  # Uncomment when CPSC mappings are defined
 }
 

@@ -40,6 +40,16 @@ from utils.metrics.llm_metrics import (
 from utils.metrics.category_metrics import CategoryMetricsCalculator
 from runners.base_runner import BaseRunner
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+from utils.plot_validation_ecgs import (
+    DEFAULT_PARQUET_PATH as VALIDATION_PLOT_PARQUET_PATH,
+    load_parquet_mapping,
+    compute_ecg_score,
+    select_tiered_ecg_samples,
+    build_parquet_lookup,
+    resolve_ecg_source,
+    determine_plotter_params,
+    clean_chat_artifacts,
+)
 
 import random
 from tqdm import tqdm
@@ -1810,147 +1820,149 @@ class LLMFinetuningRunner(BaseRunner):
             traceback.print_exc()
     
     def _plot_validation_ecgs(self, epoch: int, json_path: str) -> None:
-        """
-        Plot ECG waveforms with Q&A annotations for validation results.
-        Selects 6 ECGs based on strategy: 2 worst, 2 random, 2 best.
-        
-        Args:
-            epoch: Current epoch number
-            json_path: Path to validation JSON file
-        """
+        """Plot ECG waveforms with Q&A annotations for validation results."""
         if not self.config.plot_validation_ecgs or not self.config.is_ref_device:
             return
-        
+
         try:
-            # Import plotter only when needed
             from ecg_plotter.core import NPYECGPlotter
             import wandb
-            
-            # Load validation JSON
+
             with open(json_path, 'r', encoding='utf-8') as f:
                 val_data = json.load(f)
-            
+
             if not val_data:
                 print("No validation data to plot")
                 return
-            
-            # Calculate scores for each ECG based on generated vs ground truth
-            ecg_scores = []
+
+            parquet_df = load_parquet_mapping(VALIDATION_PLOT_PARQUET_PATH)
+            parquet_lookup = build_parquet_lookup(parquet_df) if parquet_df is not None else {}
+
+            scored_ecgs: list[dict[str, Any]] = []
+            missing_lookup: list[str] = []
             for ecg_name, ecg_info in val_data.items():
-                # Simple scoring based on exact match (could be enhanced with metrics)
-                generated = ecg_info.get('Generation', '').lower()
-                ground_truth = ecg_info.get('Ground truth', '').lower()
-                
-                # Simple score: 1 if exact match, 0 otherwise
-                # Could be enhanced with ROUGE/BLEU scores
-                score = 1.0 if generated == ground_truth else 0.0
-                
-                # Check for critical misses (e.g., missing STEMI)
-                if 'stemi' in ground_truth and 'stemi' not in generated:
-                    score = -1.0  # Very bad miss
-                elif 'urgent' in ground_truth and 'no' in generated:
-                    score = -0.5  # Bad miss
-                    
-                ecg_scores.append((ecg_name, score, ecg_info))
-            
-            # Sort by score
-            ecg_scores.sort(key=lambda x: x[1])
-            
-            # Select ECGs based on strategy
-            selected_ecgs = []
-            if self.config.plot_selection_strategy == "worst_random_best":
-                # 2 worst
-                selected_ecgs.extend(ecg_scores[:2])
-                # 2 random from middle
-                middle_start = len(ecg_scores) // 3
-                middle_end = 2 * len(ecg_scores) // 3
-                if middle_end > middle_start:
-                    random_indices = random.sample(
-                        range(middle_start, middle_end), 
-                        min(2, middle_end - middle_start)
-                    )
-                    selected_ecgs.extend([ecg_scores[i] for i in random_indices])
-                # 2 best
-                selected_ecgs.extend(ecg_scores[-2:])
-            elif self.config.plot_selection_strategy == "random":
-                # Random selection
-                num_to_select = min(self.config.num_validation_plots, len(ecg_scores))
-                selected_ecgs = random.sample(ecg_scores, num_to_select)
-            else:
-                # Take first N
-                selected_ecgs = ecg_scores[:self.config.num_validation_plots]
-            
-            # Create plots
+                score, metric_name = compute_ecg_score(ecg_info)
+                ecg_path, dataset_label = resolve_ecg_source(
+                    ecg_name,
+                    ecg_info,
+                    parquet_lookup
+                )
+
+                if not ecg_path:
+                    missing_lookup.append(ecg_name)
+                    continue
+
+                scored_ecgs.append({
+                    "name": ecg_name,
+                    "score": score,
+                    "metric": metric_name,
+                    "data": ecg_info,
+                    "path": ecg_path,
+                    "dataset": dataset_label,
+                })
+
+            if missing_lookup:
+                print(
+                    f"Skipping {len(missing_lookup)} ECGs without matching parquet entries"
+                )
+
+            if not scored_ecgs:
+                print("No scored ECGs with resolvable paths available for plotting")
+                return
+
+            total_requested = min(self.config.num_validation_plots, len(scored_ecgs))
+            if total_requested <= 0:
+                return
+
+            selected_ecgs = select_tiered_ecg_samples(scored_ecgs, total_requested)
+
             plot_images = []
-            plot_dir = os.path.join(self._get_val_generations_dir(), f"ecg_plots_epoch_{epoch}")
+            plot_dir = os.path.join(
+                self._get_val_generations_dir(),
+                f"ecg_plots_epoch_{epoch}"
+            )
             os.makedirs(plot_dir, exist_ok=True)
-            
-            for i, (ecg_name, score, ecg_info) in enumerate(selected_ecgs):
+
+            for idx, item in enumerate(selected_ecgs):
+                ecg_name = item["name"]
+                score = item["score"]
+                metric_name = item.get("metric")
+                tier_label = item.get("tier")
+                ecg_info = item["data"]
+
+                ecg_path = item.get("path")
+                dataset_label = item.get("dataset")
+
+                if not ecg_path or not os.path.exists(ecg_path):
+                    print(f"ECG file not found for {ecg_name}: {ecg_path}")
+                    continue
+
+                plot_dataset, fft_normalized, normalized_dataset = determine_plotter_params(dataset_label)
+
+                plotter = NPYECGPlotter(
+                    npy_path=ecg_path,
+                    dataset=plot_dataset,
+                    out_dir=plot_dir,
+                    width=2500,
+                    fft_normalized=fft_normalized
+                )
+
+                question = clean_chat_artifacts(ecg_info.get('Question', 'N/A'))[:100]
+                generated = clean_chat_artifacts(ecg_info.get('Generation', 'N/A'))[:150]
+                ground_truth = clean_chat_artifacts(ecg_info.get('Ground truth', 'N/A'))[:150]
+
+                if len(generated) > 150:
+                    generated = generated[:147] + "..."
+                if len(ground_truth) > 150:
+                    ground_truth = ground_truth[:147] + "..."
+
+                metadata_bits: list[str] = []
+                if tier_label:
+                    metadata_bits.append(tier_label.upper())
+                metadata_bits.append(f"score={score:.3f}")
+                if metric_name:
+                    metadata_bits.append(metric_name)
+                if normalized_dataset:
+                    metadata_bits.append(f"dataset={normalized_dataset}")
+
+                heading = " | ".join(metadata_bits)
+                title = (
+                    f"Epoch {epoch} - [{heading}] ECG: {ecg_name}\n"
+                    f"Q: {question}\n"
+                    f"Generated: {generated}\n"
+                    f"Ground Truth: {ground_truth}"
+                )
+
                 try:
-                    # Get ECG path from parquet if available
-                    ecg_path = ecg_info.get('waveform_path')
-                    if not ecg_path:
-                        # Try to reconstruct path for MIMIC dataset
-                        ecg_path = f"/media/data1/datasets/MIMIC-IV/adjusted_signals/test/{ecg_name}"
-                    
-                    if not os.path.exists(ecg_path):
-                        print(f"ECG file not found: {ecg_path}")
-                        continue
-                    
-                    # Create plotter with FFT normalization for MIMIC
-                    plotter = NPYECGPlotter(
-                        npy_path=ecg_path,
-                        dataset="MIMICIV",
-                        out_dir=plot_dir,
-                        width=2500,
-                        fft_normalized=True  # CRITICAL for MIMIC preprocessed data - auto-calculates amplitude
-                    )
-                    
-                    # Format Q&A for title
-                    question = ecg_info.get('Question', 'N/A')[:100]
-                    generated = ecg_info.get('Generation', 'N/A')[:150]
-                    ground_truth = ecg_info.get('Ground truth', 'N/A')[:150]
-                    
-                    if len(generated) > 150:
-                        generated = generated[:147] + "..."
-                    if len(ground_truth) > 150:
-                        ground_truth = ground_truth[:147] + "..."
-                    
-                    title = f"ECG: {ecg_name} (Score: {score:.2f})\n"
-                    title += f"Q: {question}\n"
-                    title += f"Generated: {generated}\n"
-                    title += f"Ground Truth: {ground_truth}"
-                    
-                    # Plot without auto-save
                     img, _ = plotter.plot_ecg(
                         title=title,
                         save=False,
                         anonymize=True,
                         show_diagnosis=False
                     )
-                    
-                    if img:
-                        # Save with meaningful name
-                        category = "worst" if i < 2 else ("random" if i < 4 else "best")
-                        save_path = os.path.join(
-                            plot_dir, 
-                            f"{category}_{i:02d}_{ecg_name.replace('.npy', '')}.png"
-                        )
-                        img.save(save_path, dpi=(240, 240))
-                        plot_images.append(wandb.Image(img, caption=f"{category}: {ecg_name}"))
-                        print(f"✓ Plotted ECG {i+1}/{len(selected_ecgs)}: {save_path}")
-                        
-                except Exception as e:
-                    print(f"Failed to plot ECG {ecg_name}: {e}")
+                except Exception as plot_err:
+                    print(f"Failed to plot ECG {ecg_name}: {plot_err}")
                     continue
-            
-            # Log to wandb as a grid
+
+                if not img:
+                    continue
+
+                safe_tier = tier_label or "sample"
+                save_path = os.path.join(
+                    plot_dir,
+                    f"{safe_tier}_{idx:02d}_{ecg_name.replace('.npy', '')}.png"
+                )
+                img.save(save_path, dpi=(240, 240))
+                caption = f"{safe_tier}: {ecg_name} ({score:.3f})"
+                plot_images.append(wandb.Image(img, caption=caption))
+                print(f"✓ Plotted ECG {idx + 1}/{len(selected_ecgs)}: {save_path}")
+
             if plot_images and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
                 self.wandb_wrapper.log({
                     f"val/ecg_plots_epoch_{epoch}": plot_images
                 })
                 print(f"✓ Logged {len(plot_images)} ECG plots to WandB")
-                
+
         except Exception as e:
             print(f"Error in ECG plotting: {e}")
             traceback.print_exc()

@@ -65,14 +65,14 @@ class ECGPromptMaker:
             "CONDUCTION": [
                 "Are there any conduction abnormalities?",
                 "Is there any heart block present?",
-                "What is the PR interval and QRS duration?",
                 "Are there any bundle branch blocks?",
                 "Is AV conduction normal?",
                 "Can you assess the conduction system?",
                 "Is there any conduction delay?",
                 "What type of block is present if any?",
-                "Are the intervals within normal limits?",
-                "Is there evidence of pre-excitation?"
+                "Is there evidence of pre-excitation?",
+                "Are there any fascicular blocks?",
+                "Is there AV dissociation?"
             ],
             "INFARCT, ISCHEMIA": [
                 "Are there signs of ischemia or infarction?",
@@ -181,32 +181,69 @@ class ECGPromptMaker:
             "Output ECG interpretation in JSON format only"
         ]
         
-        # New demographic prompts
-        self.demographic_prompts = {
-            "GENDER": [
-                "What is the patient's gender?",
-                "Is this ECG from a male or female patient?",
-                "What is the sex of the patient?",
-                "Can you tell me the patient's gender?",
-                "Is the patient male or female?"
-            ],
-            "AGE": [
-                "What is the patient's age?",
-                "How old is the patient?",
-                "What is the age of this patient?",
-                "Can you tell me the patient's age?",
-                "What age is the patient?"
-            ],
-            "HEART_RATE": [
-                "What is the heart rate?",
-                "What is the patient's heart rate?",
-                "What is the ventricular rate?",
-                "Can you tell me the heart rate in bpm?",
-                "What is the HR?",
-                "How fast is the heart beating?",
-                "What's the pulse rate?"
-            ]
-        }
+        # ECG interval prompts (heart rate and intervals combined)
+        self.ecg_interval_prompts = [
+            # Heart rate questions
+            "What is the heart rate?",
+            "What is the patient's heart rate?",
+            "What is the ventricular rate?",
+            "Can you tell me the heart rate in bpm?",
+            "What is the HR?",
+            "How fast is the heart beating?",
+            "What's the pulse rate?",
+            # PR interval questions
+            "What is the PR interval?",
+            # QT interval questions
+            "What is the QT interval?",
+            "What is the corrected QT interval (QTc)?",
+            "Is the QT interval prolonged?",
+            "What are the PR and QT intervals?",
+            "Are the intervals normal or abnormal?",
+            "What is the QTc using Bazett's formula?",
+            "What is the QTc using Fridericia's formula?",
+            "Is there QT prolongation present?"
+        ]
+        
+        # Structural heart disease prompts (MHI only - using echonext_shd)
+        self.structural_heart_disease_prompts = [
+            "Does this patient have structural heart disease?",
+            "Is there evidence of structural heart disease in this patient?",
+            "Based on echocardiography data, does the patient have structural heart disease?"
+        ]
+        
+        # LVEF prompts (MHI only - using deepecho_Visually_Estimated_EF)
+        self.lvef_prompts = [
+            "What is the patient's left ventricular ejection fraction?",
+            "What is the LVEF based on echocardiography?",
+            "What is the ejection fraction?",
+            "Can you tell me the patient's EF?",
+            "What is the left ventricular function?"
+        ]
+        
+        # ACS severity prompts (MHI only - using acs_condition_severity)
+        self.acs_severity_prompts = [
+            "Is there a STEMI or is there an acute coronary occlusion?",
+            "Does this patient have an acute coronary syndrome requiring urgent intervention?",
+            "Is there evidence of an acute coronary occlusion?",
+            "Is there an acute myocardial infarction due to coronary occlusion?"
+        ]
+        
+        # Culprit artery prompts (MHI only - follow-up when acute occlusion present)
+        self.culprit_artery_prompts = [
+            "What is the culprit artery?",
+            "Which coronary artery is occluded?",
+            "What is the location of the coronary occlusion?",
+            "Which vessel is the culprit for this acute coronary syndrome?"
+        ]
+        
+        # AFib risk prompts (MHI only - using afib_label_2y and afib_label_5y)
+        self.afib_risk_prompts = [
+            "What is the patient's risk of developing atrial fibrillation?",
+            "Is this patient at risk for incident AFib?",
+            "What is the likelihood of developing AFib in the next 2-5 years?",
+            "Will this patient develop atrial fibrillation in the future?",
+            "What is the patient's future AFib risk?"
+        ]
         
         # Random YES/NO ECG finding questions (seed 42 for reproducibility)
         self.random_finding_prompts = [
@@ -315,12 +352,26 @@ class ECGPromptMaker:
                     condition.lower().replace(' ', '_')
                 ]
                 
+                # Also check for _bert_model columns (MHI dataset)
+                bert_col = f"{condition}_bert_model"
+                if bert_col in row.index:
+                    col_names.append(bert_col)
+                
                 for col in col_names:
                     if col in row.index:
                         try:
-                            if pd.notna(row[col]) and float(row[col]) >= 1:
-                                active[category].append(condition)
-                                break
+                            value = row[col]
+                            if pd.notna(value):
+                                # For _bert_model columns (MHI), use 0.5 threshold
+                                if col.endswith('_bert_model'):
+                                    if float(value) > 0.5:
+                                        active[category].append(condition)
+                                        break
+                                # For regular columns, use >= 1 threshold
+                                else:
+                                    if float(value) >= 1:
+                                        active[category].append(condition)
+                                        break
                         except (ValueError, TypeError):
                             continue
         
@@ -342,37 +393,79 @@ class ECGPromptMaker:
         # Check each column for localization info
         for col in row.index:
             try:
-                if pd.notna(row[col]) and float(row[col]) >= 1:
+                value = row[col]
+                # Handle _bert_model columns (MHI) with 0.5 threshold
+                if col.endswith('_bert_model'):
+                    col_str = col.replace('_bert_model', '')  # Remove suffix for pattern matching
+                    if pd.notna(value) and float(value) > 0.5:
+                        pass  # Will process below
+                    else:
+                        continue
+                # Regular columns with >= 1 threshold
+                elif pd.notna(value) and float(value) >= 1:
                     col_str = str(col)
+                else:
+                    continue
                 
-                    # Extract location from parentheses
-                    if '(' in col_str and ')' in col_str:
-                        location = col_str[col_str.find('(')+1:col_str.find(')')]
-                        
-                        if 'Q wave' in col_str:
-                            localization_findings['Q_WAVE'].append(location)
-                        elif 'ST elevation' in col_str:
-                            localization_findings['ST_ELEVATION'].append(location)
-                        elif 'ST depression' in col_str:
-                            localization_findings['ST_DEPRESSION'].append(location)
-                        elif 'T wave' in col_str:
-                            localization_findings['T_WAVE'].append(location)
+                # Extract location from parentheses
+                if '(' in col_str and ')' in col_str:
+                    location = col_str[col_str.find('(')+1:col_str.find(')')]
                     
-                    # Check for axis deviation
-                    if 'axis deviation' in col_str.lower():
-                        if 'left' in col_str.lower():
-                            localization_findings['QRS_AXIS'].append('Left axis deviation')
-                        elif 'right' in col_str.lower():
-                            localization_findings['QRS_AXIS'].append('Right axis deviation')
-                        elif 'extreme' in col_str.lower() or 'northwest' in col_str.lower():
-                            localization_findings['QRS_AXIS'].append('Extreme axis deviation')
-                    elif 'normal axis' in col_str.lower():
-                        localization_findings['QRS_AXIS'].append('Normal axis')
+                    if 'Q wave' in col_str:
+                        localization_findings['Q_WAVE'].append(location)
+                    elif 'ST elevation' in col_str:
+                        localization_findings['ST_ELEVATION'].append(location)
+                    elif 'ST depression' in col_str:
+                        localization_findings['ST_DEPRESSION'].append(location)
+                    elif 'T wave' in col_str:
+                        localization_findings['T_WAVE'].append(location)
+                
+                # Check for axis deviation
+                if 'axis deviation' in col_str.lower():
+                    if 'left' in col_str.lower():
+                        localization_findings['QRS_AXIS'].append('Left axis deviation')
+                    elif 'right' in col_str.lower():
+                        localization_findings['QRS_AXIS'].append('Right axis deviation')
+                    elif 'extreme' in col_str.lower() or 'northwest' in col_str.lower():
+                        localization_findings['QRS_AXIS'].append('Extreme axis deviation')
+                elif 'normal axis' in col_str.lower():
+                    localization_findings['QRS_AXIS'].append('Normal axis')
             except (ValueError, TypeError):
                 continue
         
         # Remove empty categories
         return {k: v for k, v in localization_findings.items() if v}
+    
+    def _generate_special_question_for_ecg(self, row: pd.Series) -> Tuple[str, str, float]:
+        """
+        Generate ONE special question for ECGs marked as having special questions.
+        This ensures marked ECGs ALWAYS get their special question.
+        """
+        # Check which special data this ECG has and return the first available
+        
+        # 1. Check AFib risk
+        if ('afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and
+            'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y'))):
+            afib_prompt = random.choice(self.afib_risk_prompts)
+            return (afib_prompt, 'afib_risk', 1.0)
+        
+        # 2. Check SHD
+        if 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')):
+            shd_prompt = random.choice(self.structural_heart_disease_prompts)
+            return (shd_prompt, 'structural_heart_disease', 1.0)
+        
+        # 3. Check LVEF
+        if 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')):
+            lvef_prompt = random.choice(self.lvef_prompts)
+            return (lvef_prompt, 'lvef', 1.0)
+        
+        # 4. Check ACS
+        if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
+            acs_prompt = random.choice(self.acs_severity_prompts)
+            return (acs_prompt, 'acs_severity', 1.0)
+        
+        # Fallback - should not happen if marking is correct
+        return None
     
     def generate_prompts_for_ecg(self, row: pd.Series) -> List[Tuple[str, str, float]]:
         """
@@ -380,6 +473,14 @@ class ECGPromptMaker:
         Returns list of (prompt, category, weight) tuples.
         """
         prompts = []
+        
+        # PRIORITY: If this ECG is marked for special questions AND we're limited to 1 prompt
+        # Then ONLY generate the special question
+        if 'has_special_question' in row.index and row.get('has_special_question') == True:
+            special_q = self._generate_special_question_for_ecg(row)
+            if special_q:
+                # When limited to 1 prompt per ECG, return ONLY the special question
+                return [special_q]
         
         # Get ECG characteristics
         ecg_type = row.get('ecg_type', 'unknown')
@@ -436,28 +537,28 @@ class ECGPromptMaker:
         class_weight = 0.8 if ecg_type == 'pathological' else 0.6 if ecg_type == 'borderline' else 0.4
         prompts.append((class_prompt, 'classification', class_weight))
         
-        # 5. Add demographic prompts - ALWAYS include heart rate if available
-        demographic_types = []
+        # 5. Add ECG interval questions (heart rate + intervals) with 5% probability
+        has_ecg_data = False
         
-        # Check if demographic data is available
-        if 'gender' in row.index and pd.notna(row.get('gender')):
-            demographic_types.append('GENDER')
-        if 'age_at_ecg' in row.index and pd.notna(row.get('age_at_ecg')):
-            demographic_types.append('AGE')
-        
-        # Add heart rate question with only 2% probability (reduced from always including it)
+        # Check if we have heart rate data
         if 'rr_interval' in row.index and pd.notna(row.get('rr_interval')):
-            if random.random() < 0.02:  # Only 2% chance to include heart rate question
-                hr_prompt = random.choice(self.demographic_prompts['HEART_RATE'])
-                prompts.append((hr_prompt, 'heart_rate', 0.7))  # Heart rate as its own category
+            has_ecg_data = True
+        # Check for MHI VentricularRate
+        elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+            has_ecg_data = True
+        # Check for interval data - MHI dataset
+        elif any('RestingECG' in str(col) and 'Interval' in str(col) for col in row.index):
+            has_ecg_data = True
+        # For MIMIC, check if we have onset/offset columns to calculate
+        elif any(col in row.index for col in ['p_onset', 'qrs_onset', 't_end']):
+            has_ecg_data = True
+        # Check if PR/QT interval columns exist directly
+        elif any(col in row.index for col in ['pr_interval', 'qt_interval', 'qtc_interval']):
+            has_ecg_data = True
         
-        # Add other demographic questions with only 2% probability (gender, age)
-        if demographic_types:
-            # Only 2% chance to add demographic question (gender or age)
-            if random.random() < 0.02:
-                selected_type = random.choice(demographic_types)
-                demo_prompt = random.choice(self.demographic_prompts[selected_type])
-                prompts.append((demo_prompt, f'demographic_{selected_type.lower()}', 0.6))
+        if has_ecg_data and random.random() < 0.05:  # 5% chance to include ecg_interval question
+            ecg_interval_prompt = random.choice(self.ecg_interval_prompts)
+            prompts.append((ecg_interval_prompt, 'ecg_interval', 0.8))
         
         # 6. For complex ECGs with multiple categories, add an extra focused prompt
         if num_active_categories >= 3:
@@ -496,6 +597,88 @@ class ECGPromptMaker:
                 selected_question = self.random_finding_prompts[question_idx]
                 prompts.append((selected_question, 'random_finding_question', 0.85))
         
+        # 7. Add structural heart disease questions for MHI dataset (if echonext_shd is present)
+        # These questions don't affect the normal ECG percentage
+        if 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')):
+            # Check if this is MHI data (has MHI-specific columns or dataset indicator)
+            is_mhi = False
+            if 'dataset' in row.index and row.get('dataset') == 'mhi':
+                is_mhi = True
+            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
+                is_mhi = True
+            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+                is_mhi = True  # This column is MHI-specific
+            
+            if is_mhi:
+                # Add with 5% probability to achieve ~5% overall
+                if random.random() < 0.05:
+                    shd_prompt = random.choice(self.structural_heart_disease_prompts)
+                    prompts.append((shd_prompt, 'structural_heart_disease', 0.95))
+        
+        # 8. Add LVEF questions for MHI dataset (if deepecho_Visually_Estimated_EF is present)
+        if 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')):
+            # Check if this is MHI data
+            is_mhi = False
+            if 'dataset' in row.index and row.get('dataset') == 'mhi':
+                is_mhi = True
+            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
+                is_mhi = True
+            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+                is_mhi = True
+            
+            if is_mhi:
+                # Add with 2% probability
+                if random.random() < 0.02:
+                    lvef_prompt = random.choice(self.lvef_prompts)
+                    prompts.append((lvef_prompt, 'lvef', 0.95))
+        
+        # 9. Add ACS questions for MHI dataset (if acs_condition_severity is present)
+        if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
+            # Check if this is MHI data
+            is_mhi = False
+            if 'dataset' in row.index and row.get('dataset') == 'mhi':
+                is_mhi = True
+            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
+                is_mhi = True
+            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+                is_mhi = True
+            
+            if is_mhi:
+                # Add with 10% probability to achieve ~5% overall (since many ECGs have ACS data)
+                if random.random() < 0.10:
+                    acs_prompt = random.choice(self.acs_severity_prompts)
+                    prompts.append((acs_prompt, 'acs_severity', 0.98))  # High priority for acute conditions
+                    
+                    # Check if it's an acute occlusion to add culprit artery question
+                    from utils.constants import ACS_ACUTE_CONDITIONS
+                    acs_condition = row.get('acs_condition_severity')
+                    
+                    # If it's an acute occlusion and we have PCI regions data, add culprit artery question
+                    if (acs_condition in ACS_ACUTE_CONDITIONS and 
+                        'acs_pci_regions' in row.index and 
+                        pd.notna(row.get('acs_pci_regions'))):
+                        # Add culprit artery follow-up question
+                        culprit_prompt = random.choice(self.culprit_artery_prompts)
+                        prompts.append((culprit_prompt, 'culprit_artery', 0.97))
+        
+        # 10. Add AFib risk questions for MHI dataset (if afib_label_2y and afib_label_5y are present)
+        if ('afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and
+            'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y'))):
+            # Check if this is MHI data
+            is_mhi = False
+            if 'dataset' in row.index and row.get('dataset') == 'mhi':
+                is_mhi = True
+            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
+                is_mhi = True
+            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
+                is_mhi = True
+            
+            if is_mhi:
+                # Add with 2.5% probability to achieve max 5% overall (since AFib data is very common)
+                if random.random() < 0.025:
+                    afib_risk_prompt = random.choice(self.afib_risk_prompts)
+                    prompts.append((afib_risk_prompt, 'afib_risk', 0.95))
+        
         return prompts
     
     def process_dataframe(self, df: pd.DataFrame, max_prompts_per_ecg: int = 5) -> pd.DataFrame:
@@ -515,7 +698,7 @@ class ECGPromptMaker:
             # Generate prompts for this ECG
             prompts = self.generate_prompts_for_ecg(row)
             
-            # Limit to max_prompts_per_ecg
+            # Apply max_prompts_per_ecg limit to all ECGs equally
             if len(prompts) > max_prompts_per_ecg:
                 # Sort by weight and take top N
                 prompts = sorted(prompts, key=lambda x: x[2], reverse=True)[:max_prompts_per_ecg]

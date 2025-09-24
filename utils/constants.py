@@ -1433,3 +1433,55 @@ DEEPECG_PATHOLOGICAL_LIMIT = {
         ]
     }
 }
+
+# ACS Artery Mapping from French nomenclature to standard English names
+ACS_ARTERY_MAPPING = {
+    # Main coronary arteries
+    'IVA': 'LAD',  # Interventricular Anterior -> Left Anterior Descending
+    'IVA I': 'Proximal LAD',
+    'IVA II': 'Mid LAD',
+    'IVA III': 'Distal LAD',
+    
+    'CD': 'RCA',  # Coronary Droite -> Right Coronary Artery
+    'CD I': 'Proximal RCA',
+    'CD II': 'Mid RCA',
+    'CD III': 'Distal RCA',
+    
+    'Cx': 'Circumflex',  # Circonflexe -> Circumflex
+    'Cx I': 'Proximal Circumflex',
+    'Cx II': 'Mid Circumflex', 
+    'Cx III': 'Distal Circumflex',
+    
+    'Tronc commun': 'Left Main',
+    
+    # Branch arteries
+    'Bissectrice': 'Ramus',  # Intermediate branch
+    'Marginale': 'Obtuse Marginal',
+    'Marginale 1': 'First Obtuse Marginal',
+    'Marginale 2': 'Second Obtuse Marginal',
+    'Marginale 3': 'Third Obtuse Marginal',
+    'Marginal Dt': 'Right Marginal',
+    
+    'Diagonale': 'Diagonal',
+    'Diagonale 1': 'First Diagonal',
+    'Diagonale 2': 'Second Diagonal',
+    'Diagonale 3': 'Third Diagonal',
+    
+    'IVP': 'PDA',  # Interventricular Posterior -> Posterior Descending Artery
+    'RVP': 'Right Posterior Ventricular',
+    'LVP': 'Left Posterior Ventricular',
+    'RVG': 'Right Ventricular Branch',
+    'RVG 1': 'First Right Ventricular Branch',
+    'RVG 2': 'Second Right Ventricular Branch',
+    
+    'Septale': 'Septal',
+    'Septale 1': 'First Septal',
+    
+    'Saphène ou mammaire': 'Saphenous or Mammary Graft'
+}
+
+# ACS conditions that indicate acute coronary occlusion
+ACS_ACUTE_CONDITIONS = [
+    'Acute Complete Coronary Occlusion',
+    'Acute Incomplete Coronary Occlusion'
+]

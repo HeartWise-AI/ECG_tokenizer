@@ -76,8 +76,8 @@ lora_config:
     - up_proj
     - down_proj
   bias: "none"
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_qa_0k.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_qa_0k.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_train_qa_m200k_h200k.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_test_qa_m5k_h5k.parquet"
 prompt_column: "prompt"
 answer_column: "generated_answer"
 category_column: "prompt_category"
