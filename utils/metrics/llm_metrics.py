@@ -452,12 +452,169 @@ def update_random_batch_metric(
         random_list.append(entry)
 
 
-# Compatibility functions for offline evaluation
+# Enhanced offline evaluation functions
+def compute_bertscore_offline(
+    predictions: List[str],
+    references: List[str],
+    model_type: str = "microsoft/deberta-xlarge-mnli",
+    batch_size: int = 32,
+    device: Optional[str] = None
+) -> Dict[str, float]:
+    """
+    Compute BERTScore directly from text strings using bert_score library.
+    
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts
+        model_type: BERTScore model to use
+        batch_size: Batch size for computation
+        device: Device to run on ('cuda' or 'cpu')
+    
+    Returns:
+        Dictionary with precision, recall, and F1 scores
+    """
+    try:
+        from bert_score import score
+    except ImportError:
+        warnings.warn("bert-score not installed. Install with: pip install bert-score")
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Filter empty strings
+    valid_pairs = [(p, r) for p, r in zip(predictions, references) if p.strip() and r.strip()]
+    if not valid_pairs:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    
+    valid_preds, valid_refs = zip(*valid_pairs)
+    
+    P, R, F1 = score(
+        list(valid_preds),
+        list(valid_refs),
+        lang='en',
+        model_type=model_type,
+        verbose=False,
+        device=device,
+        batch_size=batch_size
+    )
+    
+    return {
+        "precision": float(torch.mean(P).item()),
+        "recall": float(torch.mean(R).item()),
+        "f1": float(torch.mean(F1).item()),
+        "n_samples": len(valid_preds)
+    }
+
+
+def compute_bertscore_by_category(
+    predictions: List[str],
+    references: List[str],
+    categories: List[str],
+    model_type: str = "microsoft/deberta-xlarge-mnli",
+    batch_size: int = 32,
+    min_samples: int = 5
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute BERTScore grouped by category.
+    
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts
+        categories: List of category labels (same length as predictions)
+        model_type: BERTScore model to use
+        batch_size: Batch size for computation
+        min_samples: Minimum samples per category to compute score
+    
+    Returns:
+        Dictionary mapping category to scores
+    """
+    from collections import defaultdict
+    
+    # Group by category
+    category_data = defaultdict(lambda: {'predictions': [], 'references': []})
+    for pred, ref, cat in zip(predictions, references, categories):
+        if pred.strip() and ref.strip():
+            category_data[cat]['predictions'].append(pred)
+            category_data[cat]['references'].append(ref)
+    
+    results = {}
+    for category, data in category_data.items():
+        if len(data['predictions']) >= min_samples:
+            scores = compute_bertscore_offline(
+                data['predictions'],
+                data['references'],
+                model_type=model_type,
+                batch_size=batch_size
+            )
+            results[category] = scores
+    
+    return results
+
+
+def compute_bertscore_by_dataset(
+    predictions: List[str],
+    references: List[str],
+    filenames: List[str],
+    model_type: str = "microsoft/deberta-xlarge-mnli",
+    batch_size: int = 32
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute BERTScore grouped by dataset (MIMIC vs MHI based on filename pattern).
+    
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts  
+        filenames: List of filenames to identify dataset
+        model_type: BERTScore model to use
+        batch_size: Batch size for computation
+    
+    Returns:
+        Dictionary with MIMIC and MHI scores
+    """
+    mimic_data = {'predictions': [], 'references': []}
+    mhi_data = {'predictions': [], 'references': []}
+    
+    for pred, ref, fname in zip(predictions, references, filenames):
+        if pred.strip() and ref.strip():
+            # Identify dataset based on filename pattern
+            if fname.startswith('4'):
+                mimic_data['predictions'].append(pred)
+                mimic_data['references'].append(ref)
+            elif fname.startswith('0'):
+                mhi_data['predictions'].append(pred)
+                mhi_data['references'].append(ref)
+    
+    results = {}
+    
+    if mimic_data['predictions']:
+        results['MIMIC'] = compute_bertscore_offline(
+            mimic_data['predictions'],
+            mimic_data['references'],
+            model_type=model_type,
+            batch_size=batch_size
+        )
+    
+    if mhi_data['predictions']:
+        results['MHI'] = compute_bertscore_offline(
+            mhi_data['predictions'],
+            mhi_data['references'],
+            model_type=model_type,
+            batch_size=batch_size
+        )
+    
+    return results
+
+
 def compute_metrics_for_texts(
     predictions: List[str],
     references: List[str],
-    metrics: List[str] = ["rouge", "bleu", "meteor", "bertscore"]
-) -> Dict[str, float]:
+    metrics: List[str] = ["rouge", "bleu", "meteor", "bertscore"],
+    categories: Optional[List[str]] = None,
+    filenames: Optional[List[str]] = None,
+    compute_category_scores: bool = False,
+    compute_dataset_scores: bool = False
+) -> Dict[str, Union[float, Dict]]:
     """
     Compute metrics directly from text strings (for offline evaluation).
     
@@ -465,49 +622,174 @@ def compute_metrics_for_texts(
         predictions: List of predicted texts
         references: List of reference texts
         metrics: List of metric names to compute
+        categories: Optional list of category labels
+        filenames: Optional list of filenames for dataset identification
+        compute_category_scores: Whether to compute per-category scores
+        compute_dataset_scores: Whether to compute per-dataset scores
     
     Returns:
         Dictionary of metric scores
     """
-    results = {}
+    results = {"overall": {}}
     
-    # Create dummy tokenizer for compatibility
-    from transformers import AutoTokenizer
-    dummy_tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    
-    # Tokenize texts to create dummy tensors
-    pred_ids = [dummy_tokenizer.encode(p, add_special_tokens=False) for p in predictions]
-    ref_ids = [dummy_tokenizer.encode(r, add_special_tokens=False) for r in references]
-    
-    # Pad to same length
-    max_len = max(max(len(p) for p in pred_ids), max(len(r) for r in ref_ids))
-    pred_ids = [p + [dummy_tokenizer.pad_token_id] * (max_len - len(p)) for p in pred_ids]
-    ref_ids = [r + [-100] * (max_len - len(r)) for r in ref_ids]
-    
-    # Convert to tensors
-    pred_tensor = torch.tensor(pred_ids)
-    ref_tensor = torch.tensor(ref_ids)
-    
+    # Compute overall metrics
     for metric in metrics:
         if metric == "rouge":
-            metric_obj = RougeMetric()
-            scores = metric_obj.compute_score(pred_tensor, ref_tensor, dummy_tokenizer)
-            results["rouge1"] = scores["rouge1"]
-            results["rougeL"] = scores["rougeL"]
+            try:
+                from evaluate import load as load_metric
+                rouge_metric = load_metric("rouge")
+                rouge_scores = rouge_metric.compute(
+                    predictions=predictions,
+                    references=references,
+                    use_stemmer=True,
+                    use_aggregator=True
+                )
+                results["overall"]["rouge1"] = float(rouge_scores["rouge1"])
+                results["overall"]["rougeL"] = float(rouge_scores["rougeL"])
+            except Exception as e:
+                warnings.warn(f"ROUGE computation failed: {e}")
+                results["overall"]["rouge1"] = 0.0
+                results["overall"]["rougeL"] = 0.0
+                
         elif metric == "bleu":
-            metric_obj = SacreBleuMetric()
-            scores = metric_obj.compute_score(pred_tensor, ref_tensor, dummy_tokenizer)
-            results["bleu1"] = scores["bleu1"]
-            results["bleu4"] = scores["bleu4"]
+            try:
+                import sacrebleu
+                refs_nested = [references]
+                bleu4 = sacrebleu.corpus_bleu(predictions, refs_nested).score / 100.0
+                bleu1_scorer = sacrebleu.BLEU(max_ngram_order=1, effective_order=True)
+                bleu1 = bleu1_scorer.corpus_score(predictions, refs_nested).score / 100.0
+                results["overall"]["bleu1"] = float(bleu1)
+                results["overall"]["bleu4"] = float(bleu4)
+            except Exception as e:
+                warnings.warn(f"BLEU computation failed: {e}")
+                results["overall"]["bleu1"] = 0.0
+                results["overall"]["bleu4"] = 0.0
+                
         elif metric == "meteor":
-            metric_obj = MeteorMetric()
-            scores = metric_obj.compute_score(pred_tensor, ref_tensor, dummy_tokenizer)
-            results["meteor"] = scores["meteor"]
+            try:
+                from evaluate import load as load_metric
+                meteor_metric = load_metric("meteor")
+                meteor_scores = meteor_metric.compute(
+                    predictions=predictions,
+                    references=references
+                )
+                results["overall"]["meteor"] = float(meteor_scores["meteor"])
+            except Exception as e:
+                warnings.warn(f"METEOR computation failed: {e}")
+                results["overall"]["meteor"] = 0.0
+                
         elif metric == "bertscore":
-            metric_obj = BertScoreMetric()
-            scores = metric_obj.compute_score(pred_tensor, ref_tensor, dummy_tokenizer)
-            results["bertscore_precision"] = scores["hf-prec"]
-            results["bertscore_recall"] = scores["hf-rec"]
-            results["bertscore_f1"] = scores["hf-f1"]
+            bert_scores = compute_bertscore_offline(predictions, references)
+            results["overall"]["bertscore_precision"] = bert_scores["precision"]
+            results["overall"]["bertscore_recall"] = bert_scores["recall"]
+            results["overall"]["bertscore_f1"] = bert_scores["f1"]
+    
+    # Compute category-specific scores if requested
+    if compute_category_scores and categories is not None:
+        results["per_category"] = compute_bertscore_by_category(
+            predictions, references, categories
+        )
+    
+    # Compute dataset-specific scores if requested
+    if compute_dataset_scores and filenames is not None:
+        results["per_dataset"] = compute_bertscore_by_dataset(
+            predictions, references, filenames
+        )
+    
+    return results
+
+
+def analyze_generation_results(
+    json_path: str,
+    csv_path: Optional[str] = None,
+    output_path: str = "metric_analysis.json",
+    metrics: List[str] = ["bertscore"],
+    verbose: bool = True
+) -> Dict:
+    """
+    Analyze generation results from JSON file with optional CSV metadata.
+    
+    Args:
+        json_path: Path to generation JSON file
+        csv_path: Optional path to CSV with metadata
+        output_path: Path to save analysis results
+        metrics: List of metrics to compute
+        verbose: Whether to print analysis
+    
+    Returns:
+        Dictionary with analysis results
+    """
+    import json
+    import pandas as pd
+    from pathlib import Path
+    
+    # Load JSON data
+    with open(json_path, 'r') as f:
+        json_data = json.load(f)
+    
+    # Extract predictions and references
+    predictions = []
+    references = []
+    filenames = []
+    
+    for filename, entry in json_data.items():
+        pred = entry.get('Generation', '')
+        ref = entry.get('Ground truth', '')
+        if pred and ref:
+            predictions.append(pred)
+            references.append(ref)
+            filenames.append(filename)
+    
+    # Load CSV metadata if provided
+    categories = None
+    if csv_path and Path(csv_path).exists():
+        csv_data = pd.read_csv(csv_path, low_memory=False)
+        csv_mapping = {}
+        for _, row in csv_data.iterrows():
+            if pd.notna(row.get('waveform_name')):
+                fname = str(row['waveform_name'])
+                csv_mapping[fname] = row.get('prompt_category', 'unknown') or 'unknown'
+        
+        categories = [csv_mapping.get(f, 'unknown') for f in filenames]
+    
+    # Compute metrics
+    results = compute_metrics_for_texts(
+        predictions=predictions,
+        references=references,
+        metrics=metrics,
+        categories=categories,
+        filenames=filenames,
+        compute_category_scores=(categories is not None),
+        compute_dataset_scores=True
+    )
+    
+    # Add metadata
+    results['metadata'] = {
+        'total_samples': len(predictions),
+        'json_path': json_path,
+        'csv_path': csv_path
+    }
+    
+    # Save results
+    with open(output_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    if verbose:
+        print(f"\n{'='*60}")
+        print("GENERATION ANALYSIS RESULTS")
+        print(f"{'='*60}")
+        print(f"Total samples: {len(predictions)}")
+        
+        if 'overall' in results:
+            print("\nOverall Metrics:")
+            for metric, score in results['overall'].items():
+                print(f"  {metric}: {score:.4f}")
+        
+        if 'per_dataset' in results:
+            print("\nPer-Dataset BERTScore:")
+            for dataset, scores in results['per_dataset'].items():
+                print(f"  {dataset}: F1={scores['f1']:.4f} (n={scores.get('n_samples', 0)})")
+        
+        print(f"\nResults saved to {output_path}")
     
     return results

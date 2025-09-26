@@ -201,7 +201,7 @@ Metrics are automatically computed during LLM fine-tuning when using the runner 
 bash scripts/runner.sh --base_config config/llm_finetuning/llama32_1b/base_config.yaml --selected_gpus 0 --use_wandb true --run_mode train
 
 # Metrics include:
-# - ROUGE-1, ROUGE-2, ROUGE-L
+# - ROUGE-1, ROUGE-L
 # - BLEU-1, BLEU-4 (using SacreBLEU)
 # - METEOR
 # - BERTScore (precision, recall, F1)
@@ -211,73 +211,145 @@ The metrics are computed per batch and aggregated across epochs. Best/worst exam
 
 ### Offline Metrics Evaluation
 
-Evaluate saved model generations against ground truth:
+The system provides comprehensive offline evaluation capabilities for model generations.
 
-#### Basic Usage
+#### Quick Evaluation
 
-```bash
-# Evaluate generation JSON against CSV ground truth
-python utils/evaluate_offline_metrics.py \
-  --json-path checkpoints/your_model/val_generations_epoch_5.json \
-  --csv-path output/combined_test_qa_m5k_h5k.csv \
-  --output-path evaluation_metrics.json
+```python
+from utils.metrics.llm_metrics import analyze_generation_results
+
+# Analyze model generations with automatic metric computation
+results = analyze_generation_results(
+    json_path="checkpoints/your_model/val_generations_epoch_5.json",
+    csv_path="output/combined_test_qa_m5k_h5k.csv",  # Optional for categories
+    output_path="evaluation_results.json",
+    metrics=["bertscore", "rouge", "bleu", "meteor"]
+)
 ```
 
-#### With Visualization
+#### Advanced BERTScore Analysis
 
-```bash
-# Generate comprehensive plots and statistics
-python utils/plot_metrics.py \
-  --metrics-file evaluation_metrics.json \
-  --output-dir metric_plots
+```python
+from utils.metrics.llm_metrics import compute_bertscore_offline, compute_bertscore_by_category, compute_bertscore_by_dataset
 
-# Outputs:
-# - overall_metrics.png: Bar chart of all metrics
-# - category_metrics_comparison.png: Per-category comparison
-# - category_metrics_heatmap.png: Heatmap visualization
-# - summary_statistics.txt: Detailed statistics
+# Basic BERTScore computation
+scores = compute_bertscore_offline(
+    predictions=["predicted text 1", "predicted text 2"],
+    references=["reference text 1", "reference text 2"],
+    model_type="microsoft/deberta-xlarge-mnli"  # Pinned for reproducibility
+)
+
+# Per-category BERTScore (e.g., interpretation, classification, etc.)
+category_scores = compute_bertscore_by_category(
+    predictions=predictions,
+    references=references,
+    categories=["interpretation", "classification", ...],
+    min_samples=5  # Minimum samples per category
+)
+
+# Dataset-specific scores (MIMIC vs MHI)
+dataset_scores = compute_bertscore_by_dataset(
+    predictions=predictions,
+    references=references,
+    filenames=["41234.npy", "00567.npy", ...]  # Auto-detects dataset from prefix
+)
 ```
 
-#### Full Pipeline Example
+#### Command-Line Usage
 
 ```bash
-# 1. Convert parquet to CSV if needed
-python -c "import pandas as pd; df = pd.read_parquet('output/combined_test_qa_m5k_h5k.parquet'); df.to_csv('output/test_set.csv', index=False)"
+# Comprehensive evaluation with all metrics
+python -c "
+from utils.metrics.llm_metrics import analyze_generation_results
+analyze_generation_results(
+    json_path='checkpoints/model/val_generations.json',
+    csv_path='output/test_qa.csv',
+    verbose=True
+)"
 
-# 2. Run evaluation
-python utils/evaluate_offline_metrics.py \
-  --json-path checkpoints/ECG_Tokenizer_LLM_Finetuning/val_generations.json \
-  --csv-path output/test_set.csv \
-  --output-path full_evaluation.json
-
-# 3. Generate visualizations
-python utils/plot_metrics.py \
-  --metrics-file full_evaluation.json \
-  --output-dir evaluation_plots
+# Output includes:
+# - Overall metrics (ROUGE, BLEU, METEOR, BERTScore)
+# - Per-category breakdown
+# - MIMIC vs MHI comparison
+# - Saved to evaluation_results.json
 ```
 
 ### Metrics Computed
 
-- **ROUGE** (1, 2, L): Text overlap metrics
-- **BLEU** (1, 4): N-gram precision with brevity penalty
+#### Standard Metrics
+- **ROUGE** (1, L): Text overlap metrics with stemming
+- **BLEU** (1, 4): N-gram precision with brevity penalty (SacreBLEU)
 - **METEOR**: Semantic similarity with stemming/synonyms
-- **BERTScore**: Contextual embeddings similarity (requires torch>=2.6)
+- **BERTScore**: Contextual embeddings similarity using DeBERTa-xlarge
 
-### Per-Category Analysis
+#### Dataset-Specific Analysis
+The system automatically identifies and compares:
+- **MIMIC-IV**: Files starting with '4' (e.g., 41234.npy)
+- **MHI**: Files starting with '0' (e.g., 00567.npy)
 
-The evaluation system automatically groups results by prompt categories:
-- **interpretation**: Full ECG interpretation
-- **classification**: Normal/pathological classification
-- **category_rhythm**: Rhythm-specific questions
-- **localization_***: Location-specific findings (ST, Q waves, T waves)
-- **json_interpretation**: Structured JSON output
-- **Special categories** (MHI): AFib risk, LVEF, ACS severity, culprit artery
+#### Category-Based Analysis
+Automatic grouping by prompt types:
+- **Core Categories**: interpretation, classification, json_interpretation
+- **Clinical Assessment**: category_rhythm, category_conduction, category_ischemia
+- **Localization**: localization_st_elevation, localization_q_wave, localization_t_wave
+- **MHI Special**: afib_risk, lvef, structural_heart_disease, acs_severity, culprit_artery
+
+### Performance Insights
+
+The evaluation provides detailed insights:
+1. **Overall Performance**: Aggregate metrics across all samples
+2. **Category Performance**: Identify strong/weak prompt types
+3. **Dataset Comparison**: MIMIC vs MHI performance differences
+4. **Sample Tracking**: Best/worst performing examples
+
+### Example Output
+
+```json
+{
+  "overall": {
+    "bertscore_f1": 0.8234,
+    "bertscore_precision": 0.8456,
+    "bertscore_recall": 0.8021,
+    "rouge1": 0.6543,
+    "rougeL": 0.5234,
+    "bleu1": 0.4567,
+    "bleu4": 0.2345
+  },
+  "per_category": {
+    "interpretation": {
+      "f1": 0.8567,
+      "precision": 0.8734,
+      "recall": 0.8402,
+      "n_samples": 523
+    },
+    "afib_risk": {
+      "f1": 0.9234,
+      "precision": 0.9345,
+      "recall": 0.9125,
+      "n_samples": 156
+    }
+  },
+  "per_dataset": {
+    "MIMIC": {
+      "f1": 0.8123,
+      "n_samples": 2500
+    },
+    "MHI": {
+      "f1": 0.8345,
+      "n_samples": 2500
+    }
+  }
+}
+```
 
 ### Requirements
 
 ```bash
-# Install metric dependencies
-pip install sacrebleu bert-score evaluate
+# Core dependencies (included in pyproject.toml)
+uv sync
 
-# For BERTScore (optional, requires torch>=2.6)
-uv pip install torch>=2.6.0
+# Optional for enhanced BERTScore
+pip install bert-score
+
+# For direct bert-score usage (faster, GPU-optimized)
+pip install torch>=2.6.0

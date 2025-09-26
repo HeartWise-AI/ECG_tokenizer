@@ -30,7 +30,7 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import scheduler_is_per_iteration, get_scheduler
 from utils.metrics.llm_metrics import (
     RougeMetric,
-    BleuMetric,
+    SacreBleuMetric as BleuMetric,  # Using SacreBLEU implementation
     MeteorMetric,
     BertScoreMetric,
     update_best_metric,
@@ -702,14 +702,13 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
-                # Process and append to JSON immediately (only on reference device)
-                if self.config.is_ref_device:
-                    self._append_batch_to_json(
-                        outputs['generated_ids'],
-                        labels,
-                        batch,
-                        json_path
-                    )
+                # Process and append to JSON immediately across all devices (write occurs on ref device)
+                self._append_batch_to_json(
+                    outputs['generated_ids'],
+                    labels,
+                    batch,
+                    json_path
+                )
                 
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
                 batch_metrics = self._compute_metrics( # this function returns mean metrics for the current batch
@@ -1731,8 +1730,6 @@ class LLMFinetuningRunner(BaseRunner):
             tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
 
             waveform_names = batch.get('waveform_name', [])
-            prompt_texts = batch.get('prompt_text')
-            question_fallback = batch.get('question')
 
             if isinstance(waveform_names, torch.Tensor):
                 waveform_names = waveform_names.tolist()
@@ -1779,23 +1776,48 @@ class LLMFinetuningRunner(BaseRunner):
                     'Generation': generation,
                     'Ground truth': ground_truth
                 }
-            
-            # Read existing JSON and append
+        except Exception as e:
+            print(f"❌ Failed to prepare validation batch for JSON: {e}")
+            traceback.print_exc()
+            return
+
+        world_size = max(1, int(getattr(self.config, 'world_size', 1)))
+        gathered_batches: list[dict[str, dict[str, Any]] | None] = [None for _ in range(world_size)]
+
+        try:
+            DistributedUtils.all_gather_object(gathered_batches, batch_data)
+        except Exception as gather_err:
+            print(f"❌ Failed to gather validation batches across devices: {gather_err}")
+            traceback.print_exc()
+            gathered_batches = [batch_data]
+            if not self.config.is_ref_device:
+                return
+
+        if not self.config.is_ref_device:
+            return
+
+        try:
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 existing_data = {}
-            
-            # Merge batch data
-            existing_data.update(batch_data)
-            
-            # Write back to file
+
+            merged_batch_data: dict[str, dict[str, Any]] = {}
+            for device_batch in gathered_batches:
+                if device_batch:
+                    merged_batch_data.update(device_batch)
+
+            if not merged_batch_data:
+                return
+
+            existing_data.update(merged_batch_data)
+
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
-                
+
         except Exception as e:
-            print(f"❌ Failed to append batch to JSON: {e}")
+            print(f"❌ Failed to append gathered batches to JSON: {e}")
             traceback.print_exc()
     
     def _plot_validation_ecgs(self, epoch: int, json_path: str) -> None:

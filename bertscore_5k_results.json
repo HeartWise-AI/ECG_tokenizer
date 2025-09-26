@@ -1,0 +1,155 @@
+{
+  "overall": {
+    "precision": 0.7541679745435714,
+    "recall": 0.8060363881289959,
+    "f1": 0.7728536640524865,
+    "n_samples": 5000
+  },
+  "per_category": {
+    "category_rhythm": {
+      "precision": 0.7511501032432527,
+      "recall": 0.8675425517195053,
+      "f1": 0.799671712904486,
+      "n_samples": 655
+    },
+    "localization_t_wave": {
+      "precision": 0.7800997945925464,
+      "recall": 0.7917886055682016,
+      "f1": 0.7831750849018926,
+      "n_samples": 184
+    },
+    "category_infarct_ischemia": {
+      "precision": 0.672244072350022,
+      "recall": 0.7042622439611971,
+      "f1": 0.6778425231478573,
+      "n_samples": 153
+    },
+    "json_interpretation": {
+      "precision": 0.8092714631686042,
+      "recall": 0.7893069749253189,
+      "f1": 0.7967305794151612,
+      "n_samples": 649
+    },
+    "category_chamber_enlargement": {
+      "precision": 0.7061671081342196,
+      "recall": 0.883102444441695,
+      "f1": 0.7771653054576171,
+      "n_samples": 76
+    },
+    "category_other": {
+      "precision": 0.6846967102558517,
+      "recall": 0.7776906703274221,
+      "f1": 0.7174313378939486,
+      "n_samples": 571
+    },
+    "interpretation_complex": {
+      "precision": 0.7879278641574237,
+      "recall": 0.7690161531474314,
+      "f1": 0.7752683594518778,
+      "n_samples": 294
+    },
+    "localization_q_wave": {
+      "precision": 0.7875004955517348,
+      "recall": 0.8119920498581343,
+      "f1": 0.7969047196449772,
+      "n_samples": 93
+    },
+    "interpretation": {
+      "precision": 0.7943944877690889,
+      "recall": 0.7862594111991877,
+      "f1": 0.7866735699247908,
+      "n_samples": 704
+    },
+    "urgency_assessment": {
+      "precision": 0.6185516394101657,
+      "recall": 0.6153410191719348,
+      "f1": 0.6154870092868805,
+      "n_samples": 13
+    },
+    "classification": {
+      "precision": 0.7448716283929909,
+      "recall": 0.776778904141714,
+      "f1": 0.754135975571793,
+      "n_samples": 659
+    },
+    "category_conduction": {
+      "precision": 0.6397162711196266,
+      "recall": 0.7350811232691226,
+      "f1": 0.6775900230341749,
+      "n_samples": 253
+    },
+    "localization_st_depression": {
+      "precision": 0.8133279524351421,
+      "recall": 0.872318985169394,
+      "f1": 0.8400334360306723,
+      "n_samples": 57
+    },
+    "localization_qrs_axis": {
+      "precision": 0.8064028074344,
+      "recall": 0.9590100857118765,
+      "f1": 0.873172152787447,
+      "n_samples": 48
+    },
+    "ecg_interval": {
+      "precision": 0.7046709656715393,
+      "recall": 0.8635779551097325,
+      "f1": 0.7659469451223101,
+      "n_samples": 35
+    },
+    "random_finding_question": {
+      "precision": 0.4322446009208416,
+      "recall": 0.7746368852154962,
+      "f1": 0.5534666088120691,
+      "n_samples": 29
+    },
+    "localization_st_elevation": {
+      "precision": 0.6994395141418164,
+      "recall": 0.6717995771994958,
+      "f1": 0.6821158276154444,
+      "n_samples": 13
+    },
+    "category_pericarditis": {
+      "precision": 0.7295936495065689,
+      "recall": 0.8819166272878647,
+      "f1": 0.7959347516298294,
+      "n_samples": 4
+    },
+    "afib_risk": {
+      "precision": 0.8157547143579439,
+      "recall": 0.9205127736084334,
+      "f1": 0.8636366037922051,
+      "n_samples": 131
+    },
+    "acs_severity": {
+      "precision": 0.7124331505859599,
+      "recall": 0.8656549742993187,
+      "f1": 0.7788877583601895,
+      "n_samples": 68
+    },
+    "structural_heart_disease": {
+      "precision": 0.7749558778909537,
+      "recall": 0.9117791340901301,
+      "f1": 0.8360496048743908,
+      "n_samples": 130
+    },
+    "lvef": {
+      "precision": 0.7970883649165236,
+      "recall": 0.9259573164887316,
+      "f1": 0.8532880380397706,
+      "n_samples": 127
+    },
+    "culprit_artery": {
+      "precision": 0.85434889793396,
+      "recall": 0.8846877493240215,
+      "f1": 0.8657028288752945,
+      "n_samples": 54
+    }
+  },
+  "summary": {
+    "mean_f1": 0.7681004676771775,
+    "std_f1": 0.079902748881174,
+    "min_f1": 0.5534666088120691,
+    "max_f1": 0.873172152787447,
+    "median_f1": 0.7831750849018926
+  }
+}

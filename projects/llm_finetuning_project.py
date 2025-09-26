@@ -1,6 +1,7 @@
 import torch
 
 from typing import Any, Optional
+from collections import deque
 from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
 try:
@@ -287,13 +288,18 @@ class LLMFinetuningProject(BaseProject):
 
         start_epoch = resume_epoch + 1 if resume_checkpoint_path else 1
 
+        optimizer_state: Optional[dict[str, Any]] = None
         if resume_checkpoint_path:
             optimizer_state = state_dict.get('optimizer_state_dict')
-            if optimizer_state is not None:
+            if isinstance(optimizer_state, dict):
                 self._load_optimizer_state_dict(optimizer, optimizer_state)
             scheduler_state = state_dict.get('scheduler_state_dict')
             if scheduler_state is not None and scheduler is not None:
-                self._load_scheduler_state_dict(scheduler, scheduler_state)
+                self._load_scheduler_state_dict(
+                    scheduler,
+                    scheduler_state,
+                    saved_optimizer_state=optimizer_state
+                )
             scaler_state = state_dict.get('scaler_state_dict')
             if scaler_state is not None and scaler is not None:
                 scaler.load_state_dict(scaler_state)
@@ -421,46 +427,67 @@ class LLMFinetuningProject(BaseProject):
 
         return param_groups
 
-    def _load_optimizer_state_dict(self, optimizer: Optimizer, saved_state: dict[str, Any]):
+    def _load_optimizer_state_dict(self, optimizer: Optimizer, saved_state: dict[str, Any]) -> None:
         """Load optimizer state with graceful fallback when parameter groups change."""
+        if not saved_state:
+            return
+
         try:
             optimizer.load_state_dict(saved_state)
             return
-        except ValueError as exc:
-            print(f"⚠️ Could not load optimizer state from checkpoint: {exc}. Remapping to current parameter groups...")
-        except RuntimeError as exc:
-            print(f"⚠️ Could not load optimizer state from checkpoint: {exc}. Remapping to current parameter groups...")
+        except (ValueError, RuntimeError):
+            if getattr(self.config, 'is_ref_device', True):
+                print("⚠️ Optimizer param groups changed; attempting to remap saved state.")
 
         remapped_state = self._remap_optimizer_state(saved_state, optimizer)
         if remapped_state is None:
-            print("⚠️ Optimizer state remap failed; proceeding with freshly initialized optimizer state.")
+            if getattr(self.config, 'is_ref_device', True):
+                print("⚠️ Optimizer state remap failed; proceeding with freshly initialized optimizer state.")
             return
+
         try:
             optimizer.load_state_dict(remapped_state)
+            if getattr(self.config, 'is_ref_device', True):
+                print("Info: Loaded optimizer state using remapped parameter groups.")
         except Exception as final_exc:  # pragma: no cover - defensive
-            print(f"⚠️ Optimizer state load failed after remap: {final_exc}. Using fresh optimizer state.")
+            if getattr(self.config, 'is_ref_device', True):
+                print(f"⚠️ Optimizer state load failed after remap: {final_exc}. Using fresh optimizer state.")
 
-    def _load_scheduler_state_dict(self, scheduler: LRScheduler, saved_state: dict[str, Any]):
-        """Safely load scheduler state, resetting if parameter groups have changed."""
+    def _load_scheduler_state_dict(
+        self,
+        scheduler: LRScheduler,
+        saved_state: dict[str, Any],
+        saved_optimizer_state: dict[str, Any] | None = None
+    ) -> None:
+        """Safely load scheduler state, remapping values when parameter groups change."""
         if not saved_state:
             return
 
         optimizer = getattr(scheduler, 'optimizer', None)
-        if optimizer is not None:
-            current_groups = len(optimizer.param_groups)
-            saved_base_lrs = saved_state.get('base_lrs')
-            if isinstance(saved_base_lrs, list) and len(saved_base_lrs) != current_groups:
-                print("⚠️ Scheduler base_lrs mismatch with current parameter groups; resetting scheduler state.")
-                return
+        if optimizer is None:
+            return
 
         state_to_load = dict(saved_state)
+
+        saved_groups = []
+        if isinstance(saved_optimizer_state, dict):
+            saved_groups = saved_optimizer_state.get('param_groups') or []
+
+        if saved_groups:
+            for key in ('base_lrs', 'last_lr'):
+                remapped = self._remap_scheduler_values(
+                    state_to_load.get(key),
+                    saved_groups,
+                    optimizer.param_groups
+                )
+                if remapped is not None:
+                    state_to_load[key] = remapped
 
         if 'lr_lambdas' in state_to_load and hasattr(scheduler, 'lr_lambdas'):
             saved_lambdas = state_to_load.get('lr_lambdas')
             current_lambdas = getattr(scheduler, 'lr_lambdas') or []
             if isinstance(saved_lambdas, list) and isinstance(current_lambdas, list):
                 if len(saved_lambdas) != len(current_lambdas):
-                    # Align lengths by trimming or padding with None
                     trimmed = list(saved_lambdas[:len(current_lambdas)])
                     if len(trimmed) < len(current_lambdas):
                         trimmed.extend([None] * (len(current_lambdas) - len(trimmed)))
@@ -468,10 +495,12 @@ class LLMFinetuningProject(BaseProject):
 
         try:
             scheduler.load_state_dict(state_to_load)
-        except (IndexError, KeyError) as exc:
-            print(f"⚠️ Could not load scheduler state from checkpoint: {exc}. Resetting scheduler state.")
+        except (IndexError, KeyError, ValueError) as exc:
+            if getattr(self.config, 'is_ref_device', True):
+                print(f"⚠️ Could not load scheduler state from checkpoint: {exc}. Resetting scheduler state.")
         except Exception as exc:  # pragma: no cover - defensive
-            print(f"⚠️ Unexpected scheduler state load failure: {exc}. Resetting scheduler state.")
+            if getattr(self.config, 'is_ref_device', True):
+                print(f"⚠️ Unexpected scheduler state load failure: {exc}. Resetting scheduler state.")
 
     def _remap_optimizer_state(self, saved_state: dict[str, Any], optimizer: Optimizer) -> Optional[dict[str, Any]]:
         """Adapt a saved optimizer state to the current optimizer parameter order.
@@ -484,36 +513,85 @@ class LLMFinetuningProject(BaseProject):
 
         saved_groups = saved_state.get('param_groups') or []
         saved_state_map = saved_state.get('state') or {}
+        if not saved_groups:
+            return None
 
-        # Flatten saved states in group order for sequential reassignment
-        saved_param_states = []
+        saved_by_name: dict[Any, list[deque[dict[str, Any]]]] = {}
+        unnamed_groups: list[deque[dict[str, Any]]] = []
+
         for group in saved_groups:
-            for param_idx in group.get('params', []):
-                saved_param_states.append(saved_state_map.get(param_idx, {}))
+            name = group.get('name')
+            param_indices = group.get('params', [])
+            param_states = deque([saved_state_map.get(idx, {}) for idx in param_indices])
+            if name is not None:
+                saved_by_name.setdefault(name, []).append(param_states)
+            else:
+                unnamed_groups.append(param_states)
 
-        # Build new param_groups mirroring the optimizer's current layout
         new_state: dict[int, Any] = {}
         new_param_groups: list[dict[str, Any]] = []
-        saved_iter_idx = 0
+        param_counter = 0
 
         for group in optimizer.param_groups:
+            name = group.get('name')
+            state_deque: deque[dict[str, Any]] | None = None
+
+            if name is not None and name in saved_by_name and saved_by_name[name]:
+                state_deque = saved_by_name[name].pop(0)
+            elif unnamed_groups:
+                state_deque = unnamed_groups.pop(0)
+            else:
+                state_deque = deque()
+
             new_group = {k: v for k, v in group.items() if k != 'params'}
-            param_indices: list[int] = []
-            for param in group['params']:
-                state = {}
-                if saved_iter_idx < len(saved_param_states):
-                    state = saved_param_states[saved_iter_idx]
-                # Use incremental integer keys to follow PyTorch optimizer convention
-                param_indices.append(saved_iter_idx)
-                new_state[saved_iter_idx] = state
-                saved_iter_idx += 1
-            new_group['params'] = param_indices
+            new_param_indices: list[int] = []
+
+            for _ in group.get('params', []):
+                state = state_deque.popleft() if state_deque else {}
+                new_state[param_counter] = state
+                new_param_indices.append(param_counter)
+                param_counter += 1
+
+            new_group['params'] = new_param_indices
             new_param_groups.append(new_group)
 
         return {
             'state': new_state,
             'param_groups': new_param_groups,
         }
+
+    def _remap_scheduler_values(
+        self,
+        saved_values: Any,
+        saved_groups: list[dict[str, Any]],
+        current_groups: list[dict[str, Any]]
+    ) -> Optional[list[float]]:
+        """Remap scheduler value lists (like base_lrs) to current optimizer groups."""
+        if not isinstance(saved_values, list):
+            return None
+
+        saved_by_name: dict[Any, deque[float]] = {}
+        unnamed_values: deque[float] = deque()
+
+        for group, value in zip(saved_groups, saved_values):
+            name = group.get('name')
+            if name is not None:
+                saved_by_name.setdefault(name, deque()).append(value)
+            else:
+                unnamed_values.append(value)
+
+        remapped: list[float] = []
+
+        for group in current_groups:
+            name = group.get('name')
+            if name is not None and name in saved_by_name and saved_by_name[name]:
+                remapped.append(saved_by_name[name].popleft())
+            elif unnamed_values:
+                remapped.append(unnamed_values.popleft())
+            else:
+                remapped.append(float(group.get('lr', 0.0)))
+
+        return remapped
 
     def _get_llm_module_from_decoder(self, decoder):
         if hasattr(decoder, 'llm_model'):
