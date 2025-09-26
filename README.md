@@ -188,3 +188,96 @@ source scripts/runner.sh --use_wandb false --run_mode inference --base_config co
 ```base
 # Inference on Multi-GPU without logging results to wandb
 source scripts/runner.sh --use_wandb false --run_mode inference --base_config config/bert_classifier/base_config.yaml --selected_gpus 0,1,2,3
+```
+
+## 📊 Metrics Evaluation
+
+### Online Metrics (During Training)
+
+Metrics are automatically computed during LLM fine-tuning when using the runner scripts:
+
+```bash
+# Metrics computed automatically during training and logged to wandb
+bash scripts/runner.sh --base_config config/llm_finetuning/llama32_1b/base_config.yaml --selected_gpus 0 --use_wandb true --run_mode train
+
+# Metrics include:
+# - ROUGE-1, ROUGE-2, ROUGE-L
+# - BLEU-1, BLEU-4 (using SacreBLEU)
+# - METEOR
+# - BERTScore (precision, recall, F1)
+```
+
+The metrics are computed per batch and aggregated across epochs. Best/worst examples are tracked and logged to wandb for analysis.
+
+### Offline Metrics Evaluation
+
+Evaluate saved model generations against ground truth:
+
+#### Basic Usage
+
+```bash
+# Evaluate generation JSON against CSV ground truth
+python utils/evaluate_offline_metrics.py \
+  --json-path checkpoints/your_model/val_generations_epoch_5.json \
+  --csv-path output/combined_test_qa_m5k_h5k.csv \
+  --output-path evaluation_metrics.json
+```
+
+#### With Visualization
+
+```bash
+# Generate comprehensive plots and statistics
+python utils/plot_metrics.py \
+  --metrics-file evaluation_metrics.json \
+  --output-dir metric_plots
+
+# Outputs:
+# - overall_metrics.png: Bar chart of all metrics
+# - category_metrics_comparison.png: Per-category comparison
+# - category_metrics_heatmap.png: Heatmap visualization
+# - summary_statistics.txt: Detailed statistics
+```
+
+#### Full Pipeline Example
+
+```bash
+# 1. Convert parquet to CSV if needed
+python -c "import pandas as pd; df = pd.read_parquet('output/combined_test_qa_m5k_h5k.parquet'); df.to_csv('output/test_set.csv', index=False)"
+
+# 2. Run evaluation
+python utils/evaluate_offline_metrics.py \
+  --json-path checkpoints/ECG_Tokenizer_LLM_Finetuning/val_generations.json \
+  --csv-path output/test_set.csv \
+  --output-path full_evaluation.json
+
+# 3. Generate visualizations
+python utils/plot_metrics.py \
+  --metrics-file full_evaluation.json \
+  --output-dir evaluation_plots
+```
+
+### Metrics Computed
+
+- **ROUGE** (1, 2, L): Text overlap metrics
+- **BLEU** (1, 4): N-gram precision with brevity penalty
+- **METEOR**: Semantic similarity with stemming/synonyms
+- **BERTScore**: Contextual embeddings similarity (requires torch>=2.6)
+
+### Per-Category Analysis
+
+The evaluation system automatically groups results by prompt categories:
+- **interpretation**: Full ECG interpretation
+- **classification**: Normal/pathological classification
+- **category_rhythm**: Rhythm-specific questions
+- **localization_***: Location-specific findings (ST, Q waves, T waves)
+- **json_interpretation**: Structured JSON output
+- **Special categories** (MHI): AFib risk, LVEF, ACS severity, culprit artery
+
+### Requirements
+
+```bash
+# Install metric dependencies
+pip install sacrebleu bert-score evaluate
+
+# For BERTScore (optional, requires torch>=2.6)
+uv pip install torch>=2.6.0

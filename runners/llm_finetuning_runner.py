@@ -35,7 +35,8 @@ from utils.metrics.llm_metrics import (
     BertScoreMetric,
     update_best_metric,
     update_worst_metric,
-    update_random_batch_metric
+    update_random_batch_metric,
+    decode_assistant_only_text
 )
 from utils.metrics.category_metrics import CategoryMetricsCalculator
 from runners.base_runner import BaseRunner
@@ -976,34 +977,8 @@ class LLMFinetuningRunner(BaseRunner):
         if generated_ids is None:
             return ""
 
-        mask = label_ids != -100
-
-        # Fast path when mask and generated ids align as expected
-        if mask.shape == generated_ids.shape:
-            assistant_tokens = generated_ids[mask]
-        else:
-            # Fall back to slicing using the first/last valid label positions
-            mask_flat = mask.view(-1)
-            generated_flat = generated_ids.view(-1)
-
-            valid_positions = torch.nonzero(mask_flat, as_tuple=False).flatten()
-
-            if valid_positions.numel() == 0:
-                assistant_tokens = generated_flat
-            else:
-                start_idx = int(valid_positions[0])
-                end_idx = int(valid_positions[-1]) + 1
-
-                if start_idx >= generated_flat.size(0):
-                    assistant_tokens = generated_flat
-                else:
-                    end_idx = min(end_idx, generated_flat.size(0))
-                    assistant_tokens = generated_flat[start_idx:end_idx]
-
-        if assistant_tokens.numel() == 0:
-            return ""
-
-        return tokenizer.decode(assistant_tokens.tolist(), skip_special_tokens=True)
+        prediction, _ = decode_assistant_only_text(tokenizer, generated_ids, label_ids)
+        return prediction
 
     @staticmethod
     def _sanitize_chat_text(text: str, max_length: int = 512) -> str:
@@ -1107,12 +1082,9 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                generated_text = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
-                )
-                label_text = self._sanitize_chat_text(
-                    tokenizer.decode(label_ids[label_ids != -100].tolist(), skip_special_tokens=True)
-                )
+                raw_pred, raw_ref = decode_assistant_only_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
+                generated_text = self._sanitize_chat_text(raw_pred)
+                label_text = self._sanitize_chat_text(raw_ref)
 
                 print("\n" + "="*60)
                 print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
@@ -1380,16 +1352,15 @@ class LLMFinetuningRunner(BaseRunner):
             })
             batch_waveform_names: list[str] = batch['waveform_name']
             for idx in range(len(batch_waveform_names)):
-                gen = generated_ids[idx].detach().cpu()
-                lab = labels[idx].detach().cpu()
+                gen = generated_ids[idx]
+                lab = labels[idx]
                 filename = batch_waveform_names[idx]
 
-                valid_mask = lab != -100
-                pred_tokens = gen[valid_mask]
-                ref_tokens = lab[valid_mask]
-
-                decoded_prediction = tokenizer.decode(pred_tokens.tolist(), skip_special_tokens=True) if pred_tokens.numel() > 0 else ""
-                decoded_reference = tokenizer.decode(ref_tokens.tolist(), skip_special_tokens=True) if ref_tokens.numel() > 0 else ""
+                decoded_prediction, decoded_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen,
+                    lab
+                )
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
                 waveform_names.append(filename)
@@ -1565,12 +1536,13 @@ class LLMFinetuningRunner(BaseRunner):
                 gen_tensor = generated_ids[i].cpu()
                 label_tensor = labels[i].cpu()
 
-                prediction = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                raw_prediction, raw_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen_tensor,
+                    label_tensor
                 )
-                reference = self._sanitize_chat_text(
-                    tokenizer.decode(label_tensor[label_tensor != -100].tolist(), skip_special_tokens=True)
-                )
+                prediction = self._sanitize_chat_text(raw_prediction)
+                reference = self._sanitize_chat_text(raw_reference)
 
                 category = ""
                 if 'prompt_category' in batch and i < len(batch['prompt_category']):
@@ -1607,10 +1579,17 @@ class LLMFinetuningRunner(BaseRunner):
                 MeteorMetric,
                 BertScoreMetric
             ] = MetricRegistry.get(metric)
+            
+            # Extract input_ids from batch if available for better prompt trimming
+            input_ids = None
+            if batch is not None and 'input_ids' in batch:
+                input_ids = batch['input_ids'].to(self.config.device)
+            
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
                 labels_for_metrics,
-                tokenizer  # type: ignore
+                tokenizer,  # type: ignore
+                input_ids=input_ids
             )
             # Add prompts to metrics if available
             if batch_prompts:
@@ -1766,13 +1745,13 @@ class LLMFinetuningRunner(BaseRunner):
                 gen_tensor = generated_ids[i].detach().cpu()
                 label_tensor = labels[i].detach().cpu()
 
-                generation = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                raw_generation, raw_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen_tensor,
+                    label_tensor
                 )
-                reference_tokens = label_tensor[label_tensor != -100].tolist()
-                ground_truth = self._sanitize_chat_text(
-                    tokenizer.decode(reference_tokens, skip_special_tokens=True)
-                )
+                generation = self._sanitize_chat_text(raw_generation)
+                ground_truth = self._sanitize_chat_text(raw_reference)
 
                 question = self._extract_prompt_text(tokenizer, batch, i)
                 if not question:

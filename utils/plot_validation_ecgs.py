@@ -253,7 +253,8 @@ def determine_plotter_params(dataset_label: Optional[str]) -> Tuple[str, bool, s
     if normalized.startswith('MIMIC'):
         return "MIMICIV", True, normalized
     if normalized.startswith('MHI'):
-        return "MHI", False, normalized
+        # MHI waveforms are also stored with FFT-normalized preprocessing
+        return "MHI", True, normalized
 
     return "MIMICIV", False, normalized or "UNKNOWN"
 

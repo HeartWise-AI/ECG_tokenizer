@@ -293,7 +293,7 @@ class LLMFinetuningProject(BaseProject):
                 self._load_optimizer_state_dict(optimizer, optimizer_state)
             scheduler_state = state_dict.get('scheduler_state_dict')
             if scheduler_state is not None and scheduler is not None:
-                scheduler.load_state_dict(scheduler_state)
+                self._load_scheduler_state_dict(scheduler, scheduler_state)
             scaler_state = state_dict.get('scaler_state_dict')
             if scaler_state is not None and scaler is not None:
                 scaler.load_state_dict(scaler_state)
@@ -439,6 +439,39 @@ class LLMFinetuningProject(BaseProject):
             optimizer.load_state_dict(remapped_state)
         except Exception as final_exc:  # pragma: no cover - defensive
             print(f"⚠️ Optimizer state load failed after remap: {final_exc}. Using fresh optimizer state.")
+
+    def _load_scheduler_state_dict(self, scheduler: LRScheduler, saved_state: dict[str, Any]):
+        """Safely load scheduler state, resetting if parameter groups have changed."""
+        if not saved_state:
+            return
+
+        optimizer = getattr(scheduler, 'optimizer', None)
+        if optimizer is not None:
+            current_groups = len(optimizer.param_groups)
+            saved_base_lrs = saved_state.get('base_lrs')
+            if isinstance(saved_base_lrs, list) and len(saved_base_lrs) != current_groups:
+                print("⚠️ Scheduler base_lrs mismatch with current parameter groups; resetting scheduler state.")
+                return
+
+        state_to_load = dict(saved_state)
+
+        if 'lr_lambdas' in state_to_load and hasattr(scheduler, 'lr_lambdas'):
+            saved_lambdas = state_to_load.get('lr_lambdas')
+            current_lambdas = getattr(scheduler, 'lr_lambdas') or []
+            if isinstance(saved_lambdas, list) and isinstance(current_lambdas, list):
+                if len(saved_lambdas) != len(current_lambdas):
+                    # Align lengths by trimming or padding with None
+                    trimmed = list(saved_lambdas[:len(current_lambdas)])
+                    if len(trimmed) < len(current_lambdas):
+                        trimmed.extend([None] * (len(current_lambdas) - len(trimmed)))
+                    state_to_load['lr_lambdas'] = trimmed
+
+        try:
+            scheduler.load_state_dict(state_to_load)
+        except (IndexError, KeyError) as exc:
+            print(f"⚠️ Could not load scheduler state from checkpoint: {exc}. Resetting scheduler state.")
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"⚠️ Unexpected scheduler state load failure: {exc}. Resetting scheduler state.")
 
     def _remap_optimizer_state(self, saved_state: dict[str, Any], optimizer: Optimizer) -> Optional[dict[str, Any]]:
         """Adapt a saved optimizer state to the current optimizer parameter order.
