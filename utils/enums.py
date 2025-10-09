@@ -107,6 +107,7 @@ class AdapterName(str, Enum):
     LLAMA32_SIMPLE_TOKEN_ADAPTER = "Llama32_SimpleTokenAdapter"
     LLAMA32_ECG_CODE_BRIDGE = "Llama32_ECGCodeBridge"
     LLAMA32_ECG_PROJECTION_BRIDGE = "Llama32_ECGProjectionBridge"
+    ECG_PERCEIVER_BRIDGE = "ECGPerceiverBridge"
     
     def __str__(self):
         return self.value

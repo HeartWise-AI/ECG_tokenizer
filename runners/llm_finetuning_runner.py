@@ -258,6 +258,42 @@ class LLMFinetuningRunner(BaseRunner):
             return decoder.llm
         return None
 
+    def _get_decoder_module(self):
+        model = self.model
+        if model is None:
+            return None
+        if hasattr(model, 'module'):
+            model = model.module
+        return getattr(model, 'decoder', None)
+
+    def _infer_prefix_offset(self, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> int:
+        """Guess how many leading tokens belong to the ECG prefix under prefix tuning."""
+        decoder = self._get_decoder_module()
+        if decoder is None or not getattr(decoder, 'prefix_tuning', False):
+            return 0
+
+        configured_prefix = getattr(decoder, 'num_ecg_tokens', None)
+        if configured_prefix is None:
+            configured_prefix = getattr(self.config, 'num_ecg_tokens', 0)
+        try:
+            prefix_tokens = int(configured_prefix)
+        except (TypeError, ValueError):
+            prefix_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
+
+        if prefix_tokens <= 0:
+            return 0
+
+        gen_len = int(generated_ids.size(-1))
+        label_len = int(label_ids.size(-1)) if label_ids.dim() > 0 else 0
+        if gen_len <= label_len:
+            return 0
+
+        diff = gen_len - label_len
+        if diff <= 0:
+            return 0
+
+        return min(prefix_tokens, diff)
+
     def _set_param_group_lr(self, group_name: str, lr: float):
         """Update the learning rate for a named optimizer group, if present."""
         if self.optimizer is None:
@@ -977,6 +1013,7 @@ class LLMFinetuningRunner(BaseRunner):
             return ""
 
         mask = label_ids != -100
+        prefix_offset = self._infer_prefix_offset(generated_ids, label_ids)
 
         # Fast path when mask and generated ids align as expected
         if mask.shape == generated_ids.shape:
@@ -991,14 +1028,13 @@ class LLMFinetuningRunner(BaseRunner):
             if valid_positions.numel() == 0:
                 assistant_tokens = generated_flat
             else:
-                start_idx = int(valid_positions[0])
-                end_idx = int(valid_positions[-1]) + 1
+                start_idx = prefix_offset + int(valid_positions[0])
+                end_idx = prefix_offset + int(valid_positions[-1]) + 1
 
-                if start_idx >= generated_flat.size(0):
-                    assistant_tokens = generated_flat
-                else:
-                    end_idx = min(end_idx, generated_flat.size(0))
-                    assistant_tokens = generated_flat[start_idx:end_idx]
+                start_idx = min(start_idx, generated_flat.size(0))
+                end_idx = min(max(end_idx, start_idx), generated_flat.size(0))
+
+                assistant_tokens = generated_flat[start_idx:end_idx]
 
         if assistant_tokens.numel() == 0:
             return ""

@@ -1,6 +1,6 @@
 """ECG Adapter modules for connecting ECG representations to language models."""
 
-from .bridge import ECGCodeBridge, ECGProjectionBridge
+from .bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
 from .adapter import (
     LinearAdapter,
     EmbeddingAdapter,
@@ -18,6 +18,7 @@ __all__ = [
     # Bridge modules
     "ECGCodeBridge",
     "ECGProjectionBridge",
+    "PerceiverProjectionBridge",
     # Basic adapters
     "LinearAdapter",
     "EmbeddingAdapter",
