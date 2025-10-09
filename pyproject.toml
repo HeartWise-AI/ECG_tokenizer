@@ -25,6 +25,7 @@ dependencies = [
     "wandb>=0.18.3",
     "xmltodict>=0.12.0",
     "pywavelets>=1.1.0",
+    "sacrebleu>=2.5.1",
 ]
 
 [tool.setuptools]

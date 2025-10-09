@@ -1,0 +1,163 @@
+# MedGemma finetuning configuration with FULL validation dataset (100% of samples)
+# This config ensures all 10,000 test samples are evaluated
+
+pipeline_project: "ECG_Tokenizer_LLM_Finetuning"
+model_name: "ECG_Tokenizer_Wrapper"
+runner_name: "ECG_Tokenizer_LLM_Finetuning"
+run_mode: "train"  # Change to "inference" for validation-only runs
+num_epochs: 10
+seed: 42
+
+# Training phases configuration
+training_phases:
+  phase1_alignment:
+    epochs: 2
+    freeze_llm: true
+    use_lora: false
+    ecg_embedding_lr: 1.0e-4
+    adapter_lr: 5.0e-5
+    warmup_steps: 100
+    debug_config:
+      log_gradient_norms: true
+  phase2_finetuning:
+    epochs: 8
+    freeze_llm: true
+    use_lora: true
+    llm_lr: 3.0e-6
+    ecg_embedding_lr: 5.0e-6
+    adapter_lr: 5.0e-6
+    warmup_steps: 50
+    debug_config:
+      log_gradient_norms: true
+
+# Debug configuration
+debug_config:
+  log_gradient_norms: true
+  show_sample_outputs: true
+  log_frequency: 50
+
+# Model paths
+base_checkpoint_path: "checkpoints"
+pretrained_tokenizer_path: "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+resume_checkpoint_path: "/volume/ECG_tokenizer/checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_MedGemma/q3960agl_20250921-230451/checkpoint_epoch_2.pt"
+
+# Wandb configuration
+wandb_project: "ECG_tokenizer_MedGemma_FullVal"
+wandb_entity: "mhi_ai"
+use_wandb: true
+
+# Learning rate configuration
+llm_lr: 3.0e-6
+adapter_lr: 1.0e-4
+llm_weight_decay: 0.0
+adapter_weight_decay: 0.0
+
+# Scheduler configuration
+scheduler_type: "cosine_with_warmup"
+lr_step_period: 1
+factor: 0.5
+optimizer: "AdamW"
+step_size: 1
+gamma: 0.8
+num_warmup_percent: 0.15
+num_hard_restarts_cycles: 1.0
+warm_restart_tmult: 2
+
+# Model configuration
+decoder_mode: "llm"
+decoder_name: "MedGemma_Decoder"
+tokenizer_name: "google/medgemma-4b-it"
+use_auto_processor: false
+max_token_length: 640
+num_ecg_tokens: 128
+instruct_mode: true
+huggingface_model_name: "google/medgemma-4b-it"
+adapter_name: "Llama32_ECGProjectionBridge"
+llm_input_embedding_size: 2560
+use_cross_attention: false
+num_attention_heads: 8
+intermediate_dim: 1024
+
+# LoRA configuration
+use_lora: !!bool false # Initially disabled, enabled in phase 2
+lora_config:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: "none"
+
+# Dataset configuration
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_train_qa_m200k_h200k.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_test_qa_m5k_h5k.parquet"
+prompt_column: "prompt"
+answer_column: "generated_answer"
+category_column: "prompt_category"
+signal_path_column: "waveform_path_psa"
+
+# ECG configuration
+ecg_waveform_length: 2500
+ecg_num_leads: 12
+
+# DataLoader configuration
+num_workers: 8
+batch_size: 16
+gradient_accumulation_steps: 8
+dataloader_pin_memory: true
+
+# IMPORTANT: Validation sampling configuration
+# These settings ensure FULL validation dataset is used
+validation_batch_size: 8  # Smaller batch for validation to handle more samples
+validation_sample_fraction: 1.0  # Use 100% of validation data
+validation_max_samples: -1  # -1 means no limit, use all samples
+skip_validation_sampling: true  # Skip any automatic sampling
+
+# Sequence configuration
+max_sequence_length: 768
+
+# Attention visualization
+enable_attention_visualization: false
+attention_log_frequency: 200
+
+# Validation plotting
+plot_validation_ecgs: true
+num_validation_plots: 10  # Increased from 6
+plot_selection_strategy: "worst_random_best"
+
+# Metrics configuration
+metrics:
+  - "rouge"
+  - "bleu"
+  - "meteor"
+  - "bertscore"
+
+compute_category_metrics: true
+category_metrics:
+  - "rouge"
+  - "bleu"
+  - "meteor"
+  - "bertscore"
+
+# Validation frequency
+validation_frequency: 1  # Run validation every epoch
+save_validation_outputs: true  # Save all validation outputs
+validation_output_dir: "validation_outputs_full"
+
+# For inference/validation-only mode
+inference_mode_settings:
+  run_full_validation: true
+  save_all_outputs: true
+  compute_all_metrics: true
+  batch_processing: true
+  
+# Performance optimizations for large validation
+use_mixed_precision: true
+enable_gradient_checkpointing: false  # Not needed for validation
+clear_cache_frequency: 100  # Clear GPU cache every N batches
