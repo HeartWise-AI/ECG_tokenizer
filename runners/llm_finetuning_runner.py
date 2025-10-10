@@ -30,12 +30,13 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.schedulers import scheduler_is_per_iteration, get_scheduler
 from utils.metrics.llm_metrics import (
     RougeMetric,
-    BleuMetric,
+    SacreBleuMetric as BleuMetric,  # Using SacreBLEU implementation
     MeteorMetric,
     BertScoreMetric,
     update_best_metric,
     update_worst_metric,
-    update_random_batch_metric
+    update_random_batch_metric,
+    decode_assistant_only_text
 )
 from utils.metrics.category_metrics import CategoryMetricsCalculator
 from runners.base_runner import BaseRunner
@@ -749,14 +750,13 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
-                # Process and append to JSON immediately (only on reference device)
-                if self.config.is_ref_device:
-                    self._append_batch_to_json(
-                        outputs['generated_ids'],
-                        labels,
-                        batch,
-                        json_path
-                    )
+                # Process and append to JSON immediately across all devices (write occurs on ref device)
+                self._append_batch_to_json(
+                    outputs['generated_ids'],
+                    labels,
+                    batch,
+                    json_path
+                )
                 
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
                 batch_metrics = self._compute_metrics( # this function returns mean metrics for the current batch
@@ -1162,12 +1162,10 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                generated_text = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
-                )
-                label_text = self._sanitize_chat_text(
-                    tokenizer.decode(label_ids[label_ids != -100].tolist(), skip_special_tokens=True)
-                )
+                raw_pred, raw_ref = 
+                (tokenizer, generated_ids.cpu(), label_ids.cpu())
+                generated_text = self._sanitize_chat_text(raw_pred)
+                label_text = self._sanitize_chat_text(raw_ref)
 
                 print("\n" + "="*60)
                 print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
@@ -1435,16 +1433,15 @@ class LLMFinetuningRunner(BaseRunner):
             })
             batch_waveform_names: list[str] = batch['waveform_name']
             for idx in range(len(batch_waveform_names)):
-                gen = generated_ids[idx].detach().cpu()
-                lab = labels[idx].detach().cpu()
+                gen = generated_ids[idx]
+                lab = labels[idx]
                 filename = batch_waveform_names[idx]
 
-                valid_mask = lab != -100
-                pred_tokens = gen[valid_mask]
-                ref_tokens = lab[valid_mask]
-
-                decoded_prediction = tokenizer.decode(pred_tokens.tolist(), skip_special_tokens=True) if pred_tokens.numel() > 0 else ""
-                decoded_reference = tokenizer.decode(ref_tokens.tolist(), skip_special_tokens=True) if ref_tokens.numel() > 0 else ""
+                decoded_prediction, decoded_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen,
+                    lab
+                )
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
                 waveform_names.append(filename)
@@ -1620,12 +1617,13 @@ class LLMFinetuningRunner(BaseRunner):
                 gen_tensor = generated_ids[i].cpu()
                 label_tensor = labels[i].cpu()
 
-                prediction = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                raw_prediction, raw_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen_tensor,
+                    label_tensor
                 )
-                reference = self._sanitize_chat_text(
-                    tokenizer.decode(label_tensor[label_tensor != -100].tolist(), skip_special_tokens=True)
-                )
+                prediction = self._sanitize_chat_text(raw_prediction)
+                reference = self._sanitize_chat_text(raw_reference)
 
                 category = ""
                 if 'prompt_category' in batch and i < len(batch['prompt_category']):
@@ -1662,10 +1660,17 @@ class LLMFinetuningRunner(BaseRunner):
                 MeteorMetric,
                 BertScoreMetric
             ] = MetricRegistry.get(metric)
+            
+            # Extract input_ids from batch if available for better prompt trimming
+            input_ids = None
+            if batch is not None and 'input_ids' in batch:
+                input_ids = batch['input_ids'].to(self.config.device)
+            
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 outputs['generated_ids'],
                 labels_for_metrics,
-                tokenizer  # type: ignore
+                tokenizer,  # type: ignore
+                input_ids=input_ids
             )
             # Add prompts to metrics if available
             if batch_prompts:
@@ -1807,8 +1812,6 @@ class LLMFinetuningRunner(BaseRunner):
             tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
 
             waveform_names = batch.get('waveform_name', [])
-            prompt_texts = batch.get('prompt_text')
-            question_fallback = batch.get('question')
 
             if isinstance(waveform_names, torch.Tensor):
                 waveform_names = waveform_names.tolist()
@@ -1821,13 +1824,13 @@ class LLMFinetuningRunner(BaseRunner):
                 gen_tensor = generated_ids[i].detach().cpu()
                 label_tensor = labels[i].detach().cpu()
 
-                generation = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                raw_generation, raw_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen_tensor,
+                    label_tensor
                 )
-                reference_tokens = label_tensor[label_tensor != -100].tolist()
-                ground_truth = self._sanitize_chat_text(
-                    tokenizer.decode(reference_tokens, skip_special_tokens=True)
-                )
+                generation = self._sanitize_chat_text(raw_generation)
+                ground_truth = self._sanitize_chat_text(raw_reference)
 
                 question = self._extract_prompt_text(tokenizer, batch, i)
                 if not question:
@@ -1855,23 +1858,48 @@ class LLMFinetuningRunner(BaseRunner):
                     'Generation': generation,
                     'Ground truth': ground_truth
                 }
-            
-            # Read existing JSON and append
+        except Exception as e:
+            print(f"❌ Failed to prepare validation batch for JSON: {e}")
+            traceback.print_exc()
+            return
+
+        world_size = max(1, int(getattr(self.config, 'world_size', 1)))
+        gathered_batches: list[dict[str, dict[str, Any]] | None] = [None for _ in range(world_size)]
+
+        try:
+            DistributedUtils.all_gather_object(gathered_batches, batch_data)
+        except Exception as gather_err:
+            print(f"❌ Failed to gather validation batches across devices: {gather_err}")
+            traceback.print_exc()
+            gathered_batches = [batch_data]
+            if not self.config.is_ref_device:
+                return
+
+        if not self.config.is_ref_device:
+            return
+
+        try:
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 existing_data = {}
-            
-            # Merge batch data
-            existing_data.update(batch_data)
-            
-            # Write back to file
+
+            merged_batch_data: dict[str, dict[str, Any]] = {}
+            for device_batch in gathered_batches:
+                if device_batch:
+                    merged_batch_data.update(device_batch)
+
+            if not merged_batch_data:
+                return
+
+            existing_data.update(merged_batch_data)
+
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
-                
+
         except Exception as e:
-            print(f"❌ Failed to append batch to JSON: {e}")
+            print(f"❌ Failed to append gathered batches to JSON: {e}")
             traceback.print_exc()
     
     def _plot_validation_ecgs(self, epoch: int, json_path: str) -> None:
