@@ -58,7 +58,7 @@ num_ecg_tokens: 128
 instruct_mode: true
 prefix_tuning: true
 huggingface_model_name: "google/medgemma-4b-it"
-adapter_name: "Llama32_ECGProjectionBridge"
+adapter_name: "ECGPerceiverBridge"
 llm_input_embedding_size: 2560
 use_cross_attention: false
 num_attention_heads: 8
@@ -77,13 +77,15 @@ lora_config:
     - up_proj
     - down_proj
   bias: "none"
-train_dataset_path: !!str "/volume/ECG_tokenizer/combined_train_qa_m200k_h200k_subset_1k.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/combined_test_qa_m5k_h5k_subset_1k.parquet"
+train_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/combined_train_qa_m200k_h200k.parquet"
+validation_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/combined_test_qa_m5k_h5k.parquet"
+# train_dataset_path: !!str "/volume/ECG_tokenizer/combined_train_qa_m200k_h200k_subset_1k.parquet"
+# validation_dataset_path: !!str "/volume/ECG_tokenizer/combined_test_qa_m5k_h5k_subset_1k.parquet"
 prompt_column: "prompt"
 answer_column: "generated_answer"
 category_column: "prompt_category"
 num_workers: 8
-batch_size: 16
+batch_size: 12
 signal_path_column: "waveform_path_psa"
 ecg_waveform_length: 2500
 ecg_num_leads: 12
