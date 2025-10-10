@@ -267,11 +267,23 @@ class LLMFinetuningRunner(BaseRunner):
         return getattr(model, 'decoder', None)
 
     def _infer_prefix_offset(self, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> int:
-        """Guess how many leading tokens belong to the ECG prefix under prefix tuning."""
+        """
+        Calculate how many leading tokens belong to the ECG prefix.
+        
+        Note: Most decoders strip prefix tokens after generation, so this typically returns 0.
+        This method is kept for compatibility with decoders that don't strip prefix tokens.
+        """
         decoder = self._get_decoder_module()
-        if decoder is None or not getattr(decoder, 'prefix_tuning', False):
+        if decoder is None:
             return 0
-
+        
+        # If prefix_tuning is enabled, the decoder typically strips prefix tokens after generation
+        # So we return 0 (most common case for MedGemma, Llama, etc.)
+        if getattr(decoder, 'prefix_tuning', False):
+            return 0
+        
+        # For non-prefix-tuning modes where ECG tokens are prepended as regular tokens
+        # we need to calculate the offset
         configured_prefix = getattr(decoder, 'num_ecg_tokens', None)
         if configured_prefix is None:
             configured_prefix = getattr(self.config, 'num_ecg_tokens', 0)
@@ -1009,32 +1021,39 @@ class LLMFinetuningRunner(BaseRunner):
     
     def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
         """Return only the assistant portion of the generated text."""
-        if generated_ids is None:
+        if generated_ids is None or generated_ids.numel() == 0:
             return ""
 
-        mask = label_ids != -100
+        # Flatten tensors for easier processing
+        generated_flat = generated_ids.view(-1)
+        label_flat = label_ids.view(-1)
+        
+        # Find where the actual answer starts in label_ids (first non -100 token)
+        mask = label_flat != -100
+        valid_positions = torch.nonzero(mask, as_tuple=False).flatten()
+        
+        if valid_positions.numel() == 0:
+            # No valid labels - decode the entire generated sequence
+            return tokenizer.decode(generated_flat.tolist(), skip_special_tokens=True)
+        
+        # The prompt length is the position of the first valid label
+        prompt_len = int(valid_positions[0])
+        
+        # Account for prefix offset (ECG tokens) if present
         prefix_offset = self._infer_prefix_offset(generated_ids, label_ids)
-
-        # Fast path when mask and generated ids align as expected
-        if mask.shape == generated_ids.shape:
-            assistant_tokens = generated_ids[mask]
-        else:
-            # Fall back to slicing using the first/last valid label positions
-            mask_flat = mask.view(-1)
-            generated_flat = generated_ids.view(-1)
-
-            valid_positions = torch.nonzero(mask_flat, as_tuple=False).flatten()
-
-            if valid_positions.numel() == 0:
-                assistant_tokens = generated_flat
-            else:
-                start_idx = prefix_offset + int(valid_positions[0])
-                end_idx = prefix_offset + int(valid_positions[-1]) + 1
-
-                start_idx = min(start_idx, generated_flat.size(0))
-                end_idx = min(max(end_idx, start_idx), generated_flat.size(0))
-
-                assistant_tokens = generated_flat[start_idx:end_idx]
+        
+        # Calculate the actual start position in generated_ids
+        # generated_ids structure: [prefix_tokens (if any)] + [prompt_tokens] + [generated_answer]
+        # We need to skip: prefix_offset + prompt_len
+        start_idx = prefix_offset + prompt_len
+        
+        # Ensure start_idx is within bounds
+        if start_idx >= generated_flat.size(0):
+            # No generated tokens after the prompt
+            return ""
+        
+        # Extract tokens from start_idx to the end
+        assistant_tokens = generated_flat[start_idx:]
 
         if assistant_tokens.numel() == 0:
             return ""

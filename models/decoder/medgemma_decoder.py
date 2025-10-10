@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from transformers import AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 
-from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge
+from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
 from utils.enums import AdapterName, ModelName
 from utils.registry import ModelRegistry
 
@@ -99,7 +99,7 @@ class MedGemmaDecoder(nn.Module):
 
         adapter_name_str = adapter_name.value if hasattr(adapter_name, "value") else str(adapter_name)
 
-        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge]] = None
+        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
         self.bridge_config: Optional[Dict[str, Any]] = None
 
         visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
@@ -107,6 +107,7 @@ class MedGemmaDecoder(nn.Module):
         if adapter_name in {
             AdapterName.LLAMA32_ECG_CODE_BRIDGE,
             AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            AdapterName.ECG_PERCEIVER_BRIDGE,
         }:
             if adapter_name == AdapterName.LLAMA32_ECG_CODE_BRIDGE:
                 self.bridge = ECGCodeBridge(
@@ -129,19 +130,36 @@ class MedGemmaDecoder(nn.Module):
                 }
             else:
                 feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                self.bridge = ECGProjectionBridge(
-                    input_dim=feature_dim,
-                    d_model=llm_input_embedding_size,
-                    num_tokens=visual_tokens,
-                    dropout=adapter_dropout,
-                )
-                self.bridge_config = {
-                    "style": "projection",
-                    "input_dim": feature_dim,
-                    "d_model": llm_input_embedding_size,
-                    "num_tokens": visual_tokens,
-                    "dropout": adapter_dropout,
-                }
+                if adapter_name == AdapterName.ECG_PERCEIVER_BRIDGE:
+                    self.bridge = PerceiverProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_output_tokens=visual_tokens,
+                        num_heads=bridge_num_heads,
+                        dropout=bridge_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "perceiver",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "output_tokens": visual_tokens,
+                        "num_heads": bridge_num_heads,
+                        "dropout": bridge_dropout,
+                    }
+                else:
+                    self.bridge = ECGProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_tokens=visual_tokens,
+                        dropout=adapter_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "projection",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "num_tokens": visual_tokens,
+                        "dropout": adapter_dropout,
+                    }
 
         if self.bridge is None:
             raise ValueError(
