@@ -266,7 +266,8 @@ class PerceiverProjectionBridge(nn.Module):
 
     def _prepare_features(self, features: torch.Tensor) -> torch.Tensor:
         if features.dim() == 4:
-            features = features[:, 0]
+            # Preserve information from each channel/quantizer by folding it into the sequence axis
+            features = features.reshape(features.size(0), -1, features.size(-1))
         if features.dim() != 3:
             raise ValueError(
                 f"PerceiverProjectionBridge expects [batch, seq, dim] features, got shape {features.shape}"

@@ -1162,8 +1162,7 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                raw_pred, raw_ref = 
-                (tokenizer, generated_ids.cpu(), label_ids.cpu())
+                raw_pred, raw_ref = decode_assistant_only_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
                 generated_text = self._sanitize_chat_text(raw_pred)
                 label_text = self._sanitize_chat_text(raw_ref)
 
