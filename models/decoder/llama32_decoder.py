@@ -14,7 +14,7 @@ from utils.enums import (
 from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
 from utils.attention_visualization import ECGAttentionVisualizer, AttentionHook
-from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge
+from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
 
 
 
@@ -101,7 +101,7 @@ class Llama32Decoder(nn.Module):
         self.adapter_name = adapter_name
         adapter_name_str = adapter_name.value if hasattr(adapter_name, 'value') else str(adapter_name)
 
-        self.bridge: Optional[ECGCodeBridge] = None
+        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
         self.bridge_config: Optional[Dict[str, Any]] = None
         self.adapter: Optional[ModelT] = None
         self._prefix_debug_once = True
@@ -110,7 +110,8 @@ class Llama32Decoder(nn.Module):
 
         if adapter_name in {
             AdapterName.LLAMA32_ECG_CODE_BRIDGE,
-            AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE
+            AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            AdapterName.ECG_PERCEIVER_BRIDGE
         }:
             if adapter_name == AdapterName.LLAMA32_ECG_CODE_BRIDGE:
                 self.bridge = ECGCodeBridge(
@@ -133,18 +134,36 @@ class Llama32Decoder(nn.Module):
                 }
             else:
                 feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                self.bridge = ECGProjectionBridge(
-                    input_dim=feature_dim,
-                    d_model=llm_input_embedding_size,
-                    num_tokens=visual_tokens,
-                    dropout=bridge_dropout,
-                )
-                self.bridge_config = {
-                    "style": "projection",
-                    "input_dim": feature_dim,
-                    "output_tokens": visual_tokens,
-                    "dropout": bridge_dropout,
-                }
+                if adapter_name == AdapterName.ECG_PERCEIVER_BRIDGE:
+                    self.bridge = PerceiverProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_output_tokens=visual_tokens,
+                        num_heads=bridge_num_heads,
+                        dropout=bridge_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "perceiver",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "output_tokens": visual_tokens,
+                        "num_heads": bridge_num_heads,
+                        "dropout": bridge_dropout,
+                    }
+                else:
+                    self.bridge = ECGProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_tokens=visual_tokens,
+                        dropout=bridge_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "projection",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "output_tokens": visual_tokens,
+                        "dropout": bridge_dropout,
+                    }
             self.num_ecg_tokens = self.bridge.num_tokens
         else:
             self.adapter_class: ModelClassT = ModelRegistry.get(adapter_name)

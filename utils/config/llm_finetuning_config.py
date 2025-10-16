@@ -89,6 +89,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     
     # Instruction tuning (with default)
     instruct_mode: bool = False
+
+    # Prefix tuning toggle (with default)
+    prefix_tuning: bool = False
     
     # LoRA parameters (with defaults)
     use_lora: bool = False

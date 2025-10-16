@@ -9,6 +9,7 @@ from models.adapter import (
     # Bridges
     ECGCodeBridge,
     ECGProjectionBridge,
+    PerceiverProjectionBridge,
     # Cross-attention
     CrossModalSequenceTokenAdapter,
     CrossAttentionLayer,
@@ -39,6 +40,7 @@ __all__ = [
     # Bridges
     "ECGCodeBridge",
     "ECGProjectionBridge",
+    "PerceiverProjectionBridge",
     # Cross-attention
     "CrossModalSequenceTokenAdapter",
     "CrossAttentionLayer",

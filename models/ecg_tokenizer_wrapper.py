@@ -912,7 +912,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         ecg_projection_config: Optional[Dict[str, Any]] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
-        attention_log_frequency: int = 100
+        attention_log_frequency: int = 100,
+        prefix_tuning: bool = False,
     ):
         """
         Args:
@@ -932,6 +933,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.use_lora: bool = use_lora
         self.processor: Optional[Any] = processor
         self.ecg_token_start_id = ecg_token_start_id
+        self.prefix_tuning = prefix_tuning
         # ECG image projection disabled - module not available
         self.ecg_image_projection = None
         if False:  # Disabled ecg_image_projection:
@@ -1009,6 +1011,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_dropout': bridge_dropout,
                         'bridge_num_special_tokens': bridge_num_special_tokens,
                         'num_quantizers': num_quantizers,
+                        'prefix_tuning': prefix_tuning,
                     })
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))

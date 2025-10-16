@@ -31,7 +31,8 @@ class ECGClinicalReportDataset(Dataset):
         ecg_token_start_id: Optional[int] = None,
         prompt_column: str = "question",
         answer_column: str = "report",
-        category_column: str = "prompt_category"
+        category_column: str = "prompt_category",
+        prefix_tuning: bool = False,
     ):
         """
         Args:
@@ -67,22 +68,28 @@ class ECGClinicalReportDataset(Dataset):
         self.instruct_mode: bool = instruct_mode
         self.num_ecg_tokens: int = num_ecg_tokens
         self.ecg_token_start_id: Optional[int] = ecg_token_start_id
+        self.prefix_tuning: bool = prefix_tuning
         
         # Column configuration
         self.prompt_column: str = prompt_column
         self.answer_column: str = answer_column
         self.category_column: str = category_column
         if self.instruct_mode:
-            if self.ecg_token_start_id is None:
-                start_token = f"<|ecg_pos_{0}|>"
-                token_id = self._pt_tokenizer.convert_tokens_to_ids(start_token)
-                unk_id = getattr(self._pt_tokenizer, 'unk_token_id', None)
-                if token_id is None or token_id == -1 or (unk_id is not None and int(token_id) == int(unk_id)):
-                    raise ValueError(
-                        "ecg_token_start_id is required in instruct_mode when tokenizer is missing ECG position tokens"
-                    )
-                self.ecg_token_start_id = int(token_id)
-            self.ecg_token_ids = list(range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens))
+            if not self.prefix_tuning:
+                if self.ecg_token_start_id is None:
+                    start_token = f"<|ecg_pos_{0}|>"
+                    token_id = self._pt_tokenizer.convert_tokens_to_ids(start_token)
+                    unk_id = getattr(self._pt_tokenizer, 'unk_token_id', None)
+                    if token_id is None or token_id == -1 or (unk_id is not None and int(token_id) == int(unk_id)):
+                        raise ValueError(
+                            "ecg_token_start_id is required in instruct_mode when tokenizer is missing ECG position tokens"
+                        )
+                    self.ecg_token_start_id = int(token_id)
+                self.ecg_token_ids = list(
+                    range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens)
+                )
+            else:
+                self.ecg_token_ids = []
         else:
             self.ecg_token_start_id = 0
             self.ecg_token_ids = []
@@ -200,23 +207,26 @@ class ECGClinicalReportDataset(Dataset):
                 full_ids = full_encoding.input_ids
 
                 # Build ECG token prefix [ecg_start_id .. ecg_start_id + num_ecg_tokens)
-                if self.ecg_token_start_id is None:
-                    raise ValueError("ecg_token_start_id must be provided in instruct_mode")
-                ecg_prefix = torch.arange(
-                    self.ecg_token_start_id,
-                    self.ecg_token_start_id + self.num_ecg_tokens,
-                    dtype=torch.long
-                )
+                prefix_len = 0 if self.prefix_tuning else self.num_ecg_tokens
+
+                if not self.prefix_tuning:
+                    if self.ecg_token_start_id is None:
+                        raise ValueError("ecg_token_start_id must be provided in instruct_mode")
+                    ecg_prefix = torch.arange(
+                        self.ecg_token_start_id,
+                        self.ecg_token_start_id + self.num_ecg_tokens,
+                        dtype=torch.long
+                    )
+                else:
+                    ecg_prefix = torch.empty(0, dtype=torch.long)
 
                 # Truncate text so total length fits within max_length after ECG prefix
-                max_text_len = max(0, self.max_length - self.num_ecg_tokens)
+                max_text_len = max(0, self.max_length - prefix_len)
                 full_ids_trunc = full_ids[:max_text_len]
 
                 # Construct final input_ids: [ECG x 128] + [full text tokens]
-                input_ids = torch.cat([
-                    ecg_prefix,
-                    torch.tensor(full_ids_trunc, dtype=torch.long)
-                ], dim=0)
+                text_ids = torch.tensor(full_ids_trunc, dtype=torch.long)
+                input_ids = torch.cat([ecg_prefix, text_ids], dim=0)
 
                 # Create attention mask and pad to max_length
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)
@@ -252,7 +262,7 @@ class ECGClinicalReportDataset(Dataset):
                 # Create labels: ignore prompt (question + assistant header) and padding
                 prompt_len = len(prompt_ids)
                 text_prompt_len = len(prompt_encoding.input_ids)
-                full_prompt_len = min(self.max_length, self.num_ecg_tokens + text_prompt_len)
+                full_prompt_len = min(self.max_length, prefix_len + text_prompt_len)
                 # prompt_len = min(len(prompt_ids), self.max_length)
                 labels = input_ids.clone()
                 # labels[:prompt_len] = -100
@@ -325,7 +335,8 @@ def get_clinical_report_dataloader(
         ecg_token_start_id=config.ecg_token_start_id,
         prompt_column=getattr(config, 'prompt_column', 'question'),
         answer_column=getattr(config, 'answer_column', 'report'),
-        category_column=getattr(config, 'category_column', 'prompt_category')
+        category_column=getattr(config, 'category_column', 'prompt_category'),
+        prefix_tuning=getattr(config, 'prefix_tuning', False)
     )
     return DataLoader(
         dataset, 
@@ -354,7 +365,8 @@ def get_distributed_clinical_report_dataloader(
     ecg_token_start_id: Optional[int] = None,
     prompt_column: str = "question",
     answer_column: str = "report",
-    category_column: str = "prompt_category"
+    category_column: str = "prompt_category",
+    prefix_tuning: bool = False
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=dataset_path, 
@@ -368,7 +380,8 @@ def get_distributed_clinical_report_dataloader(
         ecg_token_start_id=ecg_token_start_id,
         prompt_column=prompt_column,
         answer_column=answer_column,
-        category_column=category_column
+        category_column=category_column,
+        prefix_tuning=prefix_tuning
     )
     
     return DistributedUtils.get_distributed_dataloader(

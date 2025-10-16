@@ -205,3 +205,91 @@ class ECGProjectionBridge(nn.Module):
         pos_emb = self.positional_embedding(positions).unsqueeze(0)
         x = x + pos_emb
         return self.out_norm(x)
+
+class PerceiverProjectionBridge(nn.Module):
+    """Perceiver-style bridge that resamples continuous ECG features into the LLM space."""
+
+    uses_codes: bool = False
+
+    def __init__(
+        self,
+        input_dim: int,
+        d_model: int,
+        num_output_tokens: int,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+
+        if d_model % num_heads != 0:
+            raise ValueError(
+                f"d_model ({d_model}) must be divisible by num_heads ({num_heads})."
+            )
+
+        self.num_output_tokens = num_output_tokens
+
+        self.feature_proj = nn.Linear(input_dim, d_model)
+        self.queries = nn.Parameter(
+            torch.randn(num_output_tokens, d_model) * (1.0 / math.sqrt(d_model))
+        )
+
+        self.norm_features = nn.LayerNorm(d_model)
+        self.norm_queries = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.attn_dropout = nn.Dropout(dropout)
+
+        self.norm_mlp = nn.LayerNorm(d_model)
+        mlp_hidden_dim = int(d_model * 4)
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, d_model),
+            nn.Dropout(dropout),
+        )
+
+        self._initialize_weights()
+
+    def _initialize_weights(self) -> None:
+        final_mlp_linear = cast(nn.Linear, self.mlp[-2])
+        nn.init.normal_(final_mlp_linear.weight, std=1e-3)
+        nn.init.zeros_(final_mlp_linear.bias)
+
+    @property
+    def num_tokens(self) -> int:
+        return self.num_output_tokens
+
+    def _prepare_features(self, features: torch.Tensor) -> torch.Tensor:
+        if features.dim() == 4:
+            # Preserve information from each channel/quantizer by folding it into the sequence axis
+            features = features.reshape(features.size(0), -1, features.size(-1))
+        if features.dim() != 3:
+            raise ValueError(
+                f"PerceiverProjectionBridge expects [batch, seq, dim] features, got shape {features.shape}"
+            )
+        return features
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        features = self._prepare_features(features)
+        batch_size = features.shape[0]
+
+        projected_features = self.feature_proj(features)
+        queries = self.queries.unsqueeze(0).expand(batch_size, -1, -1)
+
+        attn_output, _ = self.attn(
+            query=self.norm_queries(queries),
+            key=self.norm_features(projected_features),
+            value=self.norm_features(projected_features),
+        )
+        queries = queries + self.attn_dropout(attn_output)
+
+        mlp_output = self.mlp(self.norm_mlp(queries))
+        prefix_embeddings = queries + mlp_output
+
+        return prefix_embeddings
+    

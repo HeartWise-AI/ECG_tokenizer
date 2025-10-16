@@ -259,6 +259,54 @@ class LLMFinetuningRunner(BaseRunner):
             return decoder.llm
         return None
 
+    def _get_decoder_module(self):
+        model = self.model
+        if model is None:
+            return None
+        if hasattr(model, 'module'):
+            model = model.module
+        return getattr(model, 'decoder', None)
+
+    def _infer_prefix_offset(self, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> int:
+        """
+        Calculate how many leading tokens belong to the ECG prefix.
+        
+        Note: Most decoders strip prefix tokens after generation, so this typically returns 0.
+        This method is kept for compatibility with decoders that don't strip prefix tokens.
+        """
+        decoder = self._get_decoder_module()
+        if decoder is None:
+            return 0
+        
+        # If prefix_tuning is enabled, the decoder typically strips prefix tokens after generation
+        # So we return 0 (most common case for MedGemma, Llama, etc.)
+        if getattr(decoder, 'prefix_tuning', False):
+            return 0
+        
+        # For non-prefix-tuning modes where ECG tokens are prepended as regular tokens
+        # we need to calculate the offset
+        configured_prefix = getattr(decoder, 'num_ecg_tokens', None)
+        if configured_prefix is None:
+            configured_prefix = getattr(self.config, 'num_ecg_tokens', 0)
+        try:
+            prefix_tokens = int(configured_prefix)
+        except (TypeError, ValueError):
+            prefix_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
+
+        if prefix_tokens <= 0:
+            return 0
+
+        gen_len = int(generated_ids.size(-1))
+        label_len = int(label_ids.size(-1)) if label_ids.dim() > 0 else 0
+        if gen_len <= label_len:
+            return 0
+
+        diff = gen_len - label_len
+        if diff <= 0:
+            return 0
+
+        return min(prefix_tokens, diff)
+
     def _set_param_group_lr(self, group_name: str, lr: float):
         """Update the learning rate for a named optimizer group, if present."""
         if self.optimizer is None:
@@ -973,11 +1021,44 @@ class LLMFinetuningRunner(BaseRunner):
     
     def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
         """Return only the assistant portion of the generated text."""
-        if generated_ids is None:
+        if generated_ids is None or generated_ids.numel() == 0:
             return ""
 
-        prediction, _ = decode_assistant_only_text(tokenizer, generated_ids, label_ids)
-        return prediction
+        # Flatten tensors for easier processing
+        generated_flat = generated_ids.view(-1)
+        label_flat = label_ids.view(-1)
+        
+        # Find where the actual answer starts in label_ids (first non -100 token)
+        mask = label_flat != -100
+        valid_positions = torch.nonzero(mask, as_tuple=False).flatten()
+        
+        if valid_positions.numel() == 0:
+            # No valid labels - decode the entire generated sequence
+            return tokenizer.decode(generated_flat.tolist(), skip_special_tokens=True)
+        
+        # The prompt length is the position of the first valid label
+        prompt_len = int(valid_positions[0])
+        
+        # Account for prefix offset (ECG tokens) if present
+        prefix_offset = self._infer_prefix_offset(generated_ids, label_ids)
+        
+        # Calculate the actual start position in generated_ids
+        # generated_ids structure: [prefix_tokens (if any)] + [prompt_tokens] + [generated_answer]
+        # We need to skip: prefix_offset + prompt_len
+        start_idx = prefix_offset + prompt_len
+        
+        # Ensure start_idx is within bounds
+        if start_idx >= generated_flat.size(0):
+            # No generated tokens after the prompt
+            return ""
+        
+        # Extract tokens from start_idx to the end
+        assistant_tokens = generated_flat[start_idx:]
+
+        if assistant_tokens.numel() == 0:
+            return ""
+
+        return tokenizer.decode(assistant_tokens.tolist(), skip_special_tokens=True)
 
     @staticmethod
     def _sanitize_chat_text(text: str, max_length: int = 512) -> str:

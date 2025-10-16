@@ -9,7 +9,7 @@ import torch.nn as nn
 
 from transformers import AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 
-from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge
+from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
 from utils.enums import AdapterName, ModelName
 from utils.registry import ModelRegistry
 
@@ -80,11 +80,15 @@ class MedGemmaDecoder(nn.Module):
         ecg_token_start_id: Optional[int] = None,
         torch_dtype: Optional[torch.dtype] = torch.bfloat16,
         default_generation_kwargs: Optional[Dict[str, Any]] = None,
+        prefix_tuning: bool = False,
+        label_ignore_index: int = -100,
         **unused_kwargs: Any,
     ) -> None:
         super().__init__()
 
         self.quantizer = quantizer
+        self.prefix_tuning = prefix_tuning
+        self.label_ignore_index = int(label_ignore_index)
 
         if isinstance(adapter_name, str):
             try:
@@ -95,7 +99,7 @@ class MedGemmaDecoder(nn.Module):
 
         adapter_name_str = adapter_name.value if hasattr(adapter_name, "value") else str(adapter_name)
 
-        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge]] = None
+        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
         self.bridge_config: Optional[Dict[str, Any]] = None
 
         visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
@@ -103,6 +107,7 @@ class MedGemmaDecoder(nn.Module):
         if adapter_name in {
             AdapterName.LLAMA32_ECG_CODE_BRIDGE,
             AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            AdapterName.ECG_PERCEIVER_BRIDGE,
         }:
             if adapter_name == AdapterName.LLAMA32_ECG_CODE_BRIDGE:
                 self.bridge = ECGCodeBridge(
@@ -125,19 +130,36 @@ class MedGemmaDecoder(nn.Module):
                 }
             else:
                 feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                self.bridge = ECGProjectionBridge(
-                    input_dim=feature_dim,
-                    d_model=llm_input_embedding_size,
-                    num_tokens=visual_tokens,
-                    dropout=adapter_dropout,
-                )
-                self.bridge_config = {
-                    "style": "projection",
-                    "input_dim": feature_dim,
-                    "d_model": llm_input_embedding_size,
-                    "num_tokens": visual_tokens,
-                    "dropout": adapter_dropout,
-                }
+                if adapter_name == AdapterName.ECG_PERCEIVER_BRIDGE:
+                    self.bridge = PerceiverProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_output_tokens=visual_tokens,
+                        num_heads=bridge_num_heads,
+                        dropout=bridge_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "perceiver",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "output_tokens": visual_tokens,
+                        "num_heads": bridge_num_heads,
+                        "dropout": bridge_dropout,
+                    }
+                else:
+                    self.bridge = ECGProjectionBridge(
+                        input_dim=feature_dim,
+                        d_model=llm_input_embedding_size,
+                        num_tokens=visual_tokens,
+                        dropout=adapter_dropout,
+                    )
+                    self.bridge_config = {
+                        "style": "projection",
+                        "input_dim": feature_dim,
+                        "d_model": llm_input_embedding_size,
+                        "num_tokens": visual_tokens,
+                        "dropout": adapter_dropout,
+                    }
 
         if self.bridge is None:
             raise ValueError(
@@ -151,18 +173,29 @@ class MedGemmaDecoder(nn.Module):
         ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(self.num_ecg_tokens)]
         first_ecg_id = self.tokenizer.convert_tokens_to_ids(ecg_tokens[0])  # type: ignore[attr-defined]
         unk_id = getattr(self.tokenizer, 'unk_token_id', None)  # type: ignore[attr-defined]
-        if first_ecg_id is None or first_ecg_id == -1 or (unk_id is not None and int(first_ecg_id) == int(unk_id)):
-            base_vocab_size = len(self.tokenizer)  # type: ignore[arg-type]
-            self.tokenizer.add_tokens(ecg_tokens, special_tokens=True)  # type: ignore[attr-defined]
-            self.ecg_token_start_id = base_vocab_size
-        else:
-            self.ecg_token_start_id = int(first_ecg_id)
 
-        if ecg_token_start_id is not None and self.ecg_token_start_id != int(ecg_token_start_id):
-            raise ValueError(
-                f"Tokenizer ECG token start id ({self.ecg_token_start_id}) does not match dataset-configured "
-                f"ecg_token_start_id ({ecg_token_start_id}). Ensure the config uses the tokenizer's vocabulary size."
-            )
+        if not self.prefix_tuning:
+            if first_ecg_id is None or first_ecg_id == -1 or (unk_id is not None and int(first_ecg_id) == int(unk_id)):
+                base_vocab_size = len(self.tokenizer)  # type: ignore[arg-type]
+                self.tokenizer.add_tokens(ecg_tokens, special_tokens=True)  # type: ignore[attr-defined]
+                self.ecg_token_start_id = base_vocab_size
+            else:
+                self.ecg_token_start_id = int(first_ecg_id)
+
+            if ecg_token_start_id is not None and self.ecg_token_start_id != int(ecg_token_start_id):
+                raise ValueError(
+                    f"Tokenizer ECG token start id ({self.ecg_token_start_id}) does not match dataset-configured "
+                    f"ecg_token_start_id ({ecg_token_start_id}). Ensure the config uses the tokenizer's vocabulary size."
+                )
+        else:
+            if ecg_token_start_id is not None:
+                self.ecg_token_start_id = int(ecg_token_start_id)
+            elif first_ecg_id is not None and first_ecg_id != -1 and not (
+                unk_id is not None and int(first_ecg_id) == int(unk_id)
+            ):
+                self.ecg_token_start_id = int(first_ecg_id)
+            else:
+                self.ecg_token_start_id = None
 
         self.llm_model: PreTrainedModel = _load_medgemma_model(
             huggingface_model_name,
@@ -184,18 +217,21 @@ class MedGemmaDecoder(nn.Module):
         self.llm = self.llm_model
         self.llm_model.resize_token_embeddings(len(self.tokenizer), mean_resizing=True)  # type: ignore[arg-type]
 
-        self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, self.num_ecg_tokens)
-        mask = torch.zeros(len(self.tokenizer), dtype=torch.bool)
-        mask[self.ecg_token_start_id:self.ecg_token_start_id + self.num_ecg_tokens] = True
-        self.register_buffer("_ecg_embedding_train_mask", mask, persistent=False)
         self._ecg_embedding_hook_handle = None
-        self._apply_ecg_embedding_mask()
+        if not self.prefix_tuning and self.ecg_token_start_id is not None:
+            self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, self.num_ecg_tokens)
+            mask = torch.zeros(len(self.tokenizer), dtype=torch.bool)
+            mask[self.ecg_token_start_id:self.ecg_token_start_id + self.num_ecg_tokens] = True
+            self.register_buffer("_ecg_embedding_train_mask", mask, persistent=False)
+            self._apply_ecg_embedding_mask()
 
-        print(
-            f"   ECG token ID range: [{self.ecg_token_start_id}, "
-            f"{self.ecg_token_start_id + self.num_ecg_tokens - 1}]"
-        )
-        print(f"   New vocabulary size: {len(self.llm_model.get_input_embeddings().weight)}")
+            print(
+                f"   ECG token ID range: [{self.ecg_token_start_id}, "
+                f"{self.ecg_token_start_id + self.num_ecg_tokens - 1}]"
+            )
+            print(f"   New vocabulary size: {len(self.llm_model.get_input_embeddings().weight)}")
+        else:
+            self._ecg_embedding_train_mask = None  # type: ignore[assignment]
 
         pad_id = _coerce_id(getattr(self.llm_model.config, "pad_token_id", None))
         eos_id = _coerce_id(getattr(self.llm_model.config, "eos_token_id", None))
@@ -216,12 +252,17 @@ class MedGemmaDecoder(nn.Module):
         }
         if default_generation_kwargs:
             base_defaults.update(default_generation_kwargs)
-        self.default_generation_params = base_defaults
         self._eot_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-        self.bad_ecg_token_ids = [[tid] for tid in range(
-            self.ecg_token_start_id,
-            self.ecg_token_start_id + self.num_ecg_tokens,
-        )]
+        if not self.prefix_tuning and self.ecg_token_start_id is not None:
+            self.bad_ecg_token_ids: Optional[list[list[int]]] = [[tid] for tid in range(
+                self.ecg_token_start_id,
+                self.ecg_token_start_id + self.num_ecg_tokens,
+            )]
+        else:
+            self.bad_ecg_token_ids = None
+        self.default_generation_params = base_defaults
+        if self.bad_ecg_token_ids:
+            self.default_generation_params.setdefault("bad_words_ids", self.bad_ecg_token_ids)
 
     # ------------------------------------------------------------------
     # Token initialization helpers (borrowed from LLaMA decoder)
@@ -250,11 +291,11 @@ class MedGemmaDecoder(nn.Module):
             finally:
                 self._ecg_embedding_hook_handle = None
 
-        if not hasattr(self, "_ecg_embedding_train_mask"):
+        mask_base = getattr(self, "_ecg_embedding_train_mask", None)
+        if mask_base is None:
             return
 
         embedding_weight = self.llm_model.get_input_embeddings().weight
-        mask_base = self._ecg_embedding_train_mask
 
         def _mask_gradients(grad: torch.Tensor) -> torch.Tensor:
             mask = mask_base.to(device=grad.device, dtype=grad.dtype).unsqueeze(1)
@@ -262,6 +303,29 @@ class MedGemmaDecoder(nn.Module):
 
         self._ecg_embedding_hook_handle = embedding_weight.register_hook(_mask_gradients)
         embedding_weight.requires_grad_(True)
+
+    def _strip_prefix_tokens(
+        self,
+        generated: Union[torch.Tensor, Any],
+        prefix_len: int,
+    ) -> Union[torch.Tensor, Any]:
+        """Remove synthetic prefix tokens from generated sequences when prefix tuning is active."""
+        if prefix_len <= 0:
+            return generated
+
+        if isinstance(generated, torch.Tensor):
+            if generated.size(-1) <= prefix_len:
+                return generated[:, 0:0]
+            return generated[:, prefix_len:]
+
+        sequences = getattr(generated, "sequences", None)
+        if isinstance(sequences, torch.Tensor):
+            if sequences.size(-1) <= prefix_len:
+                stripped = sequences[:, 0:0]
+            else:
+                stripped = sequences[:, prefix_len:]
+            generated.sequences = stripped
+        return generated
 
     # ------------------------------------------------------------------
     # Utilities
@@ -315,19 +379,24 @@ class MedGemmaDecoder(nn.Module):
         attention_mask: Optional[torch.Tensor],
         quantized_features: Optional[torch.Tensor],
         quantized_codes: Optional[torch.Tensor],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], int]:
         embed_layer = self.llm_model.get_input_embeddings()
         device = embed_layer.weight.device
         model_dtype = embed_layer.weight.dtype
 
-        if input_ids.size(1) < self.num_ecg_tokens:
-            raise ValueError(
-                f"Input sequence too short for {self.num_ecg_tokens} ECG tokens: {input_ids.shape}"
-            )
-
-        text_input_ids = input_ids[:, self.num_ecg_tokens:].to(device)
-        text_embeddings = embed_layer(text_input_ids)
         ecg_embeddings = self._compute_ecg_embeddings(quantized_features, quantized_codes, device)
+        prefix_len = int(ecg_embeddings.size(1))
+
+        if not self.prefix_tuning:
+            if input_ids.size(1) < prefix_len:
+                raise ValueError(
+                    f"Input sequence too short for {prefix_len} ECG tokens: {input_ids.shape}"
+                )
+            text_input_ids = input_ids[:, prefix_len:].to(device)
+        else:
+            text_input_ids = input_ids.to(device)
+
+        text_embeddings = embed_layer(text_input_ids)
 
         if ecg_embeddings.dtype != model_dtype:
             ecg_embeddings = ecg_embeddings.to(model_dtype)
@@ -338,8 +407,23 @@ class MedGemmaDecoder(nn.Module):
 
         if attention_mask is not None:
             attention_mask = attention_mask.to(device)
+            if self.prefix_tuning:
+                prefix_mask = torch.ones(
+                    attention_mask.size(0),
+                    prefix_len,
+                    dtype=attention_mask.dtype,
+                    device=device,
+                )
+                attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+        elif self.prefix_tuning:
+            attention_mask = torch.ones(
+                input_embeddings.size(0),
+                prefix_len + text_input_ids.size(1),
+                dtype=torch.long,
+                device=device,
+            )
 
-        return input_embeddings, attention_mask
+        return input_embeddings, attention_mask, prefix_len
 
     # ------------------------------------------------------------------
     # Forward pass
@@ -356,17 +440,29 @@ class MedGemmaDecoder(nn.Module):
         if input_ids is None:
             raise ValueError("input_ids must be provided for MedGemmaDecoder forward pass")
 
-        inputs_embeds, attn_mask = self._prepare_inputs_with_bridge(
+        inputs_embeds, attn_mask, prefix_len = self._prepare_inputs_with_bridge(
             input_ids,
             attention_mask,
             quantized_features,
             quantized_codes,
         )
 
+        prepared_labels = labels
+        if labels is not None:
+            prepared_labels = labels.to(inputs_embeds.device)
+            if self.prefix_tuning:
+                ignore_pad = torch.full(
+                    (prepared_labels.size(0), prefix_len),
+                    self.label_ignore_index,
+                    dtype=prepared_labels.dtype,
+                    device=prepared_labels.device,
+                )
+                prepared_labels = torch.cat([ignore_pad, prepared_labels], dim=1)
+
         outputs = self.llm_model(
             inputs_embeds=inputs_embeds,
             attention_mask=attn_mask,
-            labels=labels,
+            labels=prepared_labels,
             return_dict=True,
         )
 
@@ -445,26 +541,53 @@ class MedGemmaDecoder(nn.Module):
             ecg_embeddings = ecg_embeddings.to(model_dtype)
 
         prompt_embeddings = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
-        prompt_mask = torch.cat(
-            [torch.ones(batch_size, self.num_ecg_tokens, device=device, dtype=torch.long), prompt_mask],
-            dim=1,
-        )
+        prefix_len = ecg_embeddings.size(1)
+        prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
+        prompt_mask = torch.cat([prefix_mask, prompt_mask], dim=1)
+
+        if not self.prefix_tuning and self.ecg_token_start_id is not None:
+            prefix_token_ids = torch.arange(
+                self.ecg_token_start_id,
+                self.ecg_token_start_id + prefix_len,
+                dtype=torch.long,
+                device=device,
+            ).unsqueeze(0).expand(batch_size, -1)
+        else:
+            prefix_token_ids = torch.full(
+                (batch_size, prefix_len),
+                self.pad_token_id,
+                dtype=torch.long,
+                device=device,
+            )
+
+        input_ids = torch.cat([prefix_token_ids, prompt_tensor], dim=1)
 
         generate_args = dict(self.default_generation_params)
         generate_args.update(generate_kwargs)
         generate_args.setdefault("max_new_tokens", max_token_length)
-        generate_args.setdefault("bad_words_ids", self.bad_ecg_token_ids)
+        if self.bad_ecg_token_ids:
+            generate_args.setdefault("bad_words_ids", self.bad_ecg_token_ids)
+        else:
+            generate_args.pop("bad_words_ids", None)
+        generate_args.pop("input_ids", None)
+        generate_args.pop("attention_mask", None)
 
         eos_token_id = generate_args.pop("eos_token_id", None)
         if eos_token_id is None and self._eot_token_id is not None:
             eos_token_id = self._eot_token_id
 
-        return self.llm_model.generate(
+        generated = self.llm_model.generate(
             inputs_embeds=prompt_embeddings,
+            input_ids=input_ids,
             attention_mask=prompt_mask,
             eos_token_id=eos_token_id,
             **generate_args,
         )
+
+        if self.prefix_tuning:
+            generated = self._strip_prefix_tokens(generated, prefix_len)
+
+        return generated
 
     def generate_report_with_question(
         self,
@@ -505,26 +628,54 @@ class MedGemmaDecoder(nn.Module):
             ecg_embeddings = ecg_embeddings.to(model_dtype)
 
         inputs_embeds = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
-        attention_mask = torch.cat(
-            [torch.ones(prompt_embeddings.size(0), self.num_ecg_tokens, device=device, dtype=torch.long), prompt_attention_mask],
-            dim=1,
-        )
+        prefix_len = ecg_embeddings.size(1)
+        prefix_mask = torch.ones(prompt_embeddings.size(0), prefix_len, device=device, dtype=torch.long)
+        attention_mask = torch.cat([prefix_mask, prompt_attention_mask], dim=1)
+
+        batch_size = prompt_embeddings.size(0)
+        if not self.prefix_tuning and self.ecg_token_start_id is not None:
+            prefix_token_ids = torch.arange(
+                self.ecg_token_start_id,
+                self.ecg_token_start_id + prefix_len,
+                dtype=torch.long,
+                device=device,
+            ).unsqueeze(0).expand(batch_size, -1)
+        else:
+            prefix_token_ids = torch.full(
+                (batch_size, prefix_len),
+                self.pad_token_id,
+                dtype=torch.long,
+                device=device,
+            )
+
+        input_ids = torch.cat([prefix_token_ids, prompt_input_ids], dim=1)
 
         generate_args = dict(self.default_generation_params)
         generate_args.update(generate_kwargs)
         generate_args.setdefault("max_new_tokens", max_token_length)
-        generate_args.setdefault("bad_words_ids", self.bad_ecg_token_ids)
+        if self.bad_ecg_token_ids:
+            generate_args.setdefault("bad_words_ids", self.bad_ecg_token_ids)
+        else:
+            generate_args.pop("bad_words_ids", None)
+        generate_args.pop("input_ids", None)
+        generate_args.pop("attention_mask", None)
 
         eos_token_id = generate_args.pop("eos_token_id", None)
         if eos_token_id is None and self._eot_token_id is not None:
             eos_token_id = self._eot_token_id
 
-        return self.llm_model.generate(
+        generated = self.llm_model.generate(
             inputs_embeds=inputs_embeds,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             eos_token_id=eos_token_id,
             **generate_args,
         )
+
+        if self.prefix_tuning:
+            generated = self._strip_prefix_tokens(generated, prefix_len)
+
+        return generated
 
 
 __all__ = ["MedGemmaDecoder"]
