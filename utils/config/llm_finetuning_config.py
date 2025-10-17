@@ -122,6 +122,14 @@ class LLMFinetuningConfig(HeartWiseConfig):
     num_validation_plots: int = 6
     plot_selection_strategy: str = "worst_random_best"  # "worst_random_best", "random", "all"
     
+    # Bridge customization parameters (optional)
+    bridge_name: Optional[str] = None
+    num_codebooks_kept: Optional[int] = None
+    codebook_offset: Optional[int] = None
+    
+    # Default generation parameters for decoder (optional)
+    default_generation_kwargs: Optional[Dict[str, Any]] = None
+    
     def __post_init__(self):
         """Process nested lora_config if provided"""
         if self.lora_config is not None:

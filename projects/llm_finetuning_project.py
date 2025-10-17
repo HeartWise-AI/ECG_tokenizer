@@ -1,6 +1,7 @@
 import torch
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
+from types import SimpleNamespace
 from collections import deque
 from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer
@@ -30,6 +31,19 @@ from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dat
 # Add the config to the safe globals
 torch.serialization.add_safe_globals([LLMFinetuningConfig])
 torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
+
+
+def _coerce_config(config_obj: Any) -> Any:
+    """Convert raw checkpoint config dictionaries into attribute-friendly objects."""
+    if isinstance(config_obj, SimpleNamespace):
+        return config_obj
+    if isinstance(config_obj, dict):
+        return SimpleNamespace(**{key: _coerce_config(value) for key, value in config_obj.items()})
+    if isinstance(config_obj, list):
+        return [_coerce_config(item) for item in config_obj]
+    if isinstance(config_obj, tuple):
+        return tuple(_coerce_config(item) for item in config_obj)
+    return config_obj
 
 
 def _create_grad_scaler() -> _TorchGradScaler:
@@ -63,6 +77,83 @@ class LLMFinetuningProject(BaseProject):
     def run(self):
         """Execute the LLM finetuning workflow."""
         super().run()
+
+    def _resolve_checkpoint_structure(
+        self,
+        checkpoint_config: Any,
+        checkpoint_path: str
+    ) -> Tuple[Any, str, str, int, int]:
+        """Ensure required structural fields are available for downstream initialization."""
+        config_obj = _coerce_config(checkpoint_config)
+
+        encoder_name = getattr(config_obj, 'encoder_name', None)
+        quantizer_name = getattr(config_obj, 'quantizer_name', None)
+        num_quantizers = getattr(config_obj, 'num_quantizers', None)
+        codebook_size = getattr(config_obj, 'codebook_size', None)
+
+        missing_fields = [
+            field for field, value in (
+                ('encoder_name', encoder_name),
+                ('quantizer_name', quantizer_name),
+                ('num_quantizers', num_quantizers),
+                ('codebook_size', codebook_size),
+            ) if value is None
+        ]
+
+        fallback_checkpoint_path = getattr(config_obj, 'pretrained_encoder_checkpoint', None)
+        if missing_fields and fallback_checkpoint_path and str(fallback_checkpoint_path) != str(checkpoint_path):
+            try:
+                fallback_state = self._load_checkpoint(str(fallback_checkpoint_path))
+                fallback_config = _coerce_config(fallback_state.get('config', {}))
+            except Exception as exc:  # pragma: no cover - diagnostic logging only
+                fallback_config = None
+                if self.config.is_ref_device:
+                    print(
+                        f"[LLMFinetuningProject] Warning: Unable to load fallback checkpoint "
+                        f"{fallback_checkpoint_path} to recover config fields ({missing_fields}). Error: {exc}"
+                    )
+            else:
+                encoder_name = encoder_name or getattr(fallback_config, 'encoder_name', None)
+                quantizer_name = quantizer_name or getattr(fallback_config, 'quantizer_name', None)
+                num_quantizers = num_quantizers or getattr(fallback_config, 'num_quantizers', None)
+                codebook_size = codebook_size or getattr(fallback_config, 'codebook_size', None)
+
+        unresolved_fields = [
+            field for field, value in (
+                ('encoder_name', encoder_name),
+                ('quantizer_name', quantizer_name),
+                ('num_quantizers', num_quantizers),
+                ('codebook_size', codebook_size),
+            ) if value is None
+        ]
+        if unresolved_fields:
+            raise ValueError(
+                f"Pretrained checkpoint '{checkpoint_path}' does not provide required fields "
+                f"{unresolved_fields}. Ensure the checkpoint includes these values or update "
+                f"the configuration."
+            )
+
+        try:
+            num_quantizers_int = int(num_quantizers)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid 'num_quantizers' value ({num_quantizers}) found in checkpoint '{checkpoint_path}'."
+            ) from exc
+
+        try:
+            codebook_size_int = int(codebook_size)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid 'codebook_size' value ({codebook_size}) found in checkpoint '{checkpoint_path}'."
+            ) from exc
+
+        return (
+            config_obj,
+            str(encoder_name),
+            str(quantizer_name),
+            num_quantizers_int,
+            codebook_size_int,
+        )
         
     def _setup_training_objects(self)->dict[str, Any]: 
         """Setup objects required for LLM finetuning training.
@@ -82,18 +173,22 @@ class LLMFinetuningProject(BaseProject):
         state_dict = self._load_checkpoint(checkpoint_path)
         
         # Get the config from the pretrained tokenizer
-        pretrained_config = state_dict['config']
+        pretrained_config_raw = state_dict['config']
+        (
+            pretrained_config,
+            encoder_name,
+            quantizer_name,
+            num_quantizers,
+            codebook_size,
+        ) = self._resolve_checkpoint_structure(pretrained_config_raw, checkpoint_path)
         if self.config.is_ref_device:
             print(f"Pretrained config: {pretrained_config}")                
         
-        # Set encoder_name to the pretrained encoder_name -> otherwise the encoder_name is not saved in the checkpoint
-        self.config.encoder_name = pretrained_config.encoder_name
-        # Set quantizer_name to the pretrained quantizer_name -> otherwise the quantizer_name is not saved in the checkpoint
-        self.config.quantizer_name = pretrained_config.quantizer_name
-        # Set num_quantizers to the pretrained num_quantizers -> otherwise the num_quantizers is not saved in the checkpoint
-        self.config.num_quantizers = pretrained_config.num_quantizers
-        # Set codebook_size to the pretrained codebook_size -> otherwise the codebook_size is not saved in the checkpoint
-        self.config.codebook_size = pretrained_config.codebook_size
+        # Ensure config has the resolved structural attributes available for later use
+        self.config.encoder_name = encoder_name  # type: ignore[attr-defined]
+        self.config.quantizer_name = quantizer_name  # type: ignore[attr-defined]
+        self.config.num_quantizers = num_quantizers  # type: ignore[attr-defined]
+        self.config.codebook_size = codebook_size  # type: ignore[attr-defined]
         
         # Determine whether any training phase requests LoRA even if globally disabled
         training_phases = getattr(self.config, 'training_phases', {}) or {}
@@ -125,11 +220,11 @@ class LLMFinetuningProject(BaseProject):
         
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
-            encoder_name=pretrained_config.encoder_name, 
-            quantizer_name=pretrained_config.quantizer_name,
+            encoder_name=encoder_name, 
+            quantizer_name=quantizer_name,
             decoder_name=self.config.decoder_name, # use the decoder from the current config
-            num_quantizers=pretrained_config.num_quantizers,
-            codebook_size=pretrained_config.codebook_size,
+            num_quantizers=num_quantizers,
+            codebook_size=codebook_size,
             decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
             adapter_name=self.config.adapter_name,
             huggingface_model_name=self.config.huggingface_model_name,
@@ -146,6 +241,7 @@ class LLMFinetuningProject(BaseProject):
             ecg_projection_config=getattr(self.config, 'ecg_projection_config', None),
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+            default_generation_kwargs=getattr(self.config, 'default_generation_kwargs', None),
             use_lora=self.config.use_lora,
             lora_config=lora_config
         ).to(self.config.device)
@@ -154,7 +250,7 @@ class LLMFinetuningProject(BaseProject):
         if getattr(self.config, 'instruct_mode', False) and hasattr(ecg_tokenizer.decoder, 'llm_model'):
             ecg_tokenizer.decoder.llm_model.resize_token_embeddings(len(tokenizer))
         # Set the codebook size to the pretrained codebook size
-        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
+        self.config.codebook_size = codebook_size # required to compute % of active codebook during training
         
         resume_epoch = 0
         if resume_checkpoint_path:
@@ -687,7 +783,17 @@ class LLMFinetuningProject(BaseProject):
         state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
         
         # Get the config from the pretrained tokenizer
-        pretrained_config = state_dict['config']
+        pretrained_config_raw = state_dict['config']
+        (
+            pretrained_config,
+            encoder_name,
+            quantizer_name,
+            num_quantizers,
+            codebook_size,
+        ) = self._resolve_checkpoint_structure(
+            pretrained_config_raw,
+            self.config.pretrained_tokenizer_path
+        )
         if self.config.is_ref_device:
             print(f"Pretrained config: {pretrained_config}")              
         
@@ -698,7 +804,7 @@ class LLMFinetuningProject(BaseProject):
         
         # If checkpoint has LoRA weights, we should load with LoRA enabled
         # If checkpoint doesn't have LoRA weights, we should load without LoRA
-        use_lora_for_inference = checkpoint_has_lora and (hasattr(pretrained_config, 'use_lora') and pretrained_config.use_lora)
+        use_lora_for_inference = checkpoint_has_lora and bool(getattr(pretrained_config, 'use_lora', False))
         
         if self.config.is_ref_device:
             print(f"Checkpoint has LoRA weights: {checkpoint_has_lora}")
@@ -706,30 +812,36 @@ class LLMFinetuningProject(BaseProject):
         
         infer_tokenizer, infer_processor = self._get_tokenizer(self.config.tokenizer_name)
 
+        decoder_name = getattr(pretrained_config, 'decoder_name', self.config.decoder_name)
+        decoder_mode = getattr(pretrained_config, 'decoder_mode', self.config.decoder_mode)
+        adapter_name = getattr(pretrained_config, 'adapter_name', self.config.adapter_name)
+        huggingface_model_name = getattr(pretrained_config, 'huggingface_model_name', self.config.huggingface_model_name)
+        llm_input_embedding_size = getattr(pretrained_config, 'llm_input_embedding_size', self.config.llm_input_embedding_size)
+
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.pipeline_project)(
-            encoder_name=pretrained_config.encoder_name,
-            quantizer_name=pretrained_config.quantizer_name,
-            decoder_name=pretrained_config.decoder_name, 
-            num_quantizers=pretrained_config.num_quantizers,
-            codebook_size=pretrained_config.codebook_size,
-            decoder_mode=pretrained_config.decoder_mode,
-            adapter_name=pretrained_config.adapter_name,
-            huggingface_model_name=pretrained_config.huggingface_model_name if hasattr(pretrained_config, 'huggingface_model_name') else self.config.huggingface_model_name,
-            llm_input_embedding_size=pretrained_config.llm_input_embedding_size if hasattr(pretrained_config, 'llm_input_embedding_size') else self.config.llm_input_embedding_size,
+            encoder_name=encoder_name,
+            quantizer_name=quantizer_name,
+            decoder_name=decoder_name, 
+            num_quantizers=num_quantizers,
+            codebook_size=codebook_size,
+            decoder_mode=decoder_mode,
+            adapter_name=adapter_name,
+            huggingface_model_name=huggingface_model_name,
+            llm_input_embedding_size=llm_input_embedding_size,
             tokenizer=infer_tokenizer,
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             prefix_tuning=getattr(pretrained_config, 'prefix_tuning', getattr(self.config, 'prefix_tuning', False)),
             use_lora=use_lora_for_inference,
             lora_config={
-                'r': pretrained_config.lora_r if hasattr(pretrained_config, 'lora_r') else 16,
-                'alpha': pretrained_config.lora_alpha if hasattr(pretrained_config, 'lora_alpha') else 32,
-                'dropout': pretrained_config.lora_dropout if hasattr(pretrained_config, 'lora_dropout') else 0.1,
-                'target_modules': pretrained_config.lora_target_modules if hasattr(pretrained_config, 'lora_target_modules') else None,
-                'bias': pretrained_config.lora_bias if hasattr(pretrained_config, 'lora_bias') else 'none'
+                'r': getattr(pretrained_config, 'lora_r', 16),
+                'alpha': getattr(pretrained_config, 'lora_alpha', 32),
+                'dropout': getattr(pretrained_config, 'lora_dropout', 0.1),
+                'target_modules': getattr(pretrained_config, 'lora_target_modules', None),
+                'bias': getattr(pretrained_config, 'lora_bias', 'none')
             } if use_lora_for_inference else None
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
-        self.config.codebook_size = pretrained_config.codebook_size # required to compute % of active codebook during training
+        self.config.codebook_size = codebook_size # required to compute % of active codebook during training
         
         # Load the pretrained state dict
         pretrained_state_dict = state_dict['model_state_dict']

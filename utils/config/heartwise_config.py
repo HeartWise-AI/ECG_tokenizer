@@ -3,6 +3,7 @@ import os
 from typing import Dict, Any, List, Type
 from dataclasses import dataclass, asdict
 
+from utils.enums import AdapterName
 from utils.files_handler import load_yaml
 from utils.registry import ConfigRegistry
 
@@ -59,6 +60,26 @@ class HeartWiseConfig:
         
         if len(undefined_parameters) > 0:
             raise ValueError(f"{undefined_parameters} were defined in the {yaml_path} file but not in the registered config {registered_config.__name__}")
+        
+        # Allow bridge_name to act as an alias for adapter_name when defined
+        adapter_field_present = 'adapter_name' in registered_config.__dataclass_fields__
+        if adapter_field_present and 'adapter_name' not in data_parameters:
+            bridge_name = data_parameters.get('bridge_name')
+            if bridge_name is not None:
+                bridge_alias = str(bridge_name)
+                bridge_to_adapter = {
+                    "ECGCodeBridge": AdapterName.LLAMA32_ECG_CODE_BRIDGE.value,
+                    "Llama32_ECGCodeBridge": AdapterName.LLAMA32_ECG_CODE_BRIDGE.value,
+                    "ECGProjectionBridge": AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE.value,
+                    "Llama32_ECGProjectionBridge": AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE.value,
+                    "ECGPerceiverBridge": AdapterName.ECG_PERCEIVER_BRIDGE.value,
+                }
+                data_parameters['adapter_name'] = bridge_to_adapter.get(bridge_alias, bridge_alias)
+            else:
+                raise ValueError(
+                    f"adapter_name is required by {registered_config.__name__} but was not provided "
+                    f"in {yaml_path}. Add adapter_name or set bridge_name to infer it automatically."
+                )
         
         # Set the base_config_path
         data_parameters['base_config_path'] = yaml_path

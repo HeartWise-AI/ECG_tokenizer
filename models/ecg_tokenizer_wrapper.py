@@ -910,6 +910,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         ecg_waveform_length: int = 2500,
         ecg_num_leads: int = 12,
         ecg_projection_config: Optional[Dict[str, Any]] = None,
+        default_generation_kwargs: Optional[Dict[str, Any]] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
         attention_log_frequency: int = 100,
@@ -1011,6 +1012,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_dropout': bridge_dropout,
                         'bridge_num_special_tokens': bridge_num_special_tokens,
                         'num_quantizers': num_quantizers,
+                        'default_generation_kwargs': default_generation_kwargs,
                         'prefix_tuning': prefix_tuning,
                     })
 
