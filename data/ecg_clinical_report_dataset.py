@@ -67,33 +67,50 @@ class ECGClinicalReportDataset(Dataset):
         self.signal_path_column: str = signal_path_column
         self.instruct_mode: bool = instruct_mode
         self.num_ecg_tokens: int = num_ecg_tokens
-        self.ecg_token_start_id: Optional[int] = ecg_token_start_id
-        self.prefix_tuning: bool = prefix_tuning
-        
+        self.prefix_tuning: bool = bool(prefix_tuning)
+
+        pad_token_id = getattr(self._pt_tokenizer, 'pad_token_id', None)
+        eos_token_id = getattr(self._pt_tokenizer, 'eos_token_id', None)
+        if isinstance(eos_token_id, list):
+            eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
+        if pad_token_id is None and eos_token_id is None:
+            raise ValueError("Tokenizer must define a pad_token_id or eos_token_id for prefix placeholders")
+        if pad_token_id is None:
+            pad_token_id = eos_token_id
+        self.ecg_prefix_token_id: int = int(pad_token_id)
+
         # Column configuration
         self.prompt_column: str = prompt_column
         self.answer_column: str = answer_column
         self.category_column: str = category_column
         if self.instruct_mode:
-            if not self.prefix_tuning:
-                if self.ecg_token_start_id is None:
+            if self.prefix_tuning:
+                # Prefix placeholders use pad/eos token id
+                self.ecg_token_start_id = self.ecg_prefix_token_id
+                self.ecg_token_ids = [self.ecg_prefix_token_id] * self.num_ecg_tokens if self.num_ecg_tokens > 0 else []
+            else:
+                if ecg_token_start_id is None:
                     start_token = f"<|ecg_pos_{0}|>"
                     token_id = self._pt_tokenizer.convert_tokens_to_ids(start_token)
                     unk_id = getattr(self._pt_tokenizer, 'unk_token_id', None)
-                    if token_id is None or token_id == -1 or (unk_id is not None and int(token_id) == int(unk_id)):
-                        raise ValueError(
-                            "ecg_token_start_id is required in instruct_mode when tokenizer is missing ECG position tokens"
-                        )
-                    self.ecg_token_start_id = int(token_id)
-                self.ecg_token_ids = list(
-                    range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens)
-                )
-            else:
-                self.ecg_token_ids = []
+                else:
+                    token_id = ecg_token_start_id
+                    unk_id = getattr(self._pt_tokenizer, 'unk_token_id', None)
+                if token_id is None or token_id == -1 or (unk_id is not None and int(token_id) == int(unk_id)):
+                    raise ValueError(
+                        "ecg_token_start_id is required in instruct_mode when tokenizer is missing ECG position tokens"
+                    )
+                self.ecg_token_start_id = int(token_id)
+                self.ecg_token_ids = list(range(
+                    self.ecg_token_start_id,
+                    self.ecg_token_start_id + self.num_ecg_tokens
+                ))
         else:
-            self.ecg_token_start_id = 0
+            if self.prefix_tuning:
+                self.ecg_token_start_id = self.ecg_prefix_token_id
+            else:
+                self.ecg_token_start_id = 0 if ecg_token_start_id is None else int(ecg_token_start_id)
             self.ecg_token_ids = []
-        
     def __len__(self):
         return len(self.df)
 
@@ -206,19 +223,23 @@ class ECGClinicalReportDataset(Dataset):
                 prompt_ids = prompt_encoding.input_ids
                 full_ids = full_encoding.input_ids
 
-                # Build ECG token prefix [ecg_start_id .. ecg_start_id + num_ecg_tokens)
-                prefix_len = 0 if self.prefix_tuning else self.num_ecg_tokens
-
-                if not self.prefix_tuning:
-                    if self.ecg_token_start_id is None:
-                        raise ValueError("ecg_token_start_id must be provided in instruct_mode")
-                    ecg_prefix = torch.arange(
-                        self.ecg_token_start_id,
-                        self.ecg_token_start_id + self.num_ecg_tokens,
-                        dtype=torch.long
-                    )
+                # Build ECG prefix tokens
+                if self.num_ecg_tokens > 0:
+                    if self.prefix_tuning:
+                        ecg_prefix = torch.full(
+                            (self.num_ecg_tokens,),
+                            fill_value=self.ecg_prefix_token_id,
+                            dtype=torch.long,
+                        )
+                    else:
+                        ecg_prefix = torch.arange(
+                            self.ecg_token_start_id,
+                            self.ecg_token_start_id + self.num_ecg_tokens,
+                            dtype=torch.long,
+                        )
                 else:
-                    ecg_prefix = torch.empty(0, dtype=torch.long)
+                    ecg_prefix = torch.zeros(0, dtype=torch.long)
+                prefix_len = ecg_prefix.numel()
 
                 # Truncate text so total length fits within max_length after ECG prefix
                 max_text_len = max(0, self.max_length - prefix_len)
@@ -230,21 +251,7 @@ class ECGClinicalReportDataset(Dataset):
 
                 # Create attention mask and pad to max_length
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)
-                # if input_ids.numel() < self.max_length:
-                #     pad_len = self.max_length - input_ids.numel()
-                pad_id_attr = getattr(self._pt_tokenizer, 'pad_token_id', None)
-                eos_attr = getattr(self._pt_tokenizer, 'eos_token_id', None)
-                if isinstance(eos_attr, list):
-                    eos_id = int(eos_attr[0]) if len(eos_attr) > 0 else 0
-                elif eos_attr is None:
-                    eos_id = 0
-                else:
-                    eos_id = int(eos_attr)
-                pad_id = int(pad_id_attr) if pad_id_attr is not None else eos_id
-                # input_ids = F.pad(input_ids, (0, pad_len), value=pad_id)
-                # attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
-
-                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+                pad_id = self.ecg_prefix_token_id
                 if input_ids.numel() < self.max_length:
                     pad_len = self.max_length - input_ids.numel()
                     # Now pad_id is guaranteed to exist
@@ -287,17 +294,38 @@ class ECGClinicalReportDataset(Dataset):
                     
                 return sample_data
             else:
-                # Tokenize the answer only (legacy behavior)
-                encoding: BatchEncoding = self._pt_tokenizer.encode_plus(
-                    row[self.answer_column],
-                    add_special_tokens=True,
-                    max_length=self.max_length,
-                    padding='max_length',
-                    truncation=True,
-                    return_tensors='pt'
-                )
-                input_ids = cast(torch.Tensor, encoding['input_ids']).squeeze()
-                attention_mask = cast(torch.Tensor, encoding['attention_mask']).squeeze()
+                # Tokenize the answer only (legacy behavior) but reserve prefix slots
+                max_text_len = max(0, self.max_length - self.num_ecg_tokens)
+                if max_text_len > 0:
+                    legacy_encoding: BatchEncoding = self._pt_tokenizer.encode_plus(
+                        row[self.answer_column],
+                        add_special_tokens=True,
+                        max_length=max_text_len,
+                        padding=False,
+                        truncation=True,
+                        return_tensors=None
+                    )
+                    text_ids = legacy_encoding['input_ids'] if 'input_ids' in legacy_encoding else []
+                else:
+                    text_ids = []
+                text_tensor = torch.tensor(text_ids, dtype=torch.long)
+
+                ecg_prefix = torch.full(
+                    (self.num_ecg_tokens,),
+                    fill_value=self.ecg_prefix_token_id,
+                    dtype=torch.long
+                ) if self.num_ecg_tokens > 0 else torch.zeros(0, dtype=torch.long)
+
+                input_ids = torch.cat([ecg_prefix, text_tensor], dim=0)
+                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+
+                if input_ids.numel() < self.max_length:
+                    pad_len = self.max_length - input_ids.numel()
+                    input_ids = F.pad(input_ids, (0, pad_len), value=self.ecg_prefix_token_id)
+                    attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
+                else:
+                    input_ids = input_ids[:self.max_length]
+                    attention_mask = attention_mask[:self.max_length]
 
                 # Add category information if available
                 sample_data = {

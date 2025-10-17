@@ -806,10 +806,11 @@ class LLMFinetuningProject(BaseProject):
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
         if getattr(self.config, 'instruct_mode', False) and processor is None:
-            if not getattr(self.config, 'prefix_tuning', False):
-                ecg_block = "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens)]) + "<|end_ecg|>\n"
-            else:
+            if getattr(self.config, 'prefix_tuning', False):
                 ecg_block = "<|start_ecg|><|end_ecg|>\n"
+            else:
+                ecg_tokens = "".join(f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens))
+                ecg_block = f"<|start_ecg|>{ecg_tokens}<|end_ecg|>\n"
             custom_template = (
                 "<|begin_of_text|>"
                 "{% for message in messages %}"
@@ -841,8 +842,10 @@ class LLMFinetuningProject(BaseProject):
             num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
             if num_added_tokens > 0 and self.config.is_ref_device:
                 print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
-
-            if not getattr(self.config, 'prefix_tuning', False):
+            if getattr(self.config, 'prefix_tuning', False):
+                # Prefix-tuning path: rely on per-example embeddings instead of dedicated vocab rows
+                self.config.ecg_token_start_id = None
+            else:
                 ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]
                 existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
                 unk_id = getattr(tokenizer, 'unk_token_id', None)
@@ -856,9 +859,9 @@ class LLMFinetuningProject(BaseProject):
                     self.config.ecg_token_start_id = int(existing_id)
                     if self.config.is_ref_device:
                         print(f"ECG position tokens already present starting at id {self.config.ecg_token_start_id}")
-            else:
-                self.config.ecg_token_start_id = None
 
+        # Ensure chat template exists for instruction tuning
+        if getattr(self.config, 'instruct_mode', False):
             chat_tmpl = getattr(tokenizer, 'chat_template', None)
             if not chat_tmpl and 'llama' in tokenizer_name.lower():
                 tokenizer.chat_template = (

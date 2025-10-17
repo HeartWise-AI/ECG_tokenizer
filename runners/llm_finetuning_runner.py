@@ -401,7 +401,6 @@ class LLMFinetuningRunner(BaseRunner):
         adapter_lr = float(phase_config.get('adapter_lr', self.config.adapter_lr))
         cross_attention_lr = float(phase_config.get('cross_attention_lr', adapter_lr))
         ecg_embedding_lr = float(phase_config.get('ecg_embedding_lr', llm_lr))
-
         llm_weight_decay = float(phase_config.get('llm_weight_decay', self.config.llm_weight_decay))
         adapter_weight_decay = float(phase_config.get('adapter_weight_decay', self.config.adapter_weight_decay))
         cross_attention_weight_decay = float(phase_config.get('cross_attention_weight_decay', adapter_weight_decay))
