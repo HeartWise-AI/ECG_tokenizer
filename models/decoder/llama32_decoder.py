@@ -8,13 +8,13 @@ from transformers import LlamaForCausalLM, PreTrainedModel, AutoTokenizer
 from transformers import PreTrainedTokenizerBase
 
 from utils.enums import (
-    ModelName, 
-    AdapterName
+    ModelName,
+    BridgeName
 )
 from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
 from utils.attention_visualization import ECGAttentionVisualizer, AttentionHook
-from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
+from models.bridge.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
 
 
 
@@ -31,7 +31,7 @@ class Llama32Decoder(nn.Module):
         huggingface_model_name: str = 'meta-llama/Llama-3.2-1B-Instruct', 
         llm_input_embedding_size: int = 2048, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: AdapterName = AdapterName.LLAMA32_SEQUENCE_ADAPTER,
+        bridge_name: BridgeName = BridgeName.LLAMA32_SEQUENCE_BRIDGE,
         adapter_dropout: float = 0.2,
         # Sequence token adapter parameters
         use_cross_attention: bool = True,
@@ -56,6 +56,7 @@ class Llama32Decoder(nn.Module):
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
         attention_log_frequency: int = 100,
+        **unused_kwargs: Any,
     ):
         """
         Initialize Llama 3.2 decoder.
@@ -64,7 +65,7 @@ class Llama32Decoder(nn.Module):
             huggingface_model_name: Name/path of the Llama 3.2 model.
             llm_input_embedding_size: Embedding dimension of the Llama 3.2 model.
             quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
-            adapter_name: Name of adapter to transform ECG features to Llama 3.2 space.
+            bridge_name: Name of adapter to transform ECG features to Llama 3.2 space.
             adapter_dropout: Dropout rate for the adapter.
             tokenizer: Shared tokenizer instance for adding special tokens.
             label_ignore_index: Index to ignore in loss computation.
@@ -92,14 +93,17 @@ class Llama32Decoder(nn.Module):
         else:
             self.tokenizer = cast(PreTrainedTokenizerBase, tokenizer)
         
-        if isinstance(adapter_name, str):
+        if isinstance(bridge_name, str):
             try:
-                adapter_name = AdapterName(adapter_name)
+                bridge_name = BridgeName(bridge_name)
             except ValueError as e:
-                raise ValueError(f"Invalid adapter name '{adapter_name}'. Must be one of: {[e.value for e in AdapterName]}") from e
+                valid = [e.value for e in BridgeName]
+                raise ValueError(
+                    f"Invalid bridge name '{bridge_name}'. Must be one of: {valid}"
+                ) from e
 
-        self.adapter_name = adapter_name
-        adapter_name_str = adapter_name.value if hasattr(adapter_name, 'value') else str(adapter_name)
+        self.bridge_name = bridge_name
+        bridge_name_str = bridge_name.value if hasattr(bridge_name, 'value') else str(bridge_name)
 
         self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
         self.bridge_config: Optional[Dict[str, Any]] = None
@@ -108,12 +112,33 @@ class Llama32Decoder(nn.Module):
 
         visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
 
-        if adapter_name in {
-            AdapterName.LLAMA32_ECG_CODE_BRIDGE,
-            AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
-            AdapterName.ECG_PERCEIVER_BRIDGE
+        # Get codebook selection parameters from kwargs (passed from config)
+        kept = unused_kwargs.pop('num_codebooks_kept', None)
+        offset_raw = unused_kwargs.pop('codebook_offset', 0)  # Used for logging only
+
+        total_codebooks = max(1, int(num_quantizers))
+        requested_keep = int(kept) if kept is not None else total_codebooks
+        if requested_keep <= 0 or requested_keep > total_codebooks:
+            requested_keep = total_codebooks
+
+        offset = int(offset_raw or 0)
+        if requested_keep >= total_codebooks:
+            resolved_offset = 0
+        else:
+            if offset < 0:
+                resolved_offset = max(total_codebooks - requested_keep, 0)
+            else:
+                resolved_offset = max(0, min(offset, total_codebooks - requested_keep))
+
+        self.num_codebooks_kept = requested_keep
+        self.codebook_offset = resolved_offset
+
+        if bridge_name in {
+            BridgeName.LLAMA32_ECG_CODE_BRIDGE,
+            BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            BridgeName.ECG_PERCEIVER_BRIDGE
         }:
-            if adapter_name == AdapterName.LLAMA32_ECG_CODE_BRIDGE:
+            if bridge_name == BridgeName.LLAMA32_ECG_CODE_BRIDGE:
                 self.bridge = ECGCodeBridge(
                     vocab_size=ecg_codebook_size,
                     d_mid=bridge_mid_dim,
@@ -122,6 +147,9 @@ class Llama32Decoder(nn.Module):
                     num_heads=bridge_num_heads,
                     num_special_tokens=bridge_num_special_tokens,
                     dropout=bridge_dropout,
+                    num_codebooks=requested_keep,
+                    codebook_offset=resolved_offset,
+                    original_num_codebooks=total_codebooks,
                 )
                 self.bridge_config = {
                     "style": "code",
@@ -132,43 +160,43 @@ class Llama32Decoder(nn.Module):
                     "dropout": bridge_dropout,
                     "num_special_tokens": bridge_num_special_tokens,
                 }
+            elif bridge_name == BridgeName.ECG_PERCEIVER_BRIDGE:
+                feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
+                self.bridge = PerceiverProjectionBridge(
+                    input_dim=feature_dim,
+                    d_model=llm_input_embedding_size,
+                    num_output_tokens=visual_tokens,
+                    num_heads=bridge_num_heads,
+                    dropout=bridge_dropout,
+                )
+                self.bridge_config = {
+                    "style": "perceiver",
+                    "input_dim": feature_dim,
+                    "d_model": llm_input_embedding_size,
+                    "output_tokens": visual_tokens,
+                    "num_heads": bridge_num_heads,
+                    "dropout": bridge_dropout,
+                }
             else:
                 feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                if adapter_name == AdapterName.ECG_PERCEIVER_BRIDGE:
-                    self.bridge = PerceiverProjectionBridge(
-                        input_dim=feature_dim,
-                        d_model=llm_input_embedding_size,
-                        num_output_tokens=visual_tokens,
-                        num_heads=bridge_num_heads,
-                        dropout=bridge_dropout,
-                    )
-                    self.bridge_config = {
-                        "style": "perceiver",
-                        "input_dim": feature_dim,
-                        "d_model": llm_input_embedding_size,
-                        "output_tokens": visual_tokens,
-                        "num_heads": bridge_num_heads,
-                        "dropout": bridge_dropout,
-                    }
-                else:
-                    self.bridge = ECGProjectionBridge(
-                        input_dim=feature_dim,
-                        d_model=llm_input_embedding_size,
-                        num_tokens=visual_tokens,
-                        dropout=bridge_dropout,
-                    )
-                    self.bridge_config = {
-                        "style": "projection",
-                        "input_dim": feature_dim,
-                        "d_model": llm_input_embedding_size,
-                        "output_tokens": visual_tokens,
-                        "dropout": bridge_dropout,
-                    }
+                self.bridge = ECGProjectionBridge(
+                    input_dim=feature_dim,
+                    d_model=llm_input_embedding_size,
+                    num_tokens=visual_tokens,
+                    dropout=bridge_dropout,
+                )
+                self.bridge_config = {
+                    "style": "projection",
+                    "input_dim": feature_dim,
+                    "d_model": llm_input_embedding_size,
+                    "output_tokens": visual_tokens,
+                    "dropout": bridge_dropout,
+                }
             self.num_ecg_tokens = self.bridge.num_tokens
         else:
-            self.adapter_class: ModelClassT = ModelRegistry.get(adapter_name)
+            self.adapter_class: ModelClassT = ModelRegistry.get(bridge_name)
             if self.adapter_class is None:
-                raise ValueError(f"Adapter {adapter_name} not found in ModelRegistry")
+                raise ValueError(f"Adapter {bridge_name} not found in ModelRegistry")
 
             adapter_ctor = cast(Any, self.adapter_class)
             adapter_kwargs = {
@@ -177,7 +205,7 @@ class Llama32Decoder(nn.Module):
                 'dropout': adapter_dropout
             }
 
-            if 'SequenceToken' in adapter_name_str:
+            if 'SequenceToken' in bridge_name_str:
                 adapter_kwargs.update({
                     'use_cross_attention': self.use_cross_attention,
                     'num_attention_heads': self.num_attention_heads,
@@ -308,7 +336,7 @@ class Llama32Decoder(nn.Module):
         if self.bridge is not None:
             components['bridge'] = self.bridge
         
-        # Add cross-attention if available (part of adapter for SequenceTokenAdapter)
+        # Add cross-attention if available (part of bridge for SequenceTokenBridge)
         if hasattr(self.adapter, 'cross_attention'):
             components['cross_attention'] = self.adapter.cross_attention
         
@@ -369,7 +397,7 @@ class Llama32Decoder(nn.Module):
         if attention_mask is not None:
             text_mask = attention_mask[:, self.num_ecg_tokens:].to(dtype=torch.bool)
 
-        adapter_name_str = self.adapter_name.value if hasattr(self.adapter_name, 'value') else str(self.adapter_name)
+        bridge_name_str = self.bridge_name.value if hasattr(self.bridge_name, 'value') else str(self.bridge_name)
 
         if self.bridge is not None:
             if getattr(self.bridge, 'uses_codes', False):
@@ -407,7 +435,7 @@ class Llama32Decoder(nn.Module):
             if cross_attn_mask is not None and cross_attn_mask.dtype != torch.bool:
                 cross_attn_mask = cross_attn_mask.to(dtype=torch.bool)
 
-            if 'CrossModal' in adapter_name_str or (hasattr(self.adapter, 'use_cross_attention') and getattr(self.adapter, 'use_cross_attention', False)):
+            if 'CrossModal' in bridge_name_str or (hasattr(self.adapter, 'use_cross_attention') and getattr(self.adapter, 'use_cross_attention', False)):
                 if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
                     ecg_embeddings = self.adapter(
                         quantized_features,

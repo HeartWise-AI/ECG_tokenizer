@@ -226,7 +226,7 @@ class LLMFinetuningProject(BaseProject):
             num_quantizers=num_quantizers,
             codebook_size=codebook_size,
             decoder_mode=self.config.decoder_mode, # use the decoder mode from the current config
-            adapter_name=self.config.adapter_name,
+            bridge_name=self.config.bridge_name,
             huggingface_model_name=self.config.huggingface_model_name,
             llm_input_embedding_size=self.config.llm_input_embedding_size,
             tokenizer=tokenizer,
@@ -722,7 +722,7 @@ class LLMFinetuningProject(BaseProject):
         print(f"Frozen parameters: {training_info['frozen_params']:,}")
         print(f"Trainable ratio: {training_info['trainable_ratio']:.2f}%")
 
-        print(f"\nAdapter: {model.decoder.adapter_name}")
+        print(f"\nBridge: {getattr(model.decoder, 'bridge_name', 'unknown')}")
         print(f"Decoder: {model.decoder_name} ({model.decoder_mode.value} mode)")
 
         bridge_config = getattr(model.decoder, 'bridge_config', None)
@@ -814,7 +814,11 @@ class LLMFinetuningProject(BaseProject):
 
         decoder_name = getattr(pretrained_config, 'decoder_name', self.config.decoder_name)
         decoder_mode = getattr(pretrained_config, 'decoder_mode', self.config.decoder_mode)
-        adapter_name = getattr(pretrained_config, 'adapter_name', self.config.adapter_name)
+        bridge_name_override = getattr(
+            pretrained_config,
+            'bridge_name',
+            getattr(pretrained_config, 'adapter_name', self.config.bridge_name)
+        )
         huggingface_model_name = getattr(pretrained_config, 'huggingface_model_name', self.config.huggingface_model_name)
         llm_input_embedding_size = getattr(pretrained_config, 'llm_input_embedding_size', self.config.llm_input_embedding_size)
 
@@ -825,7 +829,7 @@ class LLMFinetuningProject(BaseProject):
             num_quantizers=num_quantizers,
             codebook_size=codebook_size,
             decoder_mode=decoder_mode,
-            adapter_name=adapter_name,
+            bridge_name=bridge_name_override,
             huggingface_model_name=huggingface_model_name,
             llm_input_embedding_size=llm_input_embedding_size,
             tokenizer=infer_tokenizer,

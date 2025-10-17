@@ -35,7 +35,7 @@ tokenizer_name: !!str "gpt2"
 max_token_length: !!int 512
 # LLM model parameters
 huggingface_model_name: !!str "gpt2"
-adapter_name: !!str "GPT2_SequenceAdapter"
+bridge_name: !!str "GPT2_SequenceBridge"
 llm_input_embedding_size: !!int 768
 # Dataset parameters
 train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated.parquet"

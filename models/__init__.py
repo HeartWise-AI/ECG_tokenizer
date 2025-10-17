@@ -1,17 +1,14 @@
-from models.adapter import (
-    # Adapters
-    LinearAdapter, 
-    EmbeddingAdapter, 
-    SequenceAdapter,
-    SimpleEmbeddingAdapter,
-    SequenceTokenAdapter,
-    SimpleTokenAdapter,
-    # Bridges
+from models.bridge import (
     ECGCodeBridge,
     ECGProjectionBridge,
     PerceiverProjectionBridge,
-    # Cross-attention
-    CrossModalSequenceTokenAdapter,
+    LinearBridge,
+    EmbeddingBridge,
+    SimpleEmbeddingBridge,
+    SequenceBridge,
+    SequenceTokenBridge,
+    SimpleTokenBridge,
+    CrossModalSequenceTokenBridge,
     CrossAttentionLayer,
 )
 from models.bert_classifier import BertClassifier
@@ -30,19 +27,17 @@ from models.ecg_tokenizer_wrapper import (
 from models.local_residual_vq import ResidualVQ
 
 __all__ = [
-    # Adapters
-    "LinearAdapter", 
-    "EmbeddingAdapter", 
-    "SequenceAdapter",
-    "SimpleEmbeddingAdapter",
-    "SequenceTokenAdapter",
-    "SimpleTokenAdapter",
-    # Bridges
     "ECGCodeBridge",
     "ECGProjectionBridge",
     "PerceiverProjectionBridge",
+    "LinearBridge",
+    "EmbeddingBridge",
+    "SimpleEmbeddingBridge",
+    "SequenceBridge",
+    "SequenceTokenBridge",
+    "SimpleTokenBridge",
+    "CrossModalSequenceTokenBridge",
     # Cross-attention
-    "CrossModalSequenceTokenAdapter",
     "CrossAttentionLayer",
     # Decoders
     "GPT2Decoder",

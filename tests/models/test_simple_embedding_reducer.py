@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.adapters import SimpleEmbeddingAdapter
+from models.bridge import SimpleEmbeddingBridge
 
-class TestSimpleEmbeddingAdapter(unittest.TestCase):
+class TestSimpleEmbeddingBridge(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = SimpleEmbeddingAdapter(
+        self.model = SimpleEmbeddingBridge(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,7 +18,7 @@ class TestSimpleEmbeddingAdapter(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, SimpleEmbeddingAdapter)
+        self.assertIsInstance(self.model, SimpleEmbeddingBridge)
         
         # Test components are correctly initialized
         self.assertIsInstance(self.model.global_pool, torch.nn.AdaptiveAvgPool2d)

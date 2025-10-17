@@ -34,7 +34,7 @@ tokenizer_name: !!str "meta-llama/Llama-3.2-3B"
 max_token_length: !!int 256
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-3B"
-adapter_name: !!str "Llama32_SequenceAdapter"
+bridge_name: !!str "Llama32_SequenceBridge"
 llm_input_embedding_size: !!int 3072
 # Dataset parameters
 train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated_stratified_20%.parquet"

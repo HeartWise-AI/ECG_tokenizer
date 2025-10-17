@@ -895,7 +895,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         num_classes: int = 77,
         huggingface_model_name: str = 'gpt2',
         llm_input_embedding_size: int = 768,
-        adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
+        bridge_name: str = "GPT2_SimpleEmbeddingBridge",
         adapter_dropout: float = 0.2,
         num_visual_tokens: Optional[int] = None,
         bridge_mid_dim: int = 512,
@@ -915,6 +915,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         enable_attention_visualization: bool = False,
         attention_log_frequency: int = 100,
         prefix_tuning: bool = False,
+        num_codebooks_kept: Optional[int] = None,
+        codebook_offset: int = 0
     ):
         """
         Args:
@@ -932,9 +934,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.decoder_name: str = decoder_name
         self.using_pretrained_weights: bool = False
         self.use_lora: bool = use_lora
+        self.bridge_name = bridge_name
         self.processor: Optional[Any] = processor
         self.ecg_token_start_id = ecg_token_start_id
         self.prefix_tuning = prefix_tuning
+        self.num_codebooks_kept = num_codebooks_kept
+        self.codebook_offset = codebook_offset
         # ECG image projection disabled - module not available
         self.ecg_image_projection = None
         if False:  # Disabled ecg_image_projection:
@@ -984,13 +989,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     'huggingface_model_name': huggingface_model_name,
                     'llm_input_embedding_size': llm_input_embedding_size,
                     'quantized_feature_shape': quantized_feature_shape,
-                    'adapter_name': adapter_name,
+                    'bridge_name': bridge_name,
                     'adapter_dropout': adapter_dropout,
                     'quantizer': self.quantizer,
                     'tokenizer': tokenizer,
                     'enable_attention_visualization': enable_attention_visualization,
                     'attention_log_frequency': attention_log_frequency,
                     'ecg_token_start_id': ecg_token_start_id,
+                    'default_generation_kwargs': default_generation_kwargs,
                 }
 
                 if decoder_name == ModelName.LLAMA32_DECODER.value or decoder_name == "Llama32_Decoder":
@@ -1002,6 +1008,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_dropout': bridge_dropout,
                         'bridge_num_special_tokens': bridge_num_special_tokens,
                         'num_quantizers': num_quantizers,
+                        'num_codebooks_kept': num_codebooks_kept,
+                        'codebook_offset': codebook_offset,
                     })
                 elif decoder_name == ModelName.MEDGEMMA_DECODER.value or decoder_name == "MedGemma_Decoder":
                     decoder_kwargs.update({
@@ -1014,6 +1022,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'num_quantizers': num_quantizers,
                         'default_generation_kwargs': default_generation_kwargs,
                         'prefix_tuning': prefix_tuning,
+                        'num_codebooks_kept': num_codebooks_kept,
+                        'codebook_offset': codebook_offset,
                     })
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
@@ -1027,7 +1037,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 raise ValueError(
                     f"Decoder '{decoder_name}' does not support LLM mode parameters. "
                     f"For LLM mode, decoder must accept: huggingface_model_name, llm_input_embedding_size, "
-                    f"quantized_feature_shape, adapter_name, and adapter_dropout. Error: {e}"
+                    f"quantized_feature_shape, bridge_name, and adapter_dropout. Error: {e}"
                 )
         elif self.decoder_mode == DecoderMode.CLASSIFICATION:
 
@@ -1438,19 +1448,60 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         print(f"  Decoder: {'TRAIN' if self.decoder.training else 'EVAL'}")
 
     @staticmethod
-    def _extract_primary_codes(indices: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-        """Extract the first residual codebook index per position for discrete bridging."""
+    def _extract_primary_codes(
+        indices: Optional[torch.Tensor],
+        num_codebooks_kept: Optional[int] = None,
+        codebook_offset: int = 0
+    ) -> Optional[torch.Tensor]:
+        """
+        Extract codebook indices with optional slicing for multi-codebook models.
+
+        Args:
+            indices: Codebook indices tensor
+            num_codebooks_kept: Number of codebooks to keep (None = keep all)
+            codebook_offset: Skip the first N codebooks
+
+        Returns:
+            Sliced codes tensor with shape [batch, seq, num_kept] or [batch, seq] if num_kept==1
+        """
         if not isinstance(indices, torch.Tensor):
             return None
 
         codes = indices.long()
+
+        # Normalize shape to [batch, seq, depth]
         if codes.dim() == 4:
             # Assume shape [groups, batch, seq, depth]; take first group
             codes = codes[0]
-        if codes.dim() == 3 and codes.size(-1) > 1:
-            codes = codes[..., 0]
-        if codes.dim() == 3 and codes.size(-1) == 1:
-            codes = codes.squeeze(-1)
+
+        # Now codes should be [batch, seq, depth]
+        if codes.dim() != 3:
+            raise ValueError(f"Expected 3D codes after normalization, got shape {codes.shape}")
+
+        batch, seq, depth = codes.shape
+
+        # Determine how many codebooks to keep
+        keep = num_codebooks_kept if (num_codebooks_kept is not None and num_codebooks_kept > 0) else depth
+        keep = min(int(keep), depth)
+
+        # Resolve offset semantics (negative offsets mean "align to the end")
+        offset = int(codebook_offset or 0)
+        if keep == depth:
+            offset = 0
+        else:
+            if offset < 0:
+                offset = max(depth - keep, 0)
+            if offset >= depth:
+                offset = depth - keep
+            if offset + keep > depth:
+                offset = max(depth - keep, 0)
+
+        codes = codes[..., offset:offset + keep]
+
+        # NOTE: Keep 3D shape [batch, seq, num_codebooks] even when num_codebooks=1
+        # The bridge expects this format and will handle it correctly.
+        # Don't squeeze to maintain consistent interface.
+
         return codes
 
     def _module_device(self) -> torch.device:
@@ -1594,7 +1645,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             quantized, indices, commit_loss = quantizer_outputs
             all_codes = None
 
-        quantized_code_ids = self._extract_primary_codes(indices)
+        quantized_code_ids = self._extract_primary_codes(
+            indices, self.num_codebooks_kept, self.codebook_offset
+        )
         pixel_values: Optional[torch.Tensor] = None
         # ECG image projection disabled
         if False:  # self.ecg_image_projection is not None:
@@ -1708,7 +1761,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
         features = self.encoder(x)
         quantized, indices, _ = self.quantizer(features)
-        quantized_codes = self._extract_primary_codes(indices)
+        quantized_codes = self._extract_primary_codes(
+            indices, self.num_codebooks_kept, self.codebook_offset
+        )
         pixel_values: Optional[torch.Tensor] = None
         # ECG image projection disabled
         if False:  # self.ecg_image_projection is not None:

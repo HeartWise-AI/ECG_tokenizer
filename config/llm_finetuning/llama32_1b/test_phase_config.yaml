@@ -64,7 +64,7 @@ ecg_token_start_id: !!int 128258
 instruct_mode: !!bool true
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-adapter_name: !!str "Llama32_ECGProjectionBridge"
+bridge_name: !!str "Llama32_ECGProjectionBridge"
 llm_input_embedding_size: !!int 2048
 # Sequence token specific parameters
 use_cross_attention: !!bool true

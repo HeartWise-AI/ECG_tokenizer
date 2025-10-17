@@ -3,6 +3,7 @@ from .llm_finetuning_config import LLMFinetuningConfig
 from .tokenizer_config import ECGTokenizerTrainingConfig
 from .bert_classifier_config import BertReportClassifierConfig
 from .linear_probing_config import ECGTokenizerLinearProbingConfig
+from .siglip_phase1_config import SiglipPhase1Config
 
 __all__ = [
     "HeartWiseConfig", 
@@ -10,4 +11,5 @@ __all__ = [
     "BertReportClassifierConfig",
     "ECGTokenizerTrainingConfig",
     "ECGTokenizerLinearProbingConfig", 
+    "SiglipPhase1Config",
 ]

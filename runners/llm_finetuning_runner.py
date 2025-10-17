@@ -487,7 +487,7 @@ class LLMFinetuningRunner(BaseRunner):
         # ECG token embeddings (part of LLM embedding layer)
         # These are handled by the LLM parameters above
         
-        # Cross-attention (part of adapter for SequenceTokenAdapter)
+        # Cross-attention (part of bridge for SequenceTokenBridge)
         if hasattr(model, 'decoder') and hasattr(model.decoder, 'adapter'):
             adapter = model.decoder.adapter
             if hasattr(adapter, 'cross_attention_layers'):

@@ -9,11 +9,11 @@ except ImportError:  # pragma: no cover
 
 if TYPE_CHECKING:
     from models import (
-        LinearAdapter, 
-        EmbeddingAdapter, 
-        SequenceAdapter,
+        LinearBridge,
+        EmbeddingBridge,
+        SequenceBridge,
         GPT2Decoder,
-        SimpleEmbeddingAdapter,
+        SimpleEmbeddingBridge,
         BertClassifier,
         ECG_Tokenizer_Wrapper,
         Conv_Encoder,
@@ -78,11 +78,11 @@ ModelClassT = Type[ModelProtocol]
 
 # Union-based types (for IDE navigation to concrete classes)
 ModelUnionT = Union[
-    "LinearAdapter", 
-    "EmbeddingAdapter", 
-    "SequenceAdapter",
+    "LinearBridge",
+    "EmbeddingBridge",
+    "SequenceBridge",
     "GPT2Decoder",
-    "SimpleEmbeddingAdapter",
+    "SimpleEmbeddingBridge",
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
     "Conv_Encoder",

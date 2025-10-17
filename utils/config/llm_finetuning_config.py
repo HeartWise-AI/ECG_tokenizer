@@ -41,7 +41,7 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Model parameters (required - no defaults)
     huggingface_model_name: str
-    adapter_name: str
+    bridge_name: str
     llm_input_embedding_size: int
     
     # Metrics (required - no defaults)
@@ -73,6 +73,12 @@ class LLMFinetuningConfig(HeartWiseConfig):
     bridge_num_heads: int = 8
     bridge_dropout: float = 0.1
     bridge_num_special_tokens: int = 4
+    default_generation_kwargs: Optional[Dict[str, Any]] = None
+
+    # Codebook selection parameters (for multi-codebook models)
+    num_codebooks_kept: Optional[int] = None  # None = keep all codebooks
+    codebook_offset: int = 0                   # Skip the first N codebooks
+
     ecg_projection_config: Optional[Dict[str, Any]] = None
     bertscore_max_batches: Optional[int] = 5
     processor_name: Optional[str] = None
@@ -121,14 +127,6 @@ class LLMFinetuningConfig(HeartWiseConfig):
     plot_validation_ecgs: bool = False
     num_validation_plots: int = 6
     plot_selection_strategy: str = "worst_random_best"  # "worst_random_best", "random", "all"
-    
-    # Bridge customization parameters (optional)
-    bridge_name: Optional[str] = None
-    num_codebooks_kept: Optional[int] = None
-    codebook_offset: Optional[int] = None
-    
-    # Default generation parameters for decoder (optional)
-    default_generation_kwargs: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
         """Process nested lora_config if provided"""

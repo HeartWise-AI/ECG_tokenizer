@@ -9,8 +9,9 @@ import torch.nn as nn
 
 from transformers import AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 
-from models.adapter.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
-from utils.enums import AdapterName, ModelName
+from models.bridge.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
+from models.bridge import SequenceTokenBridge, SimpleTokenBridge, CrossModalSequenceTokenBridge
+from utils.enums import BridgeName, ModelName
 from utils.registry import ModelRegistry
 
 
@@ -66,7 +67,7 @@ class MedGemmaDecoder(nn.Module):
         huggingface_model_name: str = "google/medgemma-4b-it",
         llm_input_embedding_size: int = 4096,
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: Union[AdapterName, str] = AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
+        bridge_name: Union[BridgeName, str] = BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
         adapter_dropout: float = 0.1,
         quantizer: Optional[nn.Module] = None,
         tokenizer: Optional[Any] = None,
@@ -90,83 +91,216 @@ class MedGemmaDecoder(nn.Module):
         self.prefix_tuning = prefix_tuning
         self.label_ignore_index = int(label_ignore_index)
 
-        if isinstance(adapter_name, str):
+        if isinstance(bridge_name, str):
             try:
-                adapter_name = AdapterName(adapter_name)
+                bridge_name = BridgeName(bridge_name)
             except ValueError:
                 pass
-        self.adapter_name = adapter_name
+        self.bridge_name = bridge_name
 
-        adapter_name_str = adapter_name.value if hasattr(adapter_name, "value") else str(adapter_name)
+        bridge_name_str = bridge_name.value if hasattr(bridge_name, "value") else str(bridge_name)
 
-        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
+        self.bridge: Optional[Union[
+            ECGCodeBridge,
+            ECGProjectionBridge,
+            PerceiverProjectionBridge,
+            SequenceTokenBridge,
+            SimpleTokenBridge,
+            CrossModalSequenceTokenBridge,
+        ]] = None
         self.bridge_config: Optional[Dict[str, Any]] = None
 
         visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
 
-        if adapter_name in {
-            AdapterName.LLAMA32_ECG_CODE_BRIDGE,
-            AdapterName.LLAMA32_ECG_PROJECTION_BRIDGE,
-            AdapterName.ECG_PERCEIVER_BRIDGE,
-        }:
-            if adapter_name == AdapterName.LLAMA32_ECG_CODE_BRIDGE:
-                self.bridge = ECGCodeBridge(
-                    vocab_size=ecg_codebook_size,
-                    d_mid=bridge_mid_dim,
-                    d_model=llm_input_embedding_size,
-                    num_output_tokens=visual_tokens,
-                    num_heads=bridge_num_heads,
-                    num_special_tokens=bridge_num_special_tokens,
-                    dropout=bridge_dropout,
-                )
-                self.bridge_config = {
-                    "style": "code",
-                    "vocab_size": ecg_codebook_size,
-                    "mid_dim": bridge_mid_dim,
-                    "output_tokens": visual_tokens,
-                    "num_heads": bridge_num_heads,
-                    "dropout": bridge_dropout,
-                    "num_special_tokens": bridge_num_special_tokens,
-                }
+        code_bridge_aliases = {
+            BridgeName.LLAMA32_ECG_CODE_BRIDGE,
+            "Llama32_ECGCodeBridge",
+            "ECGCodeBridge",
+        }
+        projection_bridge_aliases = {
+            BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            "Llama32_ECGProjectionBridge",
+            "ECGProjectionBridge",
+        }
+        perceiver_bridge_aliases = {
+            BridgeName.ECG_PERCEIVER_BRIDGE,
+            "ECGPerceiverBridge",
+            "PerceiverProjectionBridge",
+        }
+        sequence_token_aliases = {
+            BridgeName.LLAMA32_SEQUENCE_TOKEN_BRIDGE,
+            "SequenceTokenBridge",
+        }
+        simple_token_aliases = {
+            BridgeName.LLAMA32_SIMPLE_TOKEN_BRIDGE,
+            "SimpleTokenBridge",
+        }
+        cross_modal_aliases = {
+            "CrossModalSequenceTokenBridge",
+        }
+
+        kept = unused_kwargs.pop('num_codebooks_kept', None)
+        offset_raw = unused_kwargs.pop('codebook_offset', 0)
+
+        total_codebooks = max(1, int(num_quantizers))
+        requested_keep = int(kept) if kept is not None else total_codebooks
+        if requested_keep <= 0 or requested_keep > total_codebooks:
+            requested_keep = total_codebooks
+
+        offset = int(offset_raw or 0)
+        if requested_keep >= total_codebooks:
+            resolved_offset = 0
+        else:
+            if offset < 0:
+                resolved_offset = max(total_codebooks - requested_keep, 0)
             else:
-                feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                if adapter_name == AdapterName.ECG_PERCEIVER_BRIDGE:
-                    self.bridge = PerceiverProjectionBridge(
-                        input_dim=feature_dim,
-                        d_model=llm_input_embedding_size,
-                        num_output_tokens=visual_tokens,
-                        num_heads=bridge_num_heads,
-                        dropout=bridge_dropout,
-                    )
-                    self.bridge_config = {
-                        "style": "perceiver",
-                        "input_dim": feature_dim,
-                        "d_model": llm_input_embedding_size,
-                        "output_tokens": visual_tokens,
-                        "num_heads": bridge_num_heads,
-                        "dropout": bridge_dropout,
-                    }
-                else:
-                    self.bridge = ECGProjectionBridge(
-                        input_dim=feature_dim,
-                        d_model=llm_input_embedding_size,
-                        num_tokens=visual_tokens,
-                        dropout=adapter_dropout,
-                    )
-                    self.bridge_config = {
-                        "style": "projection",
-                        "input_dim": feature_dim,
-                        "d_model": llm_input_embedding_size,
-                        "num_tokens": visual_tokens,
-                        "dropout": adapter_dropout,
-                    }
+                resolved_offset = max(0, min(offset, total_codebooks - requested_keep))
+        self.num_codebooks_kept = requested_keep
+        self.codebook_offset = resolved_offset
+
+        candidates = (bridge_name, bridge_name_str)
+
+        def _matches(alias_set: set[Any]) -> bool:
+            return any(candidate in alias_set for candidate in candidates)
+
+        if _matches(code_bridge_aliases):
+            self.bridge = ECGCodeBridge(
+                vocab_size=ecg_codebook_size,
+                d_mid=bridge_mid_dim,
+                d_model=llm_input_embedding_size,
+                num_output_tokens=visual_tokens,
+                num_heads=bridge_num_heads,
+                num_special_tokens=bridge_num_special_tokens,
+                dropout=bridge_dropout,
+                num_codebooks=requested_keep,
+                codebook_offset=resolved_offset,
+                original_num_codebooks=total_codebooks,
+            )
+            self.bridge_config = {
+                "style": "code",
+                "bridge_name": bridge_name_str,
+                "vocab_size": ecg_codebook_size,
+                "mid_dim": bridge_mid_dim,
+                "output_tokens": visual_tokens,
+                "num_heads": bridge_num_heads,
+                "dropout": bridge_dropout,
+                "num_special_tokens": bridge_num_special_tokens,
+            }
+        elif _matches(projection_bridge_aliases):
+            feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
+            self.bridge = ECGProjectionBridge(
+                input_dim=feature_dim,
+                d_model=llm_input_embedding_size,
+                num_tokens=visual_tokens,
+                dropout=bridge_dropout,
+            )
+            self.bridge_config = {
+                "style": "projection",
+                "bridge_name": bridge_name_str,
+                "input_dim": feature_dim,
+                "d_model": llm_input_embedding_size,
+                "num_tokens": visual_tokens,
+                "dropout": bridge_dropout,
+            }
+        elif _matches(perceiver_bridge_aliases):
+            feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
+            self.bridge = PerceiverProjectionBridge(
+                input_dim=feature_dim,
+                d_model=llm_input_embedding_size,
+                num_output_tokens=visual_tokens,
+                num_heads=bridge_num_heads,
+                dropout=bridge_dropout,
+            )
+            self.bridge_config = {
+                "style": "perceiver",
+                "bridge_name": bridge_name_str,
+                "input_dim": feature_dim,
+                "d_model": llm_input_embedding_size,
+                "output_tokens": visual_tokens,
+                "num_heads": bridge_num_heads,
+                "dropout": bridge_dropout,
+            }
+        elif _matches(sequence_token_aliases):
+            self.bridge = SequenceTokenBridge(
+                input_shape=quantized_feature_shape,
+                output_size=llm_input_embedding_size,
+                dropout=bridge_dropout,
+            )
+            self.bridge_config = {
+                "style": "sequence_token",
+                "input_shape": quantized_feature_shape,
+                "output_size": llm_input_embedding_size,
+                "dropout": bridge_dropout,
+            }
+        elif _matches(simple_token_aliases):
+            self.bridge = SimpleTokenBridge(
+                input_shape=quantized_feature_shape,
+                output_size=llm_input_embedding_size,
+                dropout=bridge_dropout,
+            )
+            self.bridge_config = {
+                "style": "simple_sequence_token",
+                "input_shape": quantized_feature_shape,
+                "output_size": llm_input_embedding_size,
+                "dropout": bridge_dropout,
+            }
+        elif _matches(cross_modal_aliases):
+            self.bridge = CrossModalSequenceTokenBridge(
+                input_shape=quantized_feature_shape,
+                output_size=llm_input_embedding_size,
+                dropout=bridge_dropout,
+                num_attention_heads=bridge_num_heads,
+            )
+            self.bridge_config = {
+                "style": "cross_modal_sequence_token",
+                "input_shape": quantized_feature_shape,
+                "output_size": llm_input_embedding_size,
+                "dropout": bridge_dropout,
+                "num_heads": bridge_num_heads,
+            }
+        else:
+            self.adapter_class: ModelClassT = ModelRegistry.get(bridge_name)
+            if self.adapter_class is None:
+                raise ValueError(f"Adapter {bridge_name} not found in ModelRegistry")
+
+            adapter_ctor = cast(Any, self.adapter_class)
+            adapter_kwargs = {
+                'input_shape': quantized_feature_shape,
+                'output_size': llm_input_embedding_size,
+                'dropout': adapter_dropout
+            }
+
+            if 'SequenceToken' in bridge_name_str:
+                adapter_kwargs.update({
+                    'use_cross_attention': getattr(self, 'use_cross_attention', True),
+                    'num_attention_heads': getattr(self, 'num_attention_heads', bridge_num_heads),
+                    'intermediate_dim': getattr(self, 'intermediate_dim', None)
+                })
+
+            self.adapter = adapter_ctor(**adapter_kwargs)
+
+            num_ecg_tokens_raw = getattr(self.adapter, 'num_tokens', 1)
+            try:
+                num_ecg_tokens = int(num_ecg_tokens_raw)
+            except (TypeError, ValueError):
+                num_ecg_tokens = quantized_feature_shape[0]
+            self.num_ecg_tokens = num_ecg_tokens
+            self.bridge_config = {
+                "style": "registry_adapter",
+                "adapter_name": bridge_name_str,
+                "input_shape": quantized_feature_shape,
+                "output_size": llm_input_embedding_size,
+                "dropout": adapter_dropout,
+            }
 
         if self.bridge is None:
-            raise ValueError(
-                "MedGemmaDecoder currently requires an ECG bridge (projection or code)."
-            )
-
-        self.num_ecg_tokens = getattr(self.bridge, "num_tokens", visual_tokens)
+            if self.adapter is None:
+                raise ValueError(
+                    "MedGemmaDecoder currently requires an ECG bridge (projection or code)."
+                )
+            self.num_ecg_tokens = getattr(self.adapter, "num_tokens", visual_tokens)
+        else:
+            self.num_ecg_tokens = getattr(self.bridge, "num_tokens", visual_tokens)
 
         self.tokenizer = tokenizer or AutoTokenizer.from_pretrained(huggingface_model_name)
 
