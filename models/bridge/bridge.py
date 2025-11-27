@@ -591,6 +591,9 @@ class ECGProjectionBridge(nn.Module):
         final_linear = cast(nn.Linear, self.mlp[-1])
         nn.init.normal_(final_linear.weight, std=1e-3)
         nn.init.zeros_(final_linear.bias)
+        # nn.init.orthogonal_(final_linear.weight)
+        # final_linear.weight.data.mul_(0.5) # Scale down slightly, but not to zero
+        # nn.init.zeros_(final_linear.bias)
 
     def _prepare_features(self, features: torch.Tensor) -> torch.Tensor:
         if features.dim() == 4:
@@ -904,7 +907,8 @@ class SequenceBridge(nn.Module):
     
     def __init__(
         self,
-        input_shape: tuple[int, int] = (128, 82),
+        # input_shape: tuple[int, int] = (128, 82),
+        input_shape: tuple[int, int] = (128, 1024),
         output_size: int = 768,
         dropout: float = 0.2,
         target_std: Optional[float] = None,
@@ -918,11 +922,11 @@ class SequenceBridge(nn.Module):
         super().__init__()
         
         # Extract the actual feature dimensions
-        # NOTE: For ECG encoder output (batch, 128, 82):
+        # NOTE: For ECG encoder output (batch, 128, 1024):
         # - 128 = sequence length (temporal dimension)  
-        # - 82 = feature dimension (quantized features)
+        # - 1024 = feature dimension (quantized features)
         seq_len = input_shape[0]  # 128 = sequence length
-        channels = input_shape[1]  # 82 = feature dimension
+        channels = input_shape[1]  # 1024 = feature dimension
         self.seq_len = seq_len
         self.feature_dim = channels
         scale_init = float(target_std) if target_std is not None else 1.0
@@ -1007,7 +1011,8 @@ class SequenceTokenBridge(nn.Module):
     
     def __init__(
         self, 
-        input_shape: tuple[int, int] = (128, 82), 
+        # input_shape: tuple[int, int] = (128, 82), 
+        input_shape: tuple[int, int] = (128, 1024), 
         output_size: int = 2048, 
         dropout: float = 0.05,
         use_cross_attention: bool = True,
@@ -1018,7 +1023,7 @@ class SequenceTokenBridge(nn.Module):
         Initialize the sequence token bridge.
         
         Args:
-            input_shape: (seq_len, feature_dim) = (128, 82) for ECG quantized features
+            input_shape: (seq_len, feature_dim) = (128, 1024) for ECG quantized features
             output_size: LLM embedding dimension (e.g., 2048 for Llama-3.2-1B)
             dropout: Dropout rate for regularization
             use_cross_attention: Whether to apply cross-attention between positions
@@ -1027,7 +1032,7 @@ class SequenceTokenBridge(nn.Module):
         """
         super().__init__()
         
-        seq_len, feature_dim = input_shape  # 128, 82
+        seq_len, feature_dim = input_shape  # 128, 1024
         self.seq_len = seq_len
         self.feature_dim = feature_dim
         self.output_size = output_size
@@ -1083,7 +1088,7 @@ class SequenceTokenBridge(nn.Module):
         Convert quantized ECG features to sequence of LLM tokens with optional cross-modal attention.
 
         Args:
-            x: Quantized features [batch, 128, 82] or [batch, 1, 128, 82]
+            x: Quantized features [batch, 128, 1024] or [batch, 1, 128, 1024]
             text_embeddings: Optional text embeddings [batch, text_len, output_size] for cross-attention
             text_attention_mask: Optional mask [batch, text_len] indicating valid tokens
 
@@ -1105,7 +1110,7 @@ class SequenceTokenBridge(nn.Module):
                 f"got [{batch_size}, {seq_len}, {feature_dim}]"
             )
 
-        # Project each position independently: [batch, 128, 82] -> [batch, 128, output_size]
+        # Project each position independently: [batch, 128, 1024] -> [batch, 128, output_size]
         token_embeddings = self.token_projection(x)
         token_embeddings = token_embeddings + self.positional_embedding
 
@@ -1165,31 +1170,32 @@ class SimpleTokenBridge(nn.Module):
     Simple bridge that converts each of the 128 ECG positions into separate LLM tokens
     using a straightforward linear projection approach.
     
-    This creates 128 tokens with simple linear projection from 82-dim features 
+    This creates 128 tokens with simple linear projection from 1024-dim features 
     to LLM embedding size (2048), without complex attention mechanisms.
     """
     
     def __init__(
         self, 
-        input_shape: tuple[int, int] = (128, 82), 
+        # input_shape: tuple[int, int] = (128, 82), 
+        input_shape: tuple[int, int] = (128, 1024), 
         output_size: int = 2048,
         dropout: float = 0.1
     ):
         """
         Args:
-            input_shape: (seq_len, feature_dim) = (128, 82) for ECG quantized features
+            input_shape: (seq_len, feature_dim) = (128, 1024) for ECG quantized features
             output_size: LLM embedding dimension (e.g., 2048 for Llama-3.2-1B)
             dropout: Dropout rate for regularization
         """
         super().__init__()
-        self.seq_len, self.feature_dim = input_shape  # 128, 82
+        self.seq_len, self.feature_dim = input_shape  # 128, 1024
         self.output_size = output_size
         self.num_tokens = self.seq_len  # For compatibility with decoder (128 tokens)
         self.input_layernorm = nn.LayerNorm(self.feature_dim)
         
         # Simple linear projection for each position
         self.token_projection = nn.Sequential(
-            nn.Linear(self.feature_dim, output_size),  # 82 -> 2048
+            nn.Linear(self.feature_dim, output_size),  # 1024 -> 2048
             nn.LayerNorm(output_size),
             nn.GELU(),
             nn.Dropout(dropout)
@@ -1200,7 +1206,7 @@ class SimpleTokenBridge(nn.Module):
         Convert quantized ECG features to sequence of LLM tokens.
         
         Args:
-            x: Quantized features [batch, 128, 82] or [batch, 1, 128, 82]
+            x: Quantized features [batch, 128, 1024] or [batch, 1, 128, 1024]
             
         Returns:
             Token embeddings [batch, 128, output_size] - one token per ECG position
@@ -1243,7 +1249,8 @@ class CrossModalSequenceTokenBridge(nn.Module):
     
     def __init__(
         self, 
-        input_shape: tuple[int, int] = (128, 82), 
+        # input_shape: tuple[int, int] = (128, 82), 
+        input_shape: tuple[int, int] = (128, 1024), 
         output_size: int = 2048, 
         dropout: float = 0.05,
         use_cross_attention: bool = True,
@@ -1255,7 +1262,7 @@ class CrossModalSequenceTokenBridge(nn.Module):
         Initialize the cross-modal sequence token bridge.
         
         Args:
-            input_shape: (seq_len, feature_dim) = (128, 82) for ECG quantized features
+            input_shape: (seq_len, feature_dim) = (128, 1024) for ECG quantized features
             output_size: LLM embedding dimension (e.g., 2048 for Llama-3.2-1B)
             dropout: Dropout rate for regularization
             use_cross_attention: Whether to apply cross-attention
@@ -1265,7 +1272,7 @@ class CrossModalSequenceTokenBridge(nn.Module):
         """
         super().__init__()
         
-        seq_len, feature_dim = input_shape  # 128, 82
+        seq_len, feature_dim = input_shape  # 128, 1024
         self.seq_len = seq_len
         self.feature_dim = feature_dim
         self.output_size = output_size
@@ -1330,7 +1337,7 @@ class CrossModalSequenceTokenBridge(nn.Module):
         Convert ECG features to tokens with optional cross-modal attention.
 
         Args:
-            x: ECG quantized features [batch, 128, 82]
+            x: ECG quantized features [batch, 128, 1024]
             text_embeddings: Optional text token embeddings [batch, text_len, output_size]
             text_attention_mask: Optional attention mask [batch, text_len] (1 = keep)
             return_attention: Whether to return attention weights

@@ -66,7 +66,8 @@ class MedGemmaDecoder(nn.Module):
         self,
         huggingface_model_name: str = "google/medgemma-4b-it",
         llm_input_embedding_size: int = 4096,
-        quantized_feature_shape: Tuple[int, int] = (128, 82),
+        # quantized_feature_shape: Tuple[int, int] = (128, 82),
+        quantized_feature_shape: Tuple[int, int] = (128, 1024),
         bridge_name: Union[BridgeName, str] = BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
         adapter_dropout: float = 0.1,
         quantizer: Optional[nn.Module] = None,
@@ -351,6 +352,26 @@ class MedGemmaDecoder(nn.Module):
         self.llm = self.llm_model
         self.llm_model.resize_token_embeddings(len(self.tokenizer), mean_resizing=True)  # type: ignore[arg-type]
 
+        self._boi_token = getattr(self.tokenizer, 'boi_token', None)
+        self._image_token = getattr(self.tokenizer, 'image_token', None)
+        self._eoi_token = getattr(self.tokenizer, 'eoi_token', None)
+        self._image_token_id = (
+            self.tokenizer.convert_tokens_to_ids(self._image_token)  # type: ignore[arg-type]
+            if self._image_token is not None else None
+        )
+        if isinstance(self._image_token_id, list):
+            self._image_token_id = self._image_token_id[0]
+        if isinstance(self._image_token_id, tuple):
+            self._image_token_id = self._image_token_id[0]
+        if isinstance(self._image_token_id, torch.Tensor):
+            self._image_token_id = int(self._image_token_id.item())
+        if self._image_token_id is not None and int(self._image_token_id) < 0:
+            self._image_token_id = None
+        self._visual_prompt_token_count = int(self.num_ecg_tokens)
+        self._use_visual_token_injection = bool(self.prefix_tuning and self._image_token_id is not None)
+        self._requires_prefix_stripping = self.prefix_tuning and not self._use_visual_token_injection
+        self._visual_prompt_block = self._build_visual_prompt_block()
+
         self._ecg_embedding_hook_handle = None
         if not self.prefix_tuning and self.ecg_token_start_id is not None:
             self._initialize_ecg_tokens_semantically(self.ecg_token_start_id, self.num_ecg_tokens)
@@ -377,16 +398,17 @@ class MedGemmaDecoder(nn.Module):
         self.eos_token_id = int(eos_id)
 
         base_defaults: Dict[str, Any] = {
-            "do_sample": True,
+            "do_sample": False,
             "temperature": 0.7,
             "top_p": 0.9,
-            "max_new_tokens": 160,
-            "min_new_tokens": 24,
+            "max_new_tokens": 96,
+            "min_new_tokens": 4,
             "repetition_penalty": 1.05,
         }
         if default_generation_kwargs:
             base_defaults.update(default_generation_kwargs)
-        self._eot_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        # self._eot_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        self._eot_token_id =  self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
         if not self.prefix_tuning and self.ecg_token_start_id is not None:
             self.bad_ecg_token_ids: Optional[list[list[int]]] = [[tid] for tid in range(
                 self.ecg_token_start_id,
@@ -443,34 +465,80 @@ class MedGemmaDecoder(nn.Module):
         generated: Union[torch.Tensor, Any],
         prefix_len: int,
     ) -> Union[torch.Tensor, Any]:
-        """Remove synthetic prefix tokens from generated sequences when prefix tuning is active."""
+        """Remove synthetic prefix tokens from generated sequences when prefix tuning is active.
+        
+        In prefix tuning mode, we need to strip BOS + ECG prefix tokens (1 + prefix_len total).
+        """
         if prefix_len <= 0:
             return generated
 
+        # In prefix tuning mode, we have: [BOS] + [ECG prefix] + [text]
+        # So we need to strip 1 + prefix_len tokens
+        total_strip = 1 + prefix_len if self.prefix_tuning else prefix_len
+
         if isinstance(generated, torch.Tensor):
-            if generated.size(-1) <= prefix_len:
+            if generated.size(-1) <= total_strip:
                 return generated[:, 0:0]
-            return generated[:, prefix_len:]
+            return generated[:, total_strip:]
 
         sequences = getattr(generated, "sequences", None)
         if isinstance(sequences, torch.Tensor):
-            if sequences.size(-1) <= prefix_len:
+            if sequences.size(-1) <= total_strip:
                 stripped = sequences[:, 0:0]
             else:
-                stripped = sequences[:, prefix_len:]
+                stripped = sequences[:, total_strip:]
             generated.sequences = stripped
         return generated
+
+    def _build_visual_prompt_block(self) -> str:
+        if self._boi_token and self._image_token and self._eoi_token:
+            image_block = "".join(self._image_token for _ in range(max(1, self._visual_prompt_token_count)))
+            return f"{self._boi_token}{image_block}{self._eoi_token}\n\n"
+        return ""
+
+    def _inject_visual_embeddings(
+        self,
+        prompt_embeddings: torch.Tensor,
+        input_ids: torch.Tensor,
+        ecg_embeddings: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._image_token_id is None:
+            raise ValueError("Image token id is undefined; cannot inject ECG embeddings.")
+
+        mask = (input_ids == self._image_token_id)
+        expected = ecg_embeddings.size(1)
+        counts = mask.sum(dim=1)
+        if torch.any(counts != expected):
+            raise ValueError(
+                f"Expected {expected} <image_soft_token> slots per prompt but found {counts.tolist()}."
+            )
+
+        flat_prompt = prompt_embeddings.view(-1, prompt_embeddings.size(-1))
+        flat_mask = mask.view(-1)
+        flat_prompt[flat_mask] = ecg_embeddings.reshape(-1, ecg_embeddings.size(-1))
+        return prompt_embeddings
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+    def _set_llm_grad_state(self, requires_grad: bool, keep_lora_trainable: bool = True) -> None:
+        """Toggle gradients on the LLM, optionally keeping LoRA params trainable when freezing."""
+        for name, param in self.llm_model.named_parameters():
+            if not requires_grad and keep_lora_trainable and "lora_" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = requires_grad
+
     def freeze_llm_parameters(self) -> None:
-        for param in self.llm_model.parameters():
-            param.requires_grad = False
+        # Preserve LoRA params as trainable so phase2 can update them even when base weights are frozen.
+        # for param in self.llm_model.parameters():
+        #     param.requires_grad = False
+        self._set_llm_grad_state(False, keep_lora_trainable=True)
 
     def unfreeze_llm_parameters(self) -> None:
-        for param in self.llm_model.parameters():
-            param.requires_grad = True
+        # for param in self.llm_model.parameters():
+        #     param.requires_grad = True
+        self._set_llm_grad_state(True, keep_lora_trainable=False)
 
     def _compute_ecg_embeddings(
         self,
@@ -520,42 +588,90 @@ class MedGemmaDecoder(nn.Module):
 
         ecg_embeddings = self._compute_ecg_embeddings(quantized_features, quantized_codes, device)
         prefix_len = int(ecg_embeddings.size(1))
+        if ecg_embeddings.dtype != model_dtype:
+            ecg_embeddings = ecg_embeddings.to(model_dtype)
+        text_input_ids = input_ids.to(device)
 
-        if not self.prefix_tuning:
+        if self._use_visual_token_injection:
+            text_embeddings = embed_layer(text_input_ids)
+            if text_embeddings.dtype != model_dtype:
+                text_embeddings = text_embeddings.to(model_dtype)
+            input_embeddings = self._inject_visual_embeddings(text_embeddings, text_input_ids, ecg_embeddings)
+
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+            else:
+                attention_mask = torch.ones(
+                    input_embeddings.size(0),
+                    input_embeddings.size(1),
+                    dtype=torch.long,
+                    device=device,
+                )
+        elif not self.prefix_tuning:
+            # Non-prefix-tuning path: ECG tokens are in vocabulary
             if input_ids.size(1) < prefix_len:
                 raise ValueError(
                     f"Input sequence too short for {prefix_len} ECG tokens: {input_ids.shape}"
                 )
             text_input_ids = input_ids[:, prefix_len:].to(device)
+            text_embeddings = embed_layer(text_input_ids)
+            
+            if text_embeddings.dtype != model_dtype:
+                text_embeddings = text_embeddings.to(model_dtype)
+            
+            # [ECG embeddings] + [text embeddings]
+            input_embeddings = torch.cat([ecg_embeddings, text_embeddings], dim=1)
+            
+            # Attention mask already includes ECG positions
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
         else:
+            # Prefix-tuning path: Force BOS Prepend + ECG + Full Text
+            # We explicitly create a BOS token embedding and prepend it.
+            # This handles cases where the tokenizer splits the first token (e.g. Llama-3 header)
+            # and prevents us from splitting the text embeddings safely.
             text_input_ids = input_ids.to(device)
+            text_embeddings = embed_layer(text_input_ids)
+            
+            if ecg_embeddings.dtype != model_dtype:
+                ecg_embeddings = ecg_embeddings.to(model_dtype)
+            if text_embeddings.dtype != model_dtype:
+                text_embeddings = text_embeddings.to(model_dtype)
+            
+            # Create forced BOS embedding
+            # Use bos_token_id if available, else 1 (standard BOS) or eos_token_id
+            bos_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
+            if bos_id is None and self.tokenizer.eos_token_id is not None:
+                bos_id = self.tokenizer.eos_token_id
+                
+            bos_token_tensor = torch.tensor([[bos_id]], device=device, dtype=torch.long)
+            bos_token_tensor = bos_token_tensor.expand(text_input_ids.size(0), 1)
+            bos_embedding = embed_layer(bos_token_tensor)
+            if bos_embedding.dtype != model_dtype:
+                bos_embedding = bos_embedding.to(model_dtype)
 
-        text_embeddings = embed_layer(text_input_ids)
-
-        if ecg_embeddings.dtype != model_dtype:
-            ecg_embeddings = ecg_embeddings.to(model_dtype)
-        if text_embeddings.dtype != model_dtype:
-            text_embeddings = text_embeddings.to(model_dtype)
-
-        input_embeddings = torch.cat([ecg_embeddings, text_embeddings], dim=1)
-
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
-            if self.prefix_tuning:
+            # Concatenate: [Forced BOS] + [ECG prefix] + [Full Text]
+            input_embeddings = torch.cat([bos_embedding, ecg_embeddings, text_embeddings], dim=1)
+            
+            # Construct attention mask: [1 for BOS] + [1s for ECG prefix] + [original mask]
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+                bos_mask = torch.ones(attention_mask.size(0), 1, dtype=attention_mask.dtype, device=device)
                 prefix_mask = torch.ones(
                     attention_mask.size(0),
                     prefix_len,
                     dtype=attention_mask.dtype,
                     device=device,
                 )
-                attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
-        elif self.prefix_tuning:
-            attention_mask = torch.ones(
-                input_embeddings.size(0),
-                prefix_len + text_input_ids.size(1),
-                dtype=torch.long,
-                device=device,
-            )
+                attention_mask = torch.cat([bos_mask, prefix_mask, attention_mask], dim=1)
+            else:
+                # Create full attention mask if not provided
+                attention_mask = torch.ones(
+                    input_embeddings.size(0),
+                    input_embeddings.size(1),
+                    dtype=torch.long,
+                    device=device,
+                )
 
         return input_embeddings, attention_mask, prefix_len
 
@@ -584,14 +700,26 @@ class MedGemmaDecoder(nn.Module):
         prepared_labels = labels
         if labels is not None:
             prepared_labels = labels.to(inputs_embeds.device)
-            if self.prefix_tuning:
-                ignore_pad = torch.full(
+            if self._requires_prefix_stripping:
+                # Prefix tuning: [BOS label] + [ignore for ECG prefix] + [ALL labels]
+                # Force BOS Prepend approach
+                bos_label = torch.full(
+                    (prepared_labels.size(0), 1),
+                    self.label_ignore_index,
+                    dtype=prepared_labels.dtype,
+                    device=prepared_labels.device,
+                )
+                ecg_prefix_labels = torch.full(
                     (prepared_labels.size(0), prefix_len),
                     self.label_ignore_index,
                     dtype=prepared_labels.dtype,
                     device=prepared_labels.device,
                 )
-                prepared_labels = torch.cat([ignore_pad, prepared_labels], dim=1)
+                # Use ALL original labels (since we added BOS, we didn't consume any text)
+                remaining_labels = prepared_labels
+                
+                # Concatenate: [BOS ignore] + [ECG prefix ignore] + [remaining labels]
+                prepared_labels = torch.cat([bos_label, ecg_prefix_labels, remaining_labels], dim=1)
 
         outputs = self.llm_model(
             inputs_embeds=inputs_embeds,
@@ -613,7 +741,11 @@ class MedGemmaDecoder(nn.Module):
             "You are a medical expert specialized in ECG interpretation. Provide a concise list "
             "of clinical findings separated by semicolons, similar to standard ECG reports."
         )
-        default_user_content = "Analyze this ECG and list the clinical findings."
+        base_user_content = "Analyze this ECG and list the clinical findings."
+        if self._visual_prompt_block:
+            default_user_content = f"{self._visual_prompt_block}{base_user_content}"
+        else:
+            default_user_content = base_user_content
         messages = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": default_user_content},
@@ -674,27 +806,59 @@ class MedGemmaDecoder(nn.Module):
         if ecg_embeddings.dtype != model_dtype:
             ecg_embeddings = ecg_embeddings.to(model_dtype)
 
-        prompt_embeddings = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
         prefix_len = ecg_embeddings.size(1)
-        prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
-        prompt_mask = torch.cat([prefix_mask, prompt_mask], dim=1)
-
-        if not self.prefix_tuning and self.ecg_token_start_id is not None:
-            prefix_token_ids = torch.arange(
-                self.ecg_token_start_id,
-                self.ecg_token_start_id + prefix_len,
-                dtype=torch.long,
-                device=device,
-            ).unsqueeze(0).expand(batch_size, -1)
+        
+        if self._use_visual_token_injection:
+            prompt_embeddings = self._inject_visual_embeddings(prompt_embeddings, prompt_tensor, ecg_embeddings)
+            input_ids = prompt_tensor
+        elif self.prefix_tuning:
+            # Prefix tuning: [Forced BOS] + [ECG embeddings] + [Full prompt embeddings]
+            # Force BOS Prepend approach + input_ids=None fix
+            # This ensures the frozen LLM sees its expected anchor token at pos 0
+            # And we don't accidentally split a multi-token header
+            
+            bos_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
+            if bos_id is None and self.tokenizer.eos_token_id is not None:
+                bos_id = self.tokenizer.eos_token_id
+                
+            bos_token_tensor = torch.tensor([[bos_id]], device=device, dtype=torch.long)
+            bos_token_tensor = bos_token_tensor.expand(batch_size, 1)
+            bos_prompt_embedding = embed_layer(bos_token_tensor)
+            if bos_prompt_embedding.dtype != model_dtype:
+                bos_prompt_embedding = bos_prompt_embedding.to(model_dtype)
+            
+            # Concatenate: [BOS] + [ECG prefix] + [Full Prompt]
+            prompt_embeddings = torch.cat([bos_prompt_embedding, ecg_embeddings, prompt_embeddings], dim=1)
+            
+            # Attention mask: [1 for BOS] + [ECG prefix mask] + [Prompt mask]
+            bos_mask = torch.ones(batch_size, 1, device=device, dtype=torch.long)
+            prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
+            prompt_mask = torch.cat([bos_mask, prefix_mask, prompt_mask], dim=1)
+            
+            # CRITICAL FIX: Do NOT pass dummy input_ids containing pad tokens.
+            # Set input_ids to None so generation relies solely on inputs_embeds
+            input_ids = None
         else:
-            prefix_token_ids = torch.full(
-                (batch_size, prefix_len),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=device,
-            )
-
-        input_ids = torch.cat([prefix_token_ids, prompt_tensor], dim=1)
+            # Non-prefix tuning: [ECG embeddings] + [prompt embeddings]
+            prompt_embeddings = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
+            prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
+            prompt_mask = torch.cat([prefix_mask, prompt_mask], dim=1)
+            
+            if self.ecg_token_start_id is not None:
+                prefix_token_ids = torch.arange(
+                    self.ecg_token_start_id,
+                    self.ecg_token_start_id + prefix_len,
+                    dtype=torch.long,
+                    device=device,
+                ).unsqueeze(0).expand(batch_size, -1)
+            else:
+                prefix_token_ids = torch.full(
+                    (batch_size, prefix_len),
+                    self.pad_token_id,
+                    dtype=torch.long,
+                    device=device,
+                )
+            input_ids = torch.cat([prefix_token_ids, prompt_tensor], dim=1)
 
         generate_args = dict(self.default_generation_params)
         generate_args.update(generate_kwargs)
@@ -718,7 +882,7 @@ class MedGemmaDecoder(nn.Module):
             **generate_args,
         )
 
-        if self.prefix_tuning:
+        if self._requires_prefix_stripping:
             generated = self._strip_prefix_tokens(generated, prefix_len)
 
         return generated
@@ -761,28 +925,60 @@ class MedGemmaDecoder(nn.Module):
         if ecg_embeddings.dtype != model_dtype:
             ecg_embeddings = ecg_embeddings.to(model_dtype)
 
-        inputs_embeds = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
         prefix_len = ecg_embeddings.size(1)
-        prefix_mask = torch.ones(prompt_embeddings.size(0), prefix_len, device=device, dtype=torch.long)
-        attention_mask = torch.cat([prefix_mask, prompt_attention_mask], dim=1)
-
         batch_size = prompt_embeddings.size(0)
-        if not self.prefix_tuning and self.ecg_token_start_id is not None:
-            prefix_token_ids = torch.arange(
-                self.ecg_token_start_id,
-                self.ecg_token_start_id + prefix_len,
-                dtype=torch.long,
-                device=device,
-            ).unsqueeze(0).expand(batch_size, -1)
+        
+        if self._use_visual_token_injection:
+            prompt_embeddings = self._inject_visual_embeddings(prompt_embeddings, prompt_input_ids, ecg_embeddings)
+            inputs_embeds = prompt_embeddings
+            attention_mask = prompt_attention_mask
+            input_ids = prompt_input_ids
+        elif self.prefix_tuning:
+            # Prefix tuning: [Forced BOS] + [ECG embeddings] + [Full prompt embeddings]
+            # Force BOS Prepend approach + input_ids=None fix
+            
+            bos_id = self.tokenizer.bos_token_id if self.tokenizer.bos_token_id is not None else 1
+            if bos_id is None and self.tokenizer.eos_token_id is not None:
+                bos_id = self.tokenizer.eos_token_id
+                
+            bos_token_tensor = torch.tensor([[bos_id]], device=device, dtype=torch.long)
+            bos_token_tensor = bos_token_tensor.expand(batch_size, 1)
+            bos_prompt_embedding = embed_layer(bos_token_tensor)
+            if bos_prompt_embedding.dtype != model_dtype:
+                bos_prompt_embedding = bos_prompt_embedding.to(model_dtype)
+            
+            # Concatenate: [BOS] + [ECG prefix] + [Full Prompt]
+            inputs_embeds = torch.cat([bos_prompt_embedding, ecg_embeddings, prompt_embeddings], dim=1)
+            
+            # Attention mask: [1 for BOS] + [ECG prefix mask] + [Prompt mask]
+            bos_mask = torch.ones(batch_size, 1, device=device, dtype=torch.long)
+            prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
+            attention_mask = torch.cat([bos_mask, prefix_mask, prompt_attention_mask], dim=1)
+            
+            # CRITICAL FIX: Do NOT pass dummy input_ids containing pad tokens.
+            # Set input_ids to None so generation relies solely on inputs_embeds
+            input_ids = None
         else:
-            prefix_token_ids = torch.full(
-                (batch_size, prefix_len),
-                self.pad_token_id,
-                dtype=torch.long,
-                device=device,
-            )
-
-        input_ids = torch.cat([prefix_token_ids, prompt_input_ids], dim=1)
+            # Non-prefix tuning: [ECG embeddings] + [prompt embeddings]
+            inputs_embeds = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
+            prefix_mask = torch.ones(batch_size, prefix_len, device=device, dtype=torch.long)
+            attention_mask = torch.cat([prefix_mask, prompt_attention_mask], dim=1)
+            
+            if self.ecg_token_start_id is not None:
+                prefix_token_ids = torch.arange(
+                    self.ecg_token_start_id,
+                    self.ecg_token_start_id + prefix_len,
+                    dtype=torch.long,
+                    device=device,
+                ).unsqueeze(0).expand(batch_size, -1)
+            else:
+                prefix_token_ids = torch.full(
+                    (batch_size, prefix_len),
+                    self.pad_token_id,
+                    dtype=torch.long,
+                    device=device,
+                )
+            input_ids = torch.cat([prefix_token_ids, prompt_input_ids], dim=1)
 
         generate_args = dict(self.default_generation_params)
         generate_args.update(generate_kwargs)
@@ -806,7 +1002,7 @@ class MedGemmaDecoder(nn.Module):
             **generate_args,
         )
 
-        if self.prefix_tuning:
+        if self._requires_prefix_stripping:
             generated = self._strip_prefix_tokens(generated, prefix_len)
 
         return generated

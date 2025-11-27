@@ -921,28 +921,37 @@ class LLMFinetuningProject(BaseProject):
         else:
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-        if getattr(self.config, 'instruct_mode', False) and processor is None:
+        def _ecg_prompt_block(tok) -> str:
+            boi = getattr(tok, 'boi_token', None)
+            eoi = getattr(tok, 'eoi_token', None)
+            image_token = getattr(tok, 'image_token', None)
+            if boi and eoi and image_token:
+                return f"{boi}{image_token}{eoi}\n"
             if getattr(self.config, 'prefix_tuning', False):
-                ecg_block = "<|start_ecg|><|end_ecg|>\n"
-            else:
-                ecg_tokens = "".join(f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens))
-                ecg_block = f"<|start_ecg|>{ecg_tokens}<|end_ecg|>\n"
-            custom_template = (
-                "<|begin_of_text|>"
-                "{% for message in messages %}"
-                "{% if message['role'] == 'system' %}"
-                "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-                "{% elif message['role'] == 'user' %}"
-                "<|start_header_id|>user<|end_header_id|>\n\n"
-            ) + ecg_block + (
-                "{{ message['content'] }}<|eot_id|>"
-                "{% elif message['role'] == 'assistant' %}"
-                "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-                "{% endif %}"
-                "{% endfor %}"
-                "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
-            )
-            tokenizer.chat_template = custom_template
+                return ""
+            ecg_tokens = "".join(f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens))
+            return f"<|start_ecg|>{ecg_tokens}<|end_ecg|>\n"
+
+        if getattr(self.config, 'instruct_mode', False) and processor is None:
+            existing_template = getattr(tokenizer, 'chat_template', None)
+            if not existing_template:
+                ecg_block = _ecg_prompt_block(tokenizer)
+                custom_template = (
+                    "<|begin_of_text|>"
+                    "{% for message in messages %}"
+                    "{% if message['role'] == 'system' %}"
+                    "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+                    "{% elif message['role'] == 'user' %}"
+                    "<|start_header_id|>user<|end_header_id|>\n\n"
+                ) + ecg_block + (
+                    "{{ message['content'] }}<|eot_id|>"
+                    "{% elif message['role'] == 'assistant' %}"
+                    "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+                    "{% endif %}"
+                    "{% endfor %}"
+                    "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
+                )
+                tokenizer.chat_template = custom_template
 
         if hasattr(tokenizer, 'pad_token') and tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -951,7 +960,15 @@ class LLMFinetuningProject(BaseProject):
         if hasattr(tokenizer, 'pad_token_id') and isinstance(tokenizer.pad_token_id, list):
             tokenizer.pad_token_id = tokenizer.pad_token_id[0]
 
-        if getattr(self.config, 'instruct_mode', False) and processor is None:
+        need_ecg_boundary_tokens = (
+            getattr(self.config, 'instruct_mode', False)
+            and processor is None
+            and (
+                not getattr(self.config, 'prefix_tuning', False)
+                or (getattr(tokenizer, 'boi_token', None) is None or getattr(tokenizer, 'eoi_token', None) is None)
+            )
+        )
+        if need_ecg_boundary_tokens:
             special_tokens_dict = {
                 'additional_special_tokens': ['<|start_ecg|>', '<|end_ecg|>']
             }
@@ -959,7 +976,6 @@ class LLMFinetuningProject(BaseProject):
             if num_added_tokens > 0 and self.config.is_ref_device:
                 print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
             if getattr(self.config, 'prefix_tuning', False):
-                # Prefix-tuning path: rely on per-example embeddings instead of dedicated vocab rows
                 self.config.ecg_token_start_id = None
             else:
                 ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]

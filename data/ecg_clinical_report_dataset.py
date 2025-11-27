@@ -78,6 +78,7 @@ class ECGClinicalReportDataset(Dataset):
         if pad_token_id is None:
             pad_token_id = eos_token_id
         self.ecg_prefix_token_id: int = int(pad_token_id)
+        self.visual_prompt_block: str = self._build_visual_prompt_block()
 
         # Column configuration
         self.prompt_column: str = prompt_column
@@ -113,6 +114,20 @@ class ECGClinicalReportDataset(Dataset):
             self.ecg_token_ids = []
     def __len__(self):
         return len(self.df)
+
+    def _build_visual_prompt_block(self) -> str:
+        """Return the textual block that advertises an attached ECG to the LLM."""
+        boi = getattr(self._pt_tokenizer, 'boi_token', None)
+        eoi = getattr(self._pt_tokenizer, 'eoi_token', None)
+        image_token = getattr(self._pt_tokenizer, 'image_token', None)
+        if boi and eoi and image_token:
+            # Repeat the image_soft_token for each visual token slot so the downstream
+            # decoder can replace them with ECG embeddings.
+            image_block = "".join(image_token for _ in range(max(1, self.num_ecg_tokens)))
+            return f"{boi}{image_block}{eoi}\n\n"
+        if self.prefix_tuning:
+            return ""
+        return "<|start_ecg|><|end_ecg|>\n\n"
 
     def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
         try:
@@ -166,15 +181,15 @@ class ECGClinicalReportDataset(Dataset):
                     prompt_text = str(row[self.prompt_column])
                 answer_text: str = str(row[self.answer_column])
 
-                # Construct LLaMA 3.2 chat template with ECG integration
-                # System message for ECG analysis task - optimized for concise medical findings
                 system_message = "An electrocardiogram analysis and question answering tool"
                 
-                # User message with ECG placeholder and prompt - focused on findings format
-                # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{prompt_text}" if prompt_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
                 if not prompt_text:
                     raise ValueError(f"No prompt_text found for index {idx}. Cannot proceed without a prompt.")
+                # Prepend MedGemma visual boundary tokens when available so the LLM
+                # sees the same markers it expects for image-conditioned prompts.
                 user_content = prompt_text
+                if self.visual_prompt_block:
+                    user_content = f"{self.visual_prompt_block}{prompt_text}"
                 
                 # Create messages for chat template
                 messages_prompt = [
@@ -188,7 +203,6 @@ class ECGClinicalReportDataset(Dataset):
                     {"role": "assistant", "content": answer_text}
                 ]
                 
-                # Apply chat template
                 prompt_template_text = cast(str, self._pt_tokenizer.apply_chat_template(
                     messages_prompt, 
                     tokenize=False, 
@@ -199,14 +213,6 @@ class ECGClinicalReportDataset(Dataset):
                     tokenize=False, 
                     add_generation_prompt=False
                 ))
-                
-                # Replace ECG placeholder with special tokens for tokenization
-                # The actual ECG embedding will replace the ECG token during training/inference
-                ecg_token_placeholder = "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>"
-                ecg_token_replacement = "<|start_ecg|><|end_ecg|>"  # Simplified to just the boundary tokens
-                
-                prompt_template_text = prompt_template_text.replace(ecg_token_placeholder, ecg_token_replacement)
-                full_template_text = full_template_text.replace(ecg_token_placeholder, ecg_token_replacement)
                 
                 # Tokenize both
                 prompt_encoding = self._pt_tokenizer.encode_plus(
@@ -224,19 +230,12 @@ class ECGClinicalReportDataset(Dataset):
                 full_ids = full_encoding.input_ids
 
                 # Build ECG prefix tokens
-                if self.num_ecg_tokens > 0:
-                    if self.prefix_tuning:
-                        ecg_prefix = torch.full(
-                            (self.num_ecg_tokens,),
-                            fill_value=self.ecg_prefix_token_id,
-                            dtype=torch.long,
-                        )
-                    else:
-                        ecg_prefix = torch.arange(
-                            self.ecg_token_start_id,
-                            self.ecg_token_start_id + self.num_ecg_tokens,
-                            dtype=torch.long,
-                        )
+                if self.num_ecg_tokens > 0 and not self.prefix_tuning:
+                    ecg_prefix = torch.arange(
+                        self.ecg_token_start_id,
+                        self.ecg_token_start_id + self.num_ecg_tokens,
+                        dtype=torch.long,
+                    )
                 else:
                     ecg_prefix = torch.zeros(0, dtype=torch.long)
                 prefix_len = ecg_prefix.numel()
@@ -285,7 +284,8 @@ class ECGClinicalReportDataset(Dataset):
                     'prompt_attention_mask': prompt_attention_mask,
                     'labels': labels,
                     'waveform_name': row['waveform_name'],
-                    'prompt_text': prompt_text  # Add original prompt for metrics display
+                    'prompt_text': prompt_text,
+                    'user_prompt_with_ecg': user_content
                 }
                 
                 # Add category information for per-category metrics
@@ -310,11 +310,14 @@ class ECGClinicalReportDataset(Dataset):
                     text_ids = []
                 text_tensor = torch.tensor(text_ids, dtype=torch.long)
 
-                ecg_prefix = torch.full(
-                    (self.num_ecg_tokens,),
-                    fill_value=self.ecg_prefix_token_id,
-                    dtype=torch.long
-                ) if self.num_ecg_tokens > 0 else torch.zeros(0, dtype=torch.long)
+                if self.num_ecg_tokens > 0 and not self.prefix_tuning:
+                    ecg_prefix = torch.full(
+                        (self.num_ecg_tokens,),
+                        fill_value=self.ecg_prefix_token_id,
+                        dtype=torch.long
+                    )
+                else:
+                    ecg_prefix = torch.zeros(0, dtype=torch.long)
 
                 input_ids = torch.cat([ecg_prefix, text_tensor], dim=0)
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)

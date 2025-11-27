@@ -73,11 +73,13 @@ class ModelName(str, Enum):
     # Encoders
     CONV_ENCODER = "Conv_Encoder"
     RESIDUAL_CONV_ENCODER = "Residual_Conv_Encoder"
+    RESIDUAL_CONV_ENCODER_1024 = "Residual_Conv_Encoder_1024"
     
     # Quantizers
     ECG_TOKENIZER_QUANTIZER = "ECG_Tokenizer_Quantizer"
     ECG_TOKENIZER_QUANTIZER_RVQ = "ECG_Tokenizer_Quantizer_RVQ"
     ECG_TOKENIZER_QUANTIZER_VANILLA = "ECG_Tokenizer_Quantizer_Vanilla"
+    ECG_TOKENIZER_QUANTIZER_1024 = "ECG_Tokenizer_Quantizer_1024"
 
     # Decoders
     GPT2_DECODER = "GPT2_Decoder"
@@ -88,6 +90,7 @@ class ModelName(str, Enum):
     RESNET_CLASSIFIER_DECODER = "ResNet_Classifier_Decoder"
     CLS_TOKEN_CLASSIFIER_DECODER = "CLS_Token_Classifier_Decoder"
     EFFICIENTNETV2_CLASSIFIER_DECODER = "EfficientNetV2_Classifier_Decoder"
+    CONV_DECODER_1024 = "Conv_Decoder_1024"
     
     # Report classifiers
     BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"

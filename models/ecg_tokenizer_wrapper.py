@@ -530,6 +530,68 @@ class MBConv1d(nn.Module):
             x = self.stochastic_depth(x) + identity
         return x
 
+@ModelRegistry.register(ModelName.RESIDUAL_CONV_ENCODER_1024)
+class Residual_Conv_Encoder_1024(nn.Module):
+    """
+    High-temporal-resolution residual encoder with skip connections for better ECG feature preservation.
+    Maintains 128 channels but increases temporal resolution to 1024 timesteps.
+    
+    Expected input shape: (batch_size, 12, length)
+    Output shape: (batch_size, 128, 1024)
+    """
+    def __init__(self, input_channels=12, temporal_dim=1024):
+        """
+        Args:
+            input_channels: Number of input channels (default: 12)
+            temporal_dim: Output temporal dimension (default: 1024)
+        """
+        super(Residual_Conv_Encoder_1024, self).__init__()
+        self.temporal_dim = temporal_dim
+        
+        # Preserve more timesteps while maintaining 128 channel progression
+        # First block: 12 -> 32 channels (reduce stride to preserve time)
+        self.conv1 = nn.Conv1d(input_channels, 32, kernel_size=4, stride=1, padding=16)  # stride=1
+        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1)  # Only pooling reduces time
+        self.block1 = ResidualBlock1D(32, 32, stride=1, downsample=False)
+        
+        # Second block: 32 -> 64 channels
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=4, stride=1, padding=8)  # stride=1
+        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2, padding=1)  # Only pooling reduces time
+        self.block2 = ResidualBlock1D(64, 64, stride=1, downsample=False)
+        
+        # Third block: 64 -> 128 channels (target channel dimension)
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=4, stride=1, padding=2)  # 128 channels, stride=1
+        self.block3 = ResidualBlock1D(128, 128, stride=1, downsample=False)
+        
+        # Add adaptive pooling to get exactly 1024 timesteps
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(temporal_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 12, length)
+        """
+        # First conv + pool + residual refinement
+        x = self.conv1(x)
+        x = self.pool1(x)
+        x = nn.GELU()(x)
+        x = self.block1(x)
+        
+        # Second conv + pool + residual refinement
+        x = self.conv2(x)
+        x = self.pool2(x)
+        x = nn.GELU()(x)
+        x = self.block2(x)
+        
+        # Third conv + residual refinement (to 128 channels)
+        x = self.conv3(x)
+        x = self.block3(x)
+        
+        # Apply adaptive pooling to get exactly 1024 timesteps
+        x = self.adaptive_pool(x)
+        
+        return x
+
 @ModelRegistry.register(ModelName.EFFICIENTNETV2_CLASSIFIER_DECODER)
 class EfficientNetV2_Classifier_Decoder(nn.Module):
     """
@@ -699,6 +761,48 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
         return out
 
+@ModelRegistry.register(ModelName.CONV_DECODER_1024)
+class Conv_Decoder_1024(nn.Module):
+    """
+    High-temporal-resolution decoder module that reconstructs the input from the quantized latent representation.
+    Handles 128 channels with 1024 timesteps for better temporal reconstruction.
+
+    Expected input shape: (batch_size, 128, 1024)
+    """
+    def __init__(self, latent_dim=128, width=128):
+        super(Conv_Decoder_1024, self).__init__()
+        self.latent_dim = latent_dim
+        # Decode from (batch, 128, 1024) back to (batch, 12, 2500)
+        # Need to go from 1024 timesteps to 2500 samples
+        # And from 128 channels to 12 channels
+        
+        # Add input projection for bottleneck efficiency  
+        self.in_proj = nn.Conv1d(latent_dim, width, 1)  # 128 -> 128 channels
+        
+        self.decoder_layers = nn.ModuleList([
+            nn.ConvTranspose1d(width, 64, kernel_size=4, stride=2, padding=2),
+            nn.GELU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=8),
+            nn.GELU(),
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.ConvTranspose1d(32, 12, kernel_size=2, stride=2, padding=0),  # Final to 12 channels
+            nn.AdaptiveAvgPool1d(2500)  # Ensure exact output length of 2500
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 128, 1024)
+        """
+        # Apply input projection
+        x = self.in_proj(x)
+        
+        # Apply decoder layers
+        for layer in self.decoder_layers:
+            x = layer(x)
+        return x   
+
 @ModelRegistry.register(ModelName.ECG_TOKENIZER_QUANTIZER_RVQ)
 class ECG_Tokenizer_Quantizer_RVQ(nn.Module):
     """
@@ -835,6 +939,90 @@ class ECG_Tokenizer_Quantizer(nn.Module):
         # The ResidualVQ layer returns (quantized, indices, commit_loss)
         quantizer_outputs = self.quantizer(x, return_all_codes=return_all_codes)
         return quantizer_outputs
+
+@ModelRegistry.register(ModelName.ECG_TOKENIZER_QUANTIZER_1024)
+class ECG_Tokenizer_Quantizer_1024(nn.Module):
+    """
+    High-temporal-resolution quantizer module that wraps the Residual Vector Quantization layer.
+    Handles 128 channels with 1024 timesteps for better temporal expressiveness.
+
+    It takes the features provided by the Encoder and quantizes them,
+    returning quantized features along with indices and commitment loss.
+    """
+    def __init__(
+        self, 
+        num_quantizers: int, 
+        codebook_size: int,
+        latent_dim: int = 128,  # Changed from 1024 to 128 (channel dimension)
+        codebook_dim: int = 256  # Bottleneck dimension for efficiency
+    ):
+        """
+        Args:
+            num_quantizers: Number of quantizers
+            codebook_size: Size of the codebook
+            latent_dim: Channel dimension (default: 128)
+            codebook_dim: Codebook bottleneck dimension (default: 256)
+        """
+        super(ECG_Tokenizer_Quantizer_1024, self).__init__()
+        self.latent_dim = latent_dim
+        self.codebook_dim = codebook_dim
+        
+        # Add projection layers for bottlenecking
+        self.pre = nn.Linear(latent_dim, codebook_dim)  # 128 -> 256
+        self.post = nn.Linear(codebook_dim, latent_dim)  # 256 -> 128
+
+        self.quantizer: ModelT = ResidualVQ(
+            dim=codebook_dim,  # Quantize in smaller dimension
+            num_quantizers=num_quantizers,
+            codebook_size=codebook_size,
+            commitment_weight=0.25,
+            implicit_neural_codebook=False
+        )
+
+    @property
+    def codebooks(self):
+        """Expose the underlying quantizer's codebooks"""
+        if hasattr(self.quantizer, 'codebooks'):
+            return getattr(self.quantizer, 'codebooks')
+        else:
+            return None
+
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        return_all_codes: bool = False
+    ):
+        """
+        Args:
+            x: Input tensor of shape (batch_size, 128, 1024) - [B, channels, timesteps]
+            return_all_codes: Whether to return all codes
+        """
+        # Ensure input is contiguous for better DDP performance
+        x = x.contiguous()
+        
+        # Transpose to (batch, timesteps, channels) for linear layers
+        x = x.transpose(1, 2)  # [B, 1024, 128]
+        
+        # Project to smaller dimension
+        x_small = self.pre(x)  # [B, 1024, 256]
+        
+        # The ResidualVQ layer returns (quantized, indices, commit_loss)
+        quantizer_outputs = self.quantizer(x_small, return_all_codes=return_all_codes)
+        
+        if return_all_codes:
+            q_small, idx, cl, all_codes = quantizer_outputs
+            # Project back to original dimension
+            quantized = self.post(q_small)  # [B, 1024, 128]
+            # Transpose back to (batch, channels, timesteps)
+            quantized = quantized.transpose(1, 2)  # [B, 128, 1024]
+            return quantized, idx, cl, all_codes
+        else:
+            q_small, idx, cl = quantizer_outputs
+            # Project back to original dimension
+            quantized = self.post(q_small)  # [B, 1024, 128]
+            # Transpose back to (batch, channels, timesteps)
+            quantized = quantized.transpose(1, 2)  # [B, 128, 1024]
+            return quantized, idx, cl
 
 @ModelRegistry.register(ModelName.CONV_DECODER)
 class Conv_Decoder(nn.Module):
@@ -983,7 +1171,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         
         if self.decoder_mode == DecoderMode.LLM:
             try:
-                quantized_feature_shape = (128, 82)
+                # quantized_feature_shape = (128, 82)
+                quantized_feature_shape = (128, 1024)
                 decoder_ctor = cast(Any, decoder_class)
                 decoder_kwargs: dict[str, Any] = {
                     'huggingface_model_name': huggingface_model_name,
