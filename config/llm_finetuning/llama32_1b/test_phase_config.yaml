@@ -79,12 +79,11 @@ bridge_dropout: !!float 0.1
 bridge_num_special_tokens: !!int 4
 # LoRA parameters
 use_lora: !!bool false
-lora_config:
-  r: !!int 16
-  lora_alpha: !!int 32
-  lora_dropout: !!float 0.05
-  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
-  bias: "none"
+lora_r: !!int 16
+lora_alpha: !!int 32
+lora_dropout: !!float 0.05
+lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+lora_bias: "none"
 # Dataset parameters (smaller subset for testing)
 train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_complete_qa_dataset.parquet"
 validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_complete_qa_dataset.parquet"

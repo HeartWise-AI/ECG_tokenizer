@@ -185,73 +185,20 @@ class OfflineMetricsEvaluator:
         valid_preds, valid_refs = zip(*valid_pairs)
         results['num_samples'] = len(valid_preds)
         
-        # ROUGE scores
-        if load_metric:
-            try:
-                if self.rouge_metric is None:
-                    self.rouge_metric = load_metric("rouge")
-                
-                rouge_result = self.rouge_metric.compute(
-                    predictions=list(valid_preds),
-                    references=list(valid_refs),
-                    use_stemmer=True,
-                    use_aggregator=True
-                )
-                
-                # Extract scores safely
-                def extract_rouge_score(score_obj):
-                    if hasattr(score_obj, 'mid'):
-                        if hasattr(score_obj.mid, 'fmeasure'):
-                            return float(score_obj.mid.fmeasure)
-                    elif hasattr(score_obj, 'fmeasure'):
-                        return float(score_obj.fmeasure)
-                    return float(score_obj)
-                
-                results['rouge1'] = extract_rouge_score(rouge_result.get('rouge1', 0))
-                results['rouge2'] = extract_rouge_score(rouge_result.get('rouge2', 0))
-                results['rougeL'] = extract_rouge_score(rouge_result.get('rougeL', 0))
-                
-            except Exception as e:
-                warnings.warn(f"ROUGE computation failed: {e}")
-                results.update({'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0})
-        else:
-            results.update({'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0})
-        
-        # BLEU scores using SacreBLEU
-        if sacrebleu:
-            try:
-                refs_nested = [list(valid_refs)]  # SacreBLEU expects nested refs
-                bleu4 = sacrebleu.corpus_bleu(list(valid_preds), refs_nested)
-                # Use force=True to compute BLEU-1 even if sentence is shorter
-                bleu1_scorer = sacrebleu.BLEU(max_ngram_order=1, effective_order=True)
-                bleu1 = bleu1_scorer.corpus_score(list(valid_preds), refs_nested)
-                
-                results['bleu1'] = bleu1.score / 100.0
-                results['bleu4'] = bleu4.score / 100.0
-                
-            except Exception as e:
-                warnings.warn(f"BLEU computation failed: {e}")
-                results.update({'bleu1': 0.0, 'bleu4': 0.0})
-        else:
-            results.update({'bleu1': 0.0, 'bleu4': 0.0})
-        
-        # METEOR score
-        if load_metric:
-            try:
-                if self.meteor_metric is None:
-                    self.meteor_metric = load_metric("meteor")
-                
-                meteor_result = self.meteor_metric.compute(
-                    predictions=list(valid_preds),
-                    references=list(valid_refs)
-                )
-                results['meteor'] = float(meteor_result.get('meteor', 0))
-                
-            except Exception as e:
-                warnings.warn(f"METEOR computation failed (likely missing NLTK data): {e}")
-                results['meteor'] = 0.0
-        else:
-            results['meteor'] = 0.0
+        # Unified ROUGE/BLEU/METEOR via utility
+        try:
+            from utils.metrics.aggregate_text_metrics import aggregate_text_metrics
+            agg = aggregate_text_metrics(list(valid_preds), list(valid_refs))
+            # Ensure all expected keys exist
+            results['rouge1'] = float(agg.get('rouge1', 0.0))
+            results['rouge2'] = float(agg.get('rouge2', 0.0))
+            results['rougeL'] = float(agg.get('rougeL', 0.0))
+            results['bleu1'] = float(agg.get('bleu1', 0.0))
+            results['bleu4'] = float(agg.get('bleu4', 0.0))
+            results['meteor'] = float(agg.get('meteor', 0.0))
+        except Exception as e:
+            warnings.warn(f"Unified metric computation failed: {e}")
+            results.update({'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0, 'bleu1': 0.0, 'bleu4': 0.0, 'meteor': 0.0})
         
         # BERTScore
         if load_metric:

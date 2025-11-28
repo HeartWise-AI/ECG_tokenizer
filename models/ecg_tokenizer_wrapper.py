@@ -902,6 +902,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         bridge_num_heads: int = 8,
         bridge_dropout: float = 0.1,
         bridge_num_special_tokens: int = 4,
+        bridge_qformer_layers: Optional[int] = None,
+        bridge_text_hidden_size: Optional[int] = None,
+        bridge_bias_last_codebook: Optional[float] = None,
+        bridge_codebook_dropout: Optional[float] = None,
+        bridge_cross_every: Optional[int] = None,
+        instruction_dropout: float = 0.0,
         use_lora: bool = False,
         lora_config: Optional[dict[str, Any]] = None,
         tokenizer: Optional[Any] = None,
@@ -911,12 +917,23 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         ecg_num_leads: int = 12,
         ecg_projection_config: Optional[Dict[str, Any]] = None,
         default_generation_kwargs: Optional[Dict[str, Any]] = None,
+        # Projection-bridge knobs (forwarded to decoder)
+        bridge_use_sinusoidal_pos_emb: Optional[bool] = None,
+        bridge_pos_embedding_max_len: Optional[int] = None,
+        bridge_softmax_temp: Optional[float] = None,
+        bridge_mix_residual: Optional[float] = None,
+        bridge_add_modality_embed: Optional[bool] = None,
+        bridge_add_cls_token: Optional[bool] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
         attention_log_frequency: int = 100,
         prefix_tuning: bool = False,
         num_codebooks_kept: Optional[int] = None,
-        codebook_offset: int = 0
+        codebook_offset: int = 0,
+        stage1_checkpoint_path: Optional[str] = None,
+        pattern_loss_weight: Optional[float] = None,
+        pattern_label_count: Optional[int] = None,
+        pattern_bce_pos_weight: Optional[Any] = None,
     ):
         """
         Args:
@@ -925,6 +942,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             decoder_name: Name of the decoder
             use_lora: Whether to apply LoRA to the LLM decoder
             lora_config: LoRA configuration dictionary
+            pattern_loss_weight: Auxiliary multilabel loss weight passed to the decoder
+            pattern_label_count: Number of multilabel targets expected by the decoder
         """
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
@@ -940,6 +959,16 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.prefix_tuning = prefix_tuning
         self.num_codebooks_kept = num_codebooks_kept
         self.codebook_offset = codebook_offset
+        self.stage1_checkpoint_path = stage1_checkpoint_path
+        self.bridge_qformer_layers = bridge_qformer_layers
+        self.bridge_text_hidden_size = bridge_text_hidden_size
+        self.bridge_bias_last_codebook = bridge_bias_last_codebook
+        self.bridge_codebook_dropout = bridge_codebook_dropout
+        self.bridge_cross_every = bridge_cross_every
+        self.instruction_dropout = instruction_dropout
+        self.pattern_loss_weight = pattern_loss_weight
+        self.pattern_label_count = pattern_label_count
+        self.pattern_bce_pos_weight = pattern_bce_pos_weight
         # ECG image projection disabled - module not available
         self.ecg_image_projection = None
         if False:  # Disabled ecg_image_projection:
@@ -997,6 +1026,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     'attention_log_frequency': attention_log_frequency,
                     'ecg_token_start_id': ecg_token_start_id,
                     'default_generation_kwargs': default_generation_kwargs,
+                    'stage1_checkpoint_path': stage1_checkpoint_path,
                 }
 
                 if decoder_name == ModelName.LLAMA32_DECODER.value or decoder_name == "Llama32_Decoder":
@@ -1010,6 +1040,13 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'num_quantizers': num_quantizers,
                         'num_codebooks_kept': num_codebooks_kept,
                         'codebook_offset': codebook_offset,
+                        # Projection-bridge knobs (unused by others, consumed by projection)
+                        'bridge_use_sinusoidal_pos_emb': bridge_use_sinusoidal_pos_emb,
+                        'bridge_pos_embedding_max_len': bridge_pos_embedding_max_len,
+                        'bridge_softmax_temp': bridge_softmax_temp,
+                        'bridge_mix_residual': bridge_mix_residual,
+                        'bridge_add_modality_embed': bridge_add_modality_embed,
+                        'bridge_add_cls_token': bridge_add_cls_token,
                     })
                 elif decoder_name == ModelName.MEDGEMMA_DECODER.value or decoder_name == "MedGemma_Decoder":
                     decoder_kwargs.update({
@@ -1024,7 +1061,38 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'prefix_tuning': prefix_tuning,
                         'num_codebooks_kept': num_codebooks_kept,
                         'codebook_offset': codebook_offset,
+                        # Only include Q-Former knobs when explicitly provided (avoid None cast errors)
+                        'bridge_qformer_layers': bridge_qformer_layers,
+                        'bridge_text_hidden_size': bridge_text_hidden_size or bridge_mid_dim,
+                        'bridge_bias_last_codebook': bridge_bias_last_codebook,
+                        'bridge_codebook_dropout': bridge_codebook_dropout,
+                        'bridge_cross_every': bridge_cross_every,
+                        'instruction_dropout': instruction_dropout,
+                        # Projection-bridge knobs (unused by Q-Former, consumed by projection)
+                        'bridge_use_sinusoidal_pos_emb': bridge_use_sinusoidal_pos_emb,
+                        'bridge_pos_embedding_max_len': bridge_pos_embedding_max_len,
+                        'bridge_softmax_temp': bridge_softmax_temp,
+                        'bridge_mix_residual': bridge_mix_residual,
+                        'bridge_add_modality_embed': bridge_add_modality_embed,
+                        'bridge_add_cls_token': bridge_add_cls_token,
                     })
+                    # Drop explicit None values for Q-Former-only fields to prevent int/float(None) casts
+                    for k in (
+                        'bridge_qformer_layers',
+                        'bridge_text_hidden_size',
+                        'bridge_bias_last_codebook',
+                        'bridge_codebook_dropout',
+                        'bridge_cross_every',
+                        'instruction_dropout',
+                    ):
+                        if decoder_kwargs.get(k, None) is None:
+                            decoder_kwargs.pop(k, None)
+                    if pattern_loss_weight is not None:
+                        decoder_kwargs['pattern_loss_weight'] = pattern_loss_weight
+                    if pattern_label_count is not None:
+                        decoder_kwargs['pattern_label_count'] = pattern_label_count
+                    if pattern_bce_pos_weight is not None:
+                        decoder_kwargs['pattern_bce_pos_weight'] = pattern_bce_pos_weight
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
                 
@@ -1066,6 +1134,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             'gpt2': ['c_attn', 'c_proj'],
             'qwen2': ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
             'llama': ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
+            'gemma': ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
         }
         
         # Try to get the LLM model from the decoder
@@ -1079,7 +1148,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             return
         
         # Determine model type and target modules
-        model_type = llm_model.config.model_type.lower()
+        model_type = getattr(llm_model.config, "model_type", "llama").lower()
         target_modules = lora_config.get('target_modules') or default_targets.get(model_type, ['q_proj', 'v_proj'])
         
         lora_config_obj = LoraConfig(
@@ -1563,6 +1632,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             prompt_column=cfg_get('prompt_column', 'question'),
             answer_column=cfg_get('answer_column', 'report'),
             category_column=cfg_get('category_column', 'prompt_category'),
+            pattern_columns=cfg_get('pattern_label_columns', None),
         )
 
         sample = dataset[sample_idx]
@@ -1617,6 +1687,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         labels: Optional[torch.Tensor] = None,
         prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
         prompt_attention_mask: Optional[torch.Tensor] = None,
+        pattern_targets: Optional[torch.Tensor] = None,
         **kwargs
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
@@ -1626,6 +1697,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             input_ids: Input IDs for the LLM
             attention_mask: Attention mask for the LLM
             labels: Labels for the LLM
+            pattern_targets: Optional multilabel ECG targets (shape [batch, num_labels])
         """
         ecg_signal = ecg_signal.to(dtype=torch.float32)  # or torch.bfloat16 if you prefer
         features = self.encoder(ecg_signal)
@@ -1658,6 +1730,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         # Handle different decoder types
         if self.decoder_mode == DecoderMode.LLM:
             try:
+                if pattern_targets is not None:
+                    if isinstance(pattern_targets, torch.Tensor):
+                        pattern_targets = pattern_targets.to(device=quantized.device, dtype=torch.float32)
+                    else:
+                        pattern_targets = torch.as_tensor(pattern_targets, dtype=torch.float32, device=quantized.device)
+
                 decoder_inputs = {
                     'quantized_features': quantized,
                     'input_ids': input_ids,
@@ -1666,6 +1744,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     'prompt_input_ids': prompt_input_ids,
                     'prompt_attention_mask': prompt_attention_mask,
                 }
+                if pattern_targets is not None:
+                    decoder_inputs['pattern_targets'] = pattern_targets
                 
                 # Only add quantized_codes for decoders that support it
                 # GPT2 decoder doesn't accept quantized_codes

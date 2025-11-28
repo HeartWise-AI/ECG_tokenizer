@@ -78,7 +78,19 @@ def _prepare_tokenizer(config: Any) -> Tuple[Any, int]:
         tokenizer.pad_token_id = tokenizer.pad_token_id[0]
 
     ecg_start_id = getattr(config, "ecg_token_start_id", None)
-    if getattr(config, "instruct_mode", False):
+    
+    # Check if this is a MedGemma model (uses <start_of_image> for ECG injection)
+    is_medgemma = "medgemma" in getattr(config, "huggingface_model_name", "").lower() or \
+                  "medgemma" in getattr(config, "decoder_name", "").lower()
+    
+    if is_medgemma:
+        # MedGemma uses <start_of_image> token for ECG injection - no custom tokens needed
+        # The decoder handles injection after this token
+        return tokenizer, None
+    
+    # Legacy LLaMA-style ECG token injection
+    num_ecg_tokens = int(getattr(config, "num_ecg_tokens", 0))
+    if getattr(config, "instruct_mode", False) and num_ecg_tokens > 0:
         if getattr(config, "chat_template", None):
             tokenizer.chat_template = config.chat_template
         else:
@@ -89,7 +101,7 @@ def _prepare_tokenizer(config: Any) -> Tuple[Any, int]:
                         "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'user' %}"
                         "<|start_header_id|>user<|end_header_id|>\n\n"
-                        "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(getattr(config, 'num_ecg_tokens', 128))]) + "<|end_ecg|>\n"
+                        "<|start_ecg|>" + "".join([f"<|ecg_pos_{i}|>" for i in range(num_ecg_tokens)]) + "<|end_ecg|>\n"
                         "{{ message['content'] }}<|eot_id|>"
                     "{% elif message['role'] == 'assistant' %}"
                         "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
@@ -100,15 +112,16 @@ def _prepare_tokenizer(config: Any) -> Tuple[Any, int]:
             tokenizer.chat_template = custom_template
 
         tokenizer.add_special_tokens({"additional_special_tokens": ["<|start_ecg|>", "<|end_ecg|>"]})
-        ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(config, "num_ecg_tokens", 128))]
-        existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
-        unk_id = getattr(tokenizer, "unk_token_id", None)
-        if existing_id is None or existing_id == -1 or (unk_id is not None and int(existing_id) == int(unk_id)):
-            start_id = len(tokenizer)
-            tokenizer.add_tokens(ecg_tokens, special_tokens=True)
-            ecg_start_id = start_id
-        else:
-            ecg_start_id = int(existing_id)
+        ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(num_ecg_tokens)]
+        if ecg_tokens:
+            existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
+            unk_id = getattr(tokenizer, "unk_token_id", None)
+            if existing_id is None or existing_id == -1 or (unk_id is not None and int(existing_id) == int(unk_id)):
+                start_id = len(tokenizer)
+                tokenizer.add_tokens(ecg_tokens, special_tokens=True)
+                ecg_start_id = start_id
+            else:
+                ecg_start_id = int(existing_id)
 
     return tokenizer, ecg_start_id
 
@@ -120,18 +133,44 @@ def _build_prompt_tensors(
     max_new_tokens: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, str]:
     """Create prompt tensors (text-only) following training chat template."""
-    system_message = "An electrocardiogram analysis and question answering tool"
-    messages = [
-        {"role": "system", "content": system_message},
-        {"role": "user", "content": question},
-    ]
-    prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    
+    # Check if this is a MedGemma model
+    is_medgemma = "medgemma" in getattr(config, "huggingface_model_name", "").lower() or \
+                  "medgemma" in getattr(config, "decoder_name", "").lower()
+    
+    if is_medgemma:
+        # MedGemma-style prompt with <start_of_image> for ECG injection
+        system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
+        user_content = f"<start_of_image>\n\nQuestion: {question}\n\nRespond concisely with the key finding or answer."
+        
+        prompt_text = (
+            "<start_of_turn>system\n"
+            f"{system_message}<end_of_turn>\n"
+            "<start_of_turn>user\n"
+            f"{user_content}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
+        
+        encoding = tokenizer(
+            prompt_text,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+    else:
+        # Legacy LLaMA-style prompt
+        system_message = "An electrocardiogram analysis and question answering tool"
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": question},
+        ]
+        prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    encoding = tokenizer(
-        prompt_text,
-        add_special_tokens=False,
-        return_tensors="pt",
-    )
+        encoding = tokenizer(
+            prompt_text,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )
+    
     prompt_ids = encoding.input_ids[0]
     prompt_mask = encoding.attention_mask[0]
 
@@ -147,6 +186,14 @@ def _build_prompt_tensors(
 def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_Tokenizer_Wrapper:
     """Recreate ECG_Tokenizer_Wrapper with config->model hyperparameters."""
     decoder_mode = config.decoder_mode if isinstance(config.decoder_mode, DecoderMode) else DecoderMode(config.decoder_mode)
+    
+    # Get num_visual_tokens from various config keys (Q-Former uses num_query_tokens)
+    num_visual_tokens = getattr(config, "bridge_num_visual_tokens", None)
+    if num_visual_tokens is None:
+        num_visual_tokens = getattr(config, "num_query_tokens", None)
+    if num_visual_tokens is None:
+        num_visual_tokens = getattr(config, "num_visual_tokens", None)
+    
     model = ECG_Tokenizer_Wrapper(
         encoder_name=config.encoder_name,
         quantizer_name=config.quantizer_name,
@@ -158,11 +205,14 @@ def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_T
         llm_input_embedding_size=int(config.llm_input_embedding_size),
         bridge_name=config.bridge_name,
         adapter_dropout=0.0,
-        num_visual_tokens=getattr(config, "bridge_num_visual_tokens", None),
+        num_visual_tokens=num_visual_tokens,
         bridge_mid_dim=int(getattr(config, "bridge_mid_dim", 512)),
         bridge_num_heads=int(getattr(config, "bridge_num_heads", 8)),
         bridge_dropout=float(getattr(config, "bridge_dropout", 0.1)),
         bridge_num_special_tokens=int(getattr(config, "bridge_num_special_tokens", 4)),
+        bridge_qformer_layers=getattr(config, "bridge_qformer_layers", None),
+        bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
+        stage1_checkpoint_path=getattr(config, "stage1_checkpoint_path", None),
         use_lora=bool(getattr(config, "use_lora", False)),
         lora_config=getattr(config, "lora_config", None),
         tokenizer=tokenizer,
@@ -237,6 +287,38 @@ def _maybe_attach_or_merge_lora(model: ECG_Tokenizer_Wrapper, lora_sd: dict, con
         # Remove custom params that aren't part of standard LoraConfig
         lora_config_filtered = {k: v for k, v in lora_config.items() if k not in ('top_k_layers', 'modules_to_save')}
         lora_config = LoraConfig(**lora_config_filtered)
+    elif lora_config is None:
+        # Create default LoRA config by inferring from state dict keys
+        # Infer rank from first LoRA weight
+        lora_r = 8  # default
+        for k, v in lora_sd.items():
+            if 'lora_A' in k and v.ndim == 2:
+                lora_r = v.shape[0]
+                break
+        
+        # Infer target modules from LoRA keys
+        target_modules = set()
+        for k in lora_sd.keys():
+            if 'lora_A' in k or 'lora_B' in k:
+                # Extract module name (e.g., "q_proj" from "...q_proj.lora_A.weight")
+                parts = k.split('.')
+                for i, p in enumerate(parts):
+                    if p in ('lora_A', 'lora_B'):
+                        if i > 0:
+                            target_modules.add(parts[i-1])
+                        break
+        
+        target_modules = list(target_modules) if target_modules else ["q_proj", "k_proj", "v_proj", "o_proj"]
+        print(f"[LoRA] Inferred config: r={lora_r}, target_modules={target_modules[:5]}...")
+        
+        lora_config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_r * 2,
+            target_modules=target_modules,
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
 
     # Wrap host with PEFT and load adapter weights (if not already wrapped)
     if isinstance(llm_host, PeftModel):

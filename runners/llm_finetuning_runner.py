@@ -3,6 +3,7 @@ import json
 import re
 import time
 import traceback
+import math
 import torch
 import pandas as pd
 try:
@@ -41,6 +42,7 @@ from utils.metrics.llm_metrics import (
 from utils.metrics.category_metrics import CategoryMetricsCalculator
 from runners.base_runner import BaseRunner
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+from utils.constants import ECG_PATTERNS
 from utils.plot_validation_ecgs import (
     DEFAULT_PARQUET_PATH as VALIDATION_PLOT_PARQUET_PATH,
     load_parquet_mapping,
@@ -66,6 +68,7 @@ from typing import (
 from pathlib import Path
 import numpy as np
 import sys
+from sklearn.metrics import roc_auc_score
 
 # Add DeepECG_Preprocess to path for ECG plotting
 sys.path.append('/volume/ECG_tokenizer/DeepECG_Preprocess')
@@ -110,6 +113,9 @@ class LLMFinetuningRunner(BaseRunner):
         self.scheduler: LRScheduler | None = scheduler
         self.scaler: GradScaler | None = scaler
         self.scheduler_per_iteration: bool = scheduler_is_per_iteration(self.config)
+        # Gradient accumulation configuration
+        self.grad_accum: int = max(1, int(getattr(self.config, 'gradient_accumulation_steps', 1) or 1))
+        self._grad_accum_counter: int = 0
         
         # Phase tracking
         self.current_phase = None
@@ -132,6 +138,33 @@ class LLMFinetuningRunner(BaseRunner):
         # Persist the original debug configuration so phase overrides can be merged cleanly.
         base_debug_config = getattr(self.config, 'debug_config', None) or {}
         self._base_debug_config: dict[str, Any] = dict(base_debug_config)
+
+        # Global step tracking and snapshot bookkeeping
+        self.global_step: int = 0
+        self._train_metric_remaining: int = 0
+        self._train_metric_accumulator: dict[str, float] = {}
+        self._train_metric_batches_collected: int = 0
+        self.best_val_loss: float = float("inf")
+        self._last_snapshot_checkpoint: Optional[str] = None
+
+        # Initialize CF evaluator if enabled
+        self.cf_evaluator = None
+        try:
+            if getattr(self.config, 'use_cf_eval', False) and getattr(self.config, 'cf_eval_dataset_path', None):
+                from utils.metrics.cf_evaluator import CFEvaluator
+                # Device string for evaluator (use same CUDA index if available)
+                dev_str = f"cuda:{self.config.device}" if torch.cuda.is_available() else "cpu"
+                self.cf_evaluator = CFEvaluator(
+                    cf_dataset_path=str(self.config.cf_eval_dataset_path),
+                    device=dev_str,
+                    use_letter_space=bool(getattr(self.config, "medgemma_prompt_style", False)),
+                )
+                if self.config.is_ref_device:
+                    print(f"[CF Eval] Initialized with dataset: {self.config.cf_eval_dataset_path}")
+        except Exception as exc:
+            self.cf_evaluator = None
+            if self.config.is_ref_device:
+                print(f"[CF Eval] Disabled due to initialization error: {exc}")
         
     def execute(
         self, 
@@ -573,8 +606,8 @@ class LLMFinetuningRunner(BaseRunner):
             raise ValueError("Optimizer cannot be None")
         # Note: Scaler is not required for bfloat16 training
         
-        best_val_loss: float = float('inf')
-        
+        # Removed cross-phase log persistence to avoid replay artifacts
+
         for epoch in range(self.start_epoch, self.config.num_epochs + 1):
             # Configure training phase
             self._configure_training_phase(epoch)
@@ -589,13 +622,17 @@ class LLMFinetuningRunner(BaseRunner):
                 RunMode.TRAIN,
                 epoch
             )
+            if getattr(self, "_debug_stop_triggered", False):
+                print("Debug prompt flag triggered; exiting after first batch.")
+                return
             
             # Log phase-specific metrics
             if self.config.is_ref_device:
                 epoch_train_metrics[f'{RunMode.TRAIN}/current_phase'] = 1 if self.current_phase == 'phase1' else 2
                         
             if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                self.wandb_wrapper.log(epoch_train_metrics)
+                # Log only current training epoch metrics (no cross-phase replay), anchored to current global step
+                self.wandb_wrapper.log(dict(epoch_train_metrics), step=int(self.global_step))
             
             # Step the scheduler if it should be updated per-epoch
             if self.scheduler and (not self.scheduler_per_iteration):
@@ -609,40 +646,44 @@ class LLMFinetuningRunner(BaseRunner):
             
             epoch_metrics: dict[str, float] = self._run_epoch(
                 RunMode.VALIDATE,
-                epoch
+                epoch,
+                max_batches=getattr(self.config, "validation_max_batches", None)
             )
             
             # Save best model (only on reference device)
             if self.config.is_ref_device:
-                if epoch_metrics[f'{RunMode.VALIDATE}/loss'] < best_val_loss:
-                    best_val_loss = epoch_metrics[f'{RunMode.VALIDATE}/loss']
+                current_val_loss = epoch_metrics[f'{RunMode.VALIDATE}/loss']
+                if current_val_loss < self.best_val_loss:
+                    self.best_val_loss = current_val_loss
                     self._save_model(
                         epoch=epoch,
-                        loss=epoch_metrics[f'{RunMode.VALIDATE}/loss'],
+                        loss=current_val_loss,
                         is_best=True
                     )
                 
                 # Also save regular checkpoint
                 self._save_model(
                     epoch=epoch,
-                    loss=epoch_metrics[f'{RunMode.VALIDATE}/loss'],
+                    loss=current_val_loss,
                     is_best=False
                 )
             
             # Sync after validation epoch, before next epoch            
             if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                # Add learning rate metrics from training epoch metrics
-                lr_metrics = {}
-                for key, value in epoch_metrics.items():
-                    if "lr_" in key:
-                        lr_metrics[key] = value
-                
-                self.wandb_wrapper.log({
-                    **epoch_metrics,
-                    **lr_metrics,
-                    f"{RunMode.VALIDATE}/best_loss": best_val_loss
-                })
-                
+                # Log validation epoch metrics without replaying training scalars, anchor to current global step
+                lr_metrics = {k: v for k, v in epoch_metrics.items() if "lr_" in k}
+                val_epoch_payload = {**epoch_metrics, **lr_metrics, f"{RunMode.VALIDATE}/best_loss": self.best_val_loss}
+                # Also emit concise 'val/' aliases for key loss scalars so dashboards stay consistent
+                val_aliases: dict[str, float] = {}
+                for key, value in val_epoch_payload.items():
+                    if not key.startswith(f"{RunMode.VALIDATE}/"):
+                        continue
+                    suffix = key.split("/", 1)[1]
+                    if suffix.endswith("loss") or suffix.startswith("pattern_loss") or suffix.startswith("cf_loss"):
+                        val_aliases[f"val/{suffix}"] = value
+                val_epoch_payload.update(val_aliases)
+                self.wandb_wrapper.log(val_epoch_payload, step=int(self.global_step))
+
             # Sync the process group
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
@@ -652,7 +693,10 @@ class LLMFinetuningRunner(BaseRunner):
     def _run_epoch(
         self,
         mode: RunMode,
-        epoch: int
+        epoch: int,
+        max_batches: int | None = None,
+        snapshot_step: int | None = None,
+        snapshot: bool = False
     )->dict[str, float]:
         """
         Run an epoch of training or validation.
@@ -660,6 +704,9 @@ class LLMFinetuningRunner(BaseRunner):
         Args:
             mode: The execution mode (TRAIN, VALIDATE)
             epoch: The current epoch
+            max_batches: Optional cap on number of batches to process (for snapshots)
+            snapshot_step: Optional global step identifier for snapshot logging
+            snapshot: Whether this run is a mid-epoch snapshot (affects logging side effects)
             
         Returns:
             dict[str, float]: Dictionary containing the metrics for the epoch
@@ -668,6 +715,15 @@ class LLMFinetuningRunner(BaseRunner):
         
         # Set the model to training or evaluation mode
         self.model.train(mode == RunMode.TRAIN)
+        if not hasattr(self, "_debug_stop_triggered"):
+            self._debug_stop_triggered = False
+
+        # Reset accumulation counter at the start of each training epoch
+        if mode == RunMode.TRAIN:
+            try:
+                self._grad_accum_counter = 0
+            except Exception:
+                pass
         
         if self.train_dataloader is None or self.validation_dataloader is None:
             raise ValueError("Train or validation dataloader is not set")
@@ -675,14 +731,40 @@ class LLMFinetuningRunner(BaseRunner):
         # Get the dataloader and step function
         dataloader: DataLoader = self.train_dataloader if mode == RunMode.TRAIN else self.validation_dataloader
         step_fn: Callable | None = self._train_step if mode == RunMode.TRAIN else self._val_step
+
+        # Prepare full-epoch aggregation of predictions/references for validation
+        if mode == RunMode.VALIDATE:
+            self._val_agg_preds: list[str] = []
+            self._val_agg_refs: list[str] = []
         
+        # Ensure distributed samplers reshuffle appropriately
+        self._set_sampler_epoch(
+            dataloader=dataloader,
+            mode=mode,
+            epoch=epoch,
+            snapshot_step=snapshot_step,
+            snapshot=snapshot
+        )
+
         # Create a progress bar for the epoch
         phase_str = f"[Phase {1 if self.current_phase == 'phase1' else 2}]"
+        try:
+            dataloader_len = len(dataloader)  # type: ignore[arg-type]
+        except TypeError:
+            dataloader_len = None
+        total_for_tqdm = max_batches if max_batches is not None else dataloader_len
+        snapshot_suffix = ""
+        if snapshot:
+            if snapshot_step is not None:
+                snapshot_suffix = f" (snapshot step {snapshot_step})"
+            else:
+                snapshot_suffix = " (snapshot)"
         data_iter: tqdm = tqdm(
             dataloader, 
-            desc=f"{phase_str} {mode} epoch {epoch}/{self.config.num_epochs}",
+            desc=f"{phase_str} {mode} epoch {epoch}/{self.config.num_epochs}{snapshot_suffix}",
             leave=True,
-            disable=not self.config.is_ref_device
+            disable=not self.config.is_ref_device,
+            total=total_for_tqdm
         )
         
         # Initialize the total loss
@@ -696,21 +778,40 @@ class LLMFinetuningRunner(BaseRunner):
         
         # Iterate over the dataloader
         epoch_metrics: dict[str, float] = {}
-        
+        batches_processed: int = 0
+        first_batch_logged = False
+
+        pattern_logits_batches: list[torch.Tensor] = []
+        pattern_targets_batches: list[torch.Tensor] = []
+        debug_config = getattr(self.config, 'debug_config', None) or {}
+
         if mode == RunMode.VALIDATE:
             self._bertscore_skip_logged = False
-            worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(dataloader)
-            # Initialize JSON file for incremental writing
-            json_path = self._get_val_generation_json_path(epoch)
-            os.makedirs(os.path.dirname(json_path), exist_ok=True)
-            # Initialize with empty dict
-            if self.config.is_ref_device:
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f)
-            
+            worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx = self._init_validation_metrics(
+                dataloader,
+                max_batches=max_batches
+            )
+            write_val_generations = bool(getattr(self.config, "write_val_generations", True))
+            json_path = None
+            if write_val_generations:
+                # Initialize JSON file for incremental writing
+                json_path = self._get_val_generation_json_path(
+                    epoch,
+                    step=snapshot_step if snapshot else None,
+                    prefix=getattr(self.config, 'validation_snapshot_prefix', 'step') if snapshot else None
+                )
+                os.makedirs(os.path.dirname(json_path), exist_ok=True)
+                # Initialize with empty dict
+                if self.config.is_ref_device:
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump({}, f)
+
             # Reset category metrics calculator for this validation epoch
             if self.category_metrics_calculator is not None:
                 self.category_metrics_calculator.reset()
+            # Reset validation telemetry
+            self._val_eot_counter = []
+            self._val_len_counter = []
         
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
@@ -718,44 +819,161 @@ class LLMFinetuningRunner(BaseRunner):
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
+            pattern_targets: torch.Tensor | None = None
+            if 'pattern_targets' in batch:
+                pattern_targets = batch['pattern_targets'].to(self.config.device, dtype=torch.float32)
             
+            prompt_input_ids_tensor: torch.Tensor | None = None
+            prompt_attention_mask_tensor: torch.Tensor | None = None
+            if 'prompt_input_ids' in batch:
+                prompt_input_ids_tensor = batch['prompt_input_ids'].to(self.config.device)
+                prompt_attention_mask_tensor = (
+                    batch['prompt_attention_mask'].to(self.config.device)
+                    if 'prompt_attention_mask' in batch else None
+                )
+
+                # Debug ablations: shuffle prompts within batch
+                if getattr(self.config, 'debug_shuffle_prompts', False):
+                    perm = torch.randperm(prompt_input_ids_tensor.size(0), device=prompt_input_ids_tensor.device)
+                    prompt_input_ids_tensor = prompt_input_ids_tensor[perm]
+                    if prompt_attention_mask_tensor is not None:
+                        prompt_attention_mask_tensor = prompt_attention_mask_tensor[perm]
+                    if self.config.is_ref_device and batch_idx == 0:
+                        print("[DEBUG] Shuffled prompt_input_ids across batch.")
+
+            # Debug ablations: zero or shuffle ECG signals
+            ablate_mode = getattr(self.config, 'debug_ablate_ecg', None)
+            if ablate_mode in ("zero", "shuffle"):
+                if ablate_mode == "zero":
+                    ecg_signal = torch.zeros_like(ecg_signal)
+                    if self.config.is_ref_device and batch_idx == 0:
+                        print("[DEBUG] Zeroed ECG signals for ablation.")
+                elif ablate_mode == "shuffle":
+                    perm = torch.randperm(ecg_signal.size(0), device=ecg_signal.device)
+                    ecg_signal = ecg_signal[perm]
+                    if self.config.is_ref_device and batch_idx == 0:
+                        print("[DEBUG] Shuffled ECG signals across batch.")
+
             # Run the step function
-            if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch:
+            if prompt_input_ids_tensor is not None:
                 # Pass prompt_input_ids for both train and validate to prevent answer leakage
                 outputs = step_fn(
                     ecg_signal=ecg_signal,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
-                    prompt_input_ids=batch['prompt_input_ids'].to(self.config.device),
-                    prompt_attention_mask=batch['prompt_attention_mask'].to(self.config.device) if 'prompt_attention_mask' in batch else None
+                    prompt_input_ids=prompt_input_ids_tensor,
+                    prompt_attention_mask=prompt_attention_mask_tensor,
+                    pattern_targets=pattern_targets,
                 )
             else:
                 outputs = step_fn(
                     ecg_signal=ecg_signal, 
                     input_ids=input_ids, 
                     attention_mask=attention_mask, 
-                    labels=labels
+                    labels=labels,
+                    pattern_targets=pattern_targets,
                 )
+
+            if getattr(self.config, 'debug_prompt_stop_after_first_batch', False) and batch_idx == 0:
+                print("Debug flag set; stopping after first batch.")
+                self._debug_stop_triggered = True
+                # Still allow first-batch logging before breaking
+                if not first_batch_logged and self.config.is_ref_device and mode == RunMode.VALIDATE:
+                    first_batch_logged = self._print_first_batch_details(
+                        outputs,
+                        batch,
+                        labels,
+                        pattern_targets
+                    )
+                if getattr(self.config, 'debug_prompt_dump', False) and self.config.is_ref_device:
+                    self._debug_dump_prompt_batch(batch, labels, prefix=f"{mode} batch {batch_idx}")
+                break
+
+            if (
+                not first_batch_logged
+                and batch_idx == 0
+                and self.config.is_ref_device
+                and mode == RunMode.VALIDATE
+            ):
+                first_batch_logged = self._print_first_batch_details(
+                    outputs,
+                    batch,
+                    labels,
+                    pattern_targets
+                )
+                if getattr(self.config, 'debug_prompt_dump', False):
+                    self._debug_dump_prompt_batch(batch, labels, prefix="validate batch 0")
             
             # initialize metrics
             metrics: dict[str, float] = {}
             metrics['loss'] = outputs['loss'].item()  # type: ignore[index]
+            pattern_loss_value = outputs.get('pattern_loss')
+            if pattern_loss_value is not None:
+                if torch.is_tensor(pattern_loss_value):
+                    metrics['pattern_loss'] = float(pattern_loss_value.item())
+                else:
+                    metrics['pattern_loss'] = float(pattern_loss_value)
+            cf_loss_value = outputs.get('cf_loss')
+            if cf_loss_value is not None:
+                if torch.is_tensor(cf_loss_value):
+                    metrics['cf_loss'] = float(cf_loss_value.item())
+                else:
+                    metrics['cf_loss'] = float(cf_loss_value)
             
-            # Extract learning rate metrics
+            # Extract learning rate and gradient metrics
             for key, value in outputs.items():  # type: ignore[attr-defined]
                 if key.startswith('lr_'):
                     metrics[key] = float(value) if isinstance(value, torch.Tensor) else float(value)
+                elif key.startswith('grad_norm/'):
+                    metrics[key] = float(value.detach().item()) if isinstance(value, torch.Tensor) else float(value)
             
             # Compute rouge score, bleu score, and meteor score
             if mode == RunMode.VALIDATE:
+                # --- Validation telemetry (EOT hit-rate and generated length) ---
+                try:
+                    model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+                    decoder = getattr(model_for_generation, 'decoder', None)
+                    tokenizer = getattr(decoder, 'tokenizer', None) if decoder is not None else None
+                    gen_ids = outputs.get('generated_ids')
+                    if tokenizer is not None and isinstance(gen_ids, torch.Tensor):
+                        eot_ids_list = []
+                        # Primary end-of-turn token
+                        try:
+                            eot_tok = "<|eot_id|>"
+                            eot_id = tokenizer.convert_tokens_to_ids(eot_tok)
+                            if eot_id is not None and eot_id != -1:
+                                eot_ids_list.append(int(eot_id))
+                        except Exception:
+                            pass
+                        # Fallback to eos if available
+                        eos_id = getattr(tokenizer, 'eos_token_id', None)
+                        if eos_id is not None:
+                            if isinstance(eos_id, (list, tuple)) and eos_id:
+                                eot_ids_list.append(int(eos_id[0]))
+                            elif isinstance(eos_id, int):
+                                eot_ids_list.append(int(eos_id))
+                        # Compute hit-rate per batch
+                        if eot_ids_list:
+                            has_eot = torch.zeros(gen_ids.size(0), dtype=torch.bool, device=gen_ids.device)
+                            for eid in eot_ids_list:
+                                has_eot |= (gen_ids == eid).any(dim=1)
+                            self._val_eot_counter.append(float(has_eot.float().mean().item()))
+                        else:
+                            self._val_eot_counter.append(0.0)
+                        # Track generated length
+                        self._val_len_counter.append(float(gen_ids.size(-1)))
+                except Exception:
+                    # Telemetry is best-effort; never fail validation
+                    pass
                 # Process and append to JSON immediately across all devices (write occurs on ref device)
-                self._append_batch_to_json(
-                    outputs['generated_ids'],
-                    labels,
-                    batch,
-                    json_path
-                )
+                if write_val_generations and json_path is not None and outputs.get('generated_ids') is not None:
+                    self._append_batch_to_json(
+                        outputs['generated_ids'],
+                        labels,
+                        batch,
+                        json_path
+                    )
                 
                 # Metrics Rouge, Bleu, and Meteor are computed on the reference device but aggregated across all GPUs later
                 batch_metrics = self._compute_metrics( # this function returns mean metrics for the current batch
@@ -796,10 +1014,29 @@ class LLMFinetuningRunner(BaseRunner):
                         f"{mode}/mean_loss": mean_loss,  # Log the running mean loss
                     }
 
-                    # Add learning rate metrics to log_dict
+                    # Add learning rate and auxiliary loss metrics to log_dict
                     for key, value in gathered_metrics.items():
                         if f"{mode}/lr_" in key:
                             log_dict[key] = value
+                        if key == f"{mode}/pattern_loss":
+                            log_dict[key] = value
+                        if key == f"{mode}/cf_loss":
+                            log_dict[key] = value
+                        if key.startswith(f"{mode}/grad_norm"):
+                            log_dict[key] = value
+                    # Also publish unprefixed LR aliases for convenience in W&B dashboards
+                    # llm
+                    llm_key = f"{mode}/lr_llm"
+                    if llm_key in gathered_metrics:
+                        log_dict["lr_llm"] = gathered_metrics[llm_key]
+                    # adapter (lowercase alias only)
+                    adapter_key = f"{mode}/lr_adapter"
+                    if adapter_key in gathered_metrics:
+                        log_dict["lr_adapter"] = gathered_metrics[adapter_key]
+                    # cross_attention if present
+                    cross_key = f"{mode}/lr_cross_attention"
+                    if cross_key in gathered_metrics:
+                        log_dict["lr_cross_attention"] = gathered_metrics[cross_key]
             
             # Sync after logging
             DistributedUtils.sync_process_group(
@@ -812,49 +1049,54 @@ class LLMFinetuningRunner(BaseRunner):
                 f"loss": f'{gathered_metrics[f"{mode}/loss"]:.4f}',
                 f"mean": f'{mean_loss:.4f}'
             }
+
+            if mode == RunMode.VALIDATE:
+                logits_batch = outputs.get('pattern_logits')
+                targets_batch = outputs.get('pattern_targets')
+                if logits_batch is not None and targets_batch is not None:
+                    pattern_logits_batches.append(logits_batch)
+                    pattern_targets_batches.append(targets_batch)
             
-            # Add gradient norms if debugging
-            debug_config = getattr(self.config, 'debug_config', None) or {}
+            # Add gradient metrics to tqdm postfix for quick inspection
             if debug_config.get('log_gradient_norms', False) and mode == RunMode.TRAIN:
-                model = self.model.module if hasattr(self.model, 'module') else self.model
-
-                # Calculate gradient norms for different components
-                grad_norms = {}
-                if hasattr(model, 'decoder'):
-                    adapter_module = getattr(model.decoder, 'adapter', None)
-                    bridge_module = getattr(model.decoder, 'bridge', None)
-                    core_module = adapter_module if adapter_module is not None else bridge_module
-
-                    if core_module is not None:
-                        core_params = [p for p in core_module.parameters() if p.requires_grad and p.grad is not None]
-                        if core_params:
-                            adapter_grad = torch.nn.utils.clip_grad_norm_(
-                                core_params,
-                                max_norm=float('inf')
-                            )
-                            grad_norms['adapter_grad_norm'] = adapter_grad.item() if torch.is_tensor(adapter_grad) else adapter_grad
-                            postfix_dict['adapter_grad'] = f'{adapter_grad:.2e}'
-
-                if hasattr(model, 'decoder') and hasattr(model.decoder, 'cross_attention_layers'):
-                    cross_params = [p for layer in model.decoder.cross_attention_layers for p in layer.parameters() if p.requires_grad and p.grad is not None]
-                    if cross_params:
-                        cross_attn_grad = torch.nn.utils.clip_grad_norm_(
-                            cross_params,
-                            max_norm=float('inf')
-                        )
-                        grad_norms['cross_attn_grad_norm'] = cross_attn_grad.item() if torch.is_tensor(cross_attn_grad) else cross_attn_grad
-                        postfix_dict['cross_grad'] = f'{cross_attn_grad:.2e}'
-                
-                # Add to epoch metrics for wandb logging
-                for key, value in grad_norms.items():
-                    epoch_metrics[f"{mode}/{key}"] = value
-
-                if log_dict is not None:
-                    for key, value in grad_norms.items():
-                        log_dict[f"{mode}/{key}"] = float(value)
+                grad_metrics = {
+                    key: value
+                    for key, value in gathered_metrics.items()
+                    if key.startswith(f"{mode}/grad_norm/")
+                }
+                if grad_metrics:
+                    for key, value in grad_metrics.items():
+                        suffix = key[len(f"{mode}/grad_norm/"):]
+                        postfix_key = f"grad_{suffix.replace('/', '_')}"
+                        value_float = float(value)
+                        postfix_dict[postfix_key] = f"{value_float:.2e}"
+                    if log_dict is not None:
+                        for key, value in grad_metrics.items():
+                            log_dict[key] = float(value)
 
             if log_dict is not None and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
-                self.wandb_wrapper.log(log_dict)
+                # Log batch metrics anchored to current training step to preserve monotonicity
+                self.wandb_wrapper.log(log_dict, step=int(self.global_step))
+
+            if mode == RunMode.TRAIN:
+                # Increase step and run CF eval only on optimizer steps (end of accumulation cycle)
+                if bool(outputs.get('did_step', False)):
+                    self.global_step += 1
+                    # Optional CF evaluation as early signal
+                    self._maybe_run_cf_evaluation()
+                    self._handle_train_metric_snapshot(
+                        epoch=epoch,
+                        batch_idx=batch_idx,
+                        batch=batch,
+                        ecg_signal=ecg_signal,
+                        labels=labels,
+                        prompt_input_ids=prompt_input_ids_tensor,
+                        prompt_attention_mask=prompt_attention_mask_tensor
+                    )
+                self._handle_validation_snapshot(
+                    epoch=epoch,
+                    snapshot_running=snapshot
+                )
             
             data_iter.set_postfix(postfix_dict)
             
@@ -868,14 +1110,52 @@ class LLMFinetuningRunner(BaseRunner):
                         epoch=epoch,
                         batch_idx=batch_idx
                     )
+
+            batches_processed += 1
+            if max_batches is not None and batches_processed >= max_batches:
+                break
         
         # Show epoch summary with debugging info
-        debug_config = getattr(self.config, 'debug_config', None) or {}
         if debug_config.get('verbose_loss_logging', False) and self.config.is_ref_device:
-            self._log_epoch_summary(mode, epoch, epoch_metrics, total_loss, len(dataloader))
-        
+            self._log_epoch_summary(mode, epoch, epoch_metrics, total_loss, max(1, batches_processed))
+
+        # Compute unified validation metrics across all samples using HF evaluate + SacreBLEU
+        if mode == RunMode.VALIDATE:
+            try:
+                # Gather predictions/references from all ranks
+                world_size = int(getattr(self.config, 'world_size', 1))
+                local_pred_refs = (getattr(self, '_val_agg_preds', []), getattr(self, '_val_agg_refs', []))
+                gather_list: list[Optional[tuple[list[str], list[str]]]] = [None for _ in range(world_size)]
+                if world_size > 1 or local_pred_refs is not None:
+                    DistributedUtils.all_gather_object(gather_list, local_pred_refs)
+                # Only reference device computes aggregated metrics
+                if self.config.is_ref_device:
+                    preds_all: list[str] = []
+                    refs_all: list[str] = []
+                    for item in gather_list:
+                        if item is None:
+                            continue
+                        preds_all.extend(item[0])
+                        refs_all.extend(item[1])
+                    if preds_all and refs_all:
+                        try:
+                            from utils.metrics.aggregate_text_metrics import aggregate_text_metrics
+                            agg = aggregate_text_metrics(preds_all, refs_all)
+                            for k, v in agg.items():
+                                epoch_metrics[f"{mode}/{k}"] = float(v)
+                        except Exception as _agg_exc:
+                            print(f"Warning: failed to compute aggregated validation metrics: {_agg_exc}")
+            except Exception as _agg_exc:
+                if self.config.is_ref_device:
+                    print(f"Warning: failed to compute aggregated validation metrics: {_agg_exc}")
+
         # === New Block: Log best and worst metrics as HTML to wandb ===
-        if mode == RunMode.VALIDATE and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+        if (
+            mode == RunMode.VALIDATE
+            and self.wandb_wrapper is not None
+            and self.wandb_wrapper.is_initialized()
+            and self.config.is_ref_device
+        ):
             # helper function to create an HTML table given the metrics dictionary
             def create_html_table(metrics_dict, table_title):
                 html = f"<h3>{table_title}</h3>"
@@ -907,11 +1187,17 @@ class LLMFinetuningRunner(BaseRunner):
             if self.category_metrics_calculator is not None:
                 try:
                     category_results = self.category_metrics_calculator.compute_category_metrics()
-                    overall_results = self.category_metrics_calculator.compute_overall_metrics()
+                    # Use the already-computed aggregated epoch metrics for overall values
+                    overall_results = {}
+                    for mkey in ("rouge1", "rouge2", "rougeL", "bleu1", "bleu4", "meteor"):
+                        ek = f"{RunMode.VALIDATE}/{mkey}"
+                        if ek in epoch_metrics and isinstance(epoch_metrics[ek], (int, float, np.floating)):
+                            overall_results[mkey] = float(epoch_metrics[ek])
                     
                     # Format for logging
+                    log_prefix = "val_snapshot" if snapshot else "val"
                     category_log_dict = self.category_metrics_calculator.format_results_for_logging(
-                        category_results, overall_results, "val"
+                        category_results, overall_results, log_prefix
                     )
                     
                     # Print category statistics
@@ -920,9 +1206,16 @@ class LLMFinetuningRunner(BaseRunner):
                     for category, category_stats in stats.items():
                         print(f"{category}: {category_stats['n_samples']} samples")
                     
-                    print(f"\nOverall Metrics:")
-                    for metric, score in overall_results.items():
-                        print(f"  {metric}: {score:.4f}")
+                    try:
+                        total_samples = int(sum(s.get('n_samples', 0) for s in stats.values()))
+                    except Exception:
+                        total_samples = 0
+                    print(f"\nOverall Metrics (aggregated across {total_samples} samples):")
+                    for metric, score in sorted(overall_results.items()):
+                        try:
+                            print(f"  {metric}: {float(score):.4f}")
+                        except Exception:
+                            print(f"  {metric}: {score}")
                     
                     print(f"\nPer-Category Metrics (Top 3 categories):")
                     sorted_categories = sorted(category_results.items(), 
@@ -938,26 +1231,139 @@ class LLMFinetuningRunner(BaseRunner):
                     traceback.print_exc()
             
             # Log everything to wandb
+            import wandb
+            log_prefix = "val_snapshot" if snapshot else "val"
             self.wandb_wrapper.log({
-                "val/best_metrics_html": wandb.Html(best_html),
-                "val/worst_metrics_html": wandb.Html(worst_html),
-                "val/random_metrics_html": wandb.Html(random_html),
+                f"{log_prefix}/best_metrics_html": wandb.Html(best_html),
+                f"{log_prefix}/worst_metrics_html": wandb.Html(worst_html),
+                f"{log_prefix}/random_metrics_html": wandb.Html(random_html),
                 **category_log_dict
-            })
+            }, step=int(getattr(self, 'global_step', 0)))
             
             # JSON export is done incrementally during validation
+            # Add validation telemetry aggregates
+            if hasattr(self, '_val_eot_counter') and hasattr(self, '_val_len_counter'):
+                try:
+                    import numpy as _np
+                    eot_values = _np.array(self._val_eot_counter, dtype=float) if self._val_eot_counter else _np.array([0.0])
+                    len_values = _np.array(self._val_len_counter, dtype=float) if self._val_len_counter else _np.array([0.0])
+                    log_prefix = "val_snapshot" if snapshot else "val"
+                    telemetry_payload = {
+                        f"{log_prefix}/generated_len_mean": float(len_values.mean()) if len(len_values) else 0.0,
+                        f"{log_prefix}/generated_len_p95": float(_np.percentile(len_values, 95)) if len(len_values) else 0.0,
+                        f"{log_prefix}/eot_reached_rate": float(eot_values.mean()) if len(eot_values) else 0.0,
+                    }
+                    self.wandb_wrapper.log(telemetry_payload, step=int(getattr(self, 'global_step', 0)))
+                except Exception:
+                    pass
             
             # Plot ECG waveforms with Q&A annotations if configured
-            json_path = self._get_val_generation_json_path(epoch)
-            if os.path.exists(json_path):
-                self._plot_validation_ecgs(epoch, json_path)
+            if not snapshot:
+                json_path = self._get_val_generation_json_path(epoch)
+                if os.path.exists(json_path):
+                    self._plot_validation_ecgs(epoch, json_path)
         # === End new block ===
                 
-        # Normalize the epoch metrics
-        for k in epoch_metrics:
-            epoch_metrics[k] /= len(dataloader)
+        # Normalize only metrics that were accumulated as sums over batches.
+        # Aggregated text metrics (computed once over all samples) must NOT be divided again.
+        denominator = max(1, batches_processed)
+        skip_norm_prefixes = (
+            f"{RunMode.VALIDATE}/rouge",  # rouge1, rouge2, rougeL
+            f"{RunMode.VALIDATE}/bleu",   # bleu1, bleu4
+            f"{RunMode.VALIDATE}/meteor",
+            f"{RunMode.VALIDATE}/bertscore",  # bertscore_* if present
+        )
+        keys = list(epoch_metrics.keys())
+        for k in keys:
+            try:
+                if any(k.startswith(pref) for pref in skip_norm_prefixes):
+                    continue
+                if k.endswith("/batches_processed"):
+                    continue
+                epoch_metrics[k] /= denominator
+            except Exception:
+                # Leave non-numeric entries untouched
+                pass
 
-        # Create per-epoch validation metric plots on the reference device
+        epoch_metrics[f"{mode}/batches_processed"] = float(batches_processed)
+
+        if mode == RunMode.VALIDATE:
+            world_size = getattr(self.config, "world_size", 1)
+            local_payload = None
+            if pattern_logits_batches and pattern_targets_batches:
+                local_payload = (
+                    torch.cat(pattern_logits_batches, dim=0),
+                    torch.cat(pattern_targets_batches, dim=0),
+                )
+            gather_list: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None for _ in range(world_size)]
+            if world_size > 1 or local_payload is not None:
+                DistributedUtils.all_gather_object(gather_list, local_payload)
+            if self.config.is_ref_device:
+                combined_logits: list[torch.Tensor] = []
+                combined_targets: list[torch.Tensor] = []
+                for item in gather_list:
+                    if item is None:
+                        continue
+                    combined_logits.append(item[0])
+                    combined_targets.append(item[1])
+                if combined_logits and combined_targets:
+                    all_logits = torch.cat(combined_logits, dim=0)
+                    all_targets = torch.cat(combined_targets, dim=0)
+                    probs = torch.sigmoid(all_logits)
+                    # Ensure CPU for numpy conversion to avoid device errors
+                    probs_np = probs.detach().cpu().numpy()
+                    targets_np = all_targets.detach().cpu().numpy()
+                    try:
+                        macro_auc = roc_auc_score(targets_np, probs_np, average='macro')
+                    except ValueError:
+                        macro_auc = float("nan")
+                    try:
+                        micro_auc = roc_auc_score(targets_np, probs_np, average='micro')
+                    except ValueError:
+                        micro_auc = float("nan")
+                    epoch_metrics[f"{mode}/pattern_auc_macro"] = float(macro_auc)
+                    epoch_metrics[f"{mode}/pattern_auc_micro"] = float(micro_auc)
+                    positive_counts = targets_np.sum(axis=0)
+                    for idx, label in enumerate(ECG_PATTERNS):
+                        if idx >= targets_np.shape[1]:
+                            break
+                        if np.unique(targets_np[:, idx]).size < 2:
+                            continue
+                        try:
+                            label_auc = roc_auc_score(targets_np[:, idx], probs_np[:, idx])
+                        except ValueError:
+                            continue
+                        label_key = (
+                            label.lower()
+                            .replace(" ", "_")
+                            .replace("/", "_")
+                            .replace("-", "_")
+                            .replace("(", "")
+                            .replace(")", "")
+                            .replace(",", "")
+                            .replace("'", "")
+                        )
+                        epoch_metrics[f"{mode}/pattern_auc/{label_key}"] = float(label_auc)
+                        epoch_metrics[f"{mode}/pattern_support/{label_key}"] = float(positive_counts[idx])
+
+                    # Optional: log logits/targets histograms to W&B for inspection
+                    if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                        try:
+                            import wandb
+                            log_prefix = "val_snapshot" if snapshot else "val"
+                            # Flatten to 1D for histogram
+                            logits_np = all_logits.detach().cpu().flatten().numpy()
+                            targets_hist_np = all_targets.detach().cpu().flatten().numpy()
+                            step_for_log = int(getattr(self, 'global_step', 0))
+                            self.wandb_wrapper.log({
+                                f"{log_prefix}/pattern_logits_hist": wandb.Histogram(logits_np),
+                                f"{log_prefix}/pattern_targets_hist": wandb.Histogram(targets_hist_np)
+                            }, step=step_for_log)
+                        except Exception as _wandb_exc:
+                            # Non-fatal; skip histogram logging if unavailable
+                            pass
+
+        # Create validation metric plots on the reference device for both full epochs and snapshots
         if mode == RunMode.VALIDATE and self.config.is_ref_device:
             metric_key_map = {
                 "ROUGE-1": f"{RunMode.VALIDATE}/rouge1",
@@ -974,7 +1380,20 @@ class LLMFinetuningRunner(BaseRunner):
             if metric_values and plt is not None:
                 plot_dir = os.path.join(self._get_val_generations_dir(), "plots")
                 os.makedirs(plot_dir, exist_ok=True)
-                plot_path = os.path.join(plot_dir, f"epoch_{epoch:03d}_metrics.png")
+                current_step = int(getattr(self, "global_step", 0))
+                step_suffix = ""
+                if snapshot and current_step > 0:
+                    step_suffix = f"_step_{current_step:06d}"
+                elif current_step > 0:
+                    step_suffix = f"_step_{current_step:06d}"
+                if snapshot:
+                    snapshot_tag = "snapshot"
+                    if not step_suffix:
+                        step_suffix = "_step_unknown"
+                    plot_filename = f"{snapshot_tag}_epoch_{epoch:03d}{step_suffix}_metrics.png"
+                else:
+                    plot_filename = f"epoch_{epoch:03d}{step_suffix}_metrics.png"
+                plot_path = os.path.join(plot_dir, plot_filename)
 
                 labels = list(metric_values.keys())
                 scores = [metric_values[label] for label in labels]
@@ -985,7 +1404,9 @@ class LLMFinetuningRunner(BaseRunner):
                 upper_ylim = max(upper_ylim, 0.2)
                 ax.set_ylim(0.0, upper_ylim)
                 ax.set_ylabel("Score")
-                ax.set_title(f"Validation Metrics - Epoch {epoch}")
+                title_prefix = "Validation Snapshot" if snapshot else "Validation Metrics"
+                title_suffix = f" (step {current_step:,})" if current_step > 0 else ""
+                ax.set_title(f"{title_prefix} - Epoch {epoch}{title_suffix}")
                 ax.tick_params(axis='x', rotation=20)
                 for rect, score in zip(bar_container, scores):
                     text_y = min(score + 0.02, upper_ylim - 0.02)
@@ -1005,18 +1426,268 @@ class LLMFinetuningRunner(BaseRunner):
                 if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
                     try:
                         import wandb
-                        self.wandb_wrapper.log({
-                            f"val/metrics_plot_epoch_{epoch}": wandb.Image(plot_path)
-                        })
+                        log_prefix = "val_snapshot" if snapshot else "val"
+                        if snapshot and current_step > 0:
+                            plot_key = f"{log_prefix}/metrics_plot_step_{current_step}"
+                        else:
+                            plot_key = f"{log_prefix}/metrics_plot_epoch_{epoch}"
+                        log_payload = {
+                            plot_key: wandb.Image(plot_path)
+                        }
+                        if current_step > 0:
+                            log_payload[f"{plot_key}_step"] = float(current_step)
+                        self.wandb_wrapper.log(log_payload, step=int(current_step) if current_step > 0 else int(getattr(self, 'global_step', 0)))
                     except Exception as exc:
                         print(f"Warning: Failed to log validation metrics plot to Weights & Biases: {exc}")
 
-                print(f"Saved validation metric plot: {plot_path}")
+                scope = "snapshot" if snapshot else "validation"
+                if current_step > 0:
+                    print(f"Saved {scope} metric plot (step {current_step}): {plot_path}")
+                else:
+                    print(f"Saved {scope} metric plot: {plot_path}")
             elif metric_values:
                 print("matplotlib is unavailable; skipping validation metric plot generation.")
 
         # Return the epoch metrics
         return epoch_metrics
+
+    def _set_sampler_epoch(
+        self,
+        dataloader: DataLoader,
+        mode: RunMode,
+        epoch: int,
+        snapshot_step: int | None,
+        snapshot: bool
+    ) -> None:
+        """Reseed distributed samplers so validation snapshots can shuffle."""
+        sampler = getattr(dataloader, "sampler", None)
+        if sampler is None or not hasattr(sampler, "set_epoch"):
+            return
+
+        if mode == RunMode.TRAIN:
+            sampler.set_epoch(int(epoch + (getattr(self.config, "seed", 0) or 0)))
+            return
+
+        if not getattr(self.config, "validation_shuffle", False):
+            return
+
+        seed_offset = int(getattr(self.config, "seed", 0) or 0)
+        if snapshot and snapshot_step is not None:
+            sampler.set_epoch(seed_offset + int(snapshot_step))
+        else:
+            sampler.set_epoch(seed_offset + int(epoch * 9973))
+
+    def _handle_train_metric_snapshot(
+        self,
+        epoch: int,
+        batch_idx: int,
+        batch: dict[str, Any],
+        ecg_signal: torch.Tensor,
+        labels: torch.Tensor,
+        prompt_input_ids: torch.Tensor | None,
+        prompt_attention_mask: torch.Tensor | None
+    ) -> None:
+        """Compute and log mid-epoch training metrics when requested."""
+        interval = getattr(self.config, "train_metric_interval", None)
+        if interval is None or interval <= 0:
+            return
+
+        batches_to_collect = max(1, getattr(self.config, "train_metric_batches", 1))
+        # Trigger snapshots on the very first step and then every `interval` steps
+        eff_step = int(self.global_step)
+        if eff_step % interval == 0 or eff_step == 1:
+            self._train_metric_remaining = batches_to_collect
+            self._train_metric_accumulator = {}
+            self._train_metric_batches_collected = 0
+
+        if self._train_metric_remaining <= 0:
+            return
+
+        if self.config.is_ref_device:
+            try:
+                metrics = self._compute_train_metrics_for_batch(
+                    batch=batch,
+                    ecg_signal=ecg_signal,
+                    labels=labels,
+                    prompt_input_ids=prompt_input_ids,
+                    prompt_attention_mask=prompt_attention_mask,
+                    batch_idx=batch_idx
+                )
+            except Exception as exc:
+                print(f"⚠️ Train snapshot metrics failed at step {self.global_step}: {exc}")
+                traceback.print_exc()
+                metrics = {}
+
+            for key, value in metrics.items():
+                if isinstance(value, (int, float, np.floating)):
+                    self._train_metric_accumulator[key] = self._train_metric_accumulator.get(key, 0.0) + float(value)
+            self._train_metric_batches_collected += 1
+
+        self._train_metric_remaining -= 1
+
+        if self._train_metric_remaining == 0:
+            if self.config.is_ref_device and self._train_metric_batches_collected > 0:
+                averaged_metrics = {
+                    f"train_snapshot/{metric}": total / self._train_metric_batches_collected
+                    for metric, total in self._train_metric_accumulator.items()
+                }
+                averaged_metrics["train_snapshot/batches"] = float(self._train_metric_batches_collected)
+                averaged_metrics["train_snapshot/global_step"] = float(self.global_step)
+                averaged_metrics["train_snapshot/epoch"] = float(epoch)
+                if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                    # Log only current train snapshot metrics
+                    payload = dict(averaged_metrics)
+                    self.wandb_wrapper.log(payload, step=int(self.global_step), commit=True)
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
+
+    def _compute_train_metrics_for_batch(
+        self,
+        batch: dict[str, Any],
+        ecg_signal: torch.Tensor,
+        labels: torch.Tensor,
+        prompt_input_ids: torch.Tensor | None,
+        prompt_attention_mask: torch.Tensor | None,
+        batch_idx: int
+    ) -> dict[str, float]:
+        """Generate outputs for a training batch and compute requested metrics."""
+        if self.train_dataloader is None:
+            return {}
+
+        model_for_generation = self.model.module if hasattr(self.model, "module") else self.model
+        was_training = model_for_generation.training
+
+        original_category_calculator = self.category_metrics_calculator
+        self.category_metrics_calculator = None
+
+        try:
+            model_for_generation.eval()
+            with torch.no_grad():
+                # Task hint from batch categories (if consistent)
+                task_hint = None
+                try:
+                    if batch is not None and 'prompt_category' in batch and isinstance(batch['prompt_category'], list):
+                        cats = [str(c).lower() for c in batch['prompt_category'] if c is not None]
+                        uniq = set(cats)
+                        if len(uniq) == 1:
+                            cat = next(iter(uniq))
+                            if 'json' in cat:
+                                task_hint = 'json'
+                            elif 'yesno' in cat or 'binary' in cat:
+                                task_hint = 'binary'
+                            elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
+                                task_hint = 'scalar'
+                except Exception:
+                    task_hint = None
+
+                generated_ids = model_for_generation.generate_report_with_question(
+                    ecg_signal,
+                    prompt_input_ids=prompt_input_ids,
+                    prompt_attention_mask=prompt_attention_mask,
+                    max_token_length=self.config.max_token_length,
+                    task_hint=task_hint,
+                    category_hint=batch.get('prompt_category') if isinstance(batch, dict) else None,
+                )
+
+            outputs = {
+                "generated_ids": generated_ids,
+                "loss": torch.tensor(0.0, device=self.config.device)
+            }
+
+            dummy_best: dict[str, list[dict[str, Union[float, list[str]]]]] = {}
+            dummy_worst: dict[str, list[dict[str, Union[float, list[str]]]]] = {}
+            dummy_random: dict[str, list[dict[str, Union[float, list[str]]]]] = {}
+
+            metrics = self._compute_metrics(
+                outputs,
+                labels,
+                self.train_dataloader,
+                dummy_best,
+                dummy_worst,
+                dummy_random,
+                random_batch=False,
+                batch=batch,
+                batch_idx=batch_idx
+            )
+
+            filtered_metrics = {
+                key: float(value)
+                for key, value in metrics.items()
+                if isinstance(value, (int, float, np.floating))
+            }
+            return filtered_metrics
+        finally:
+            self.category_metrics_calculator = original_category_calculator
+            model_for_generation.train(was_training)
+
+    def _handle_validation_snapshot(
+        self,
+        epoch: int,
+        snapshot_running: bool
+    ) -> None:
+        """Run validation snapshots mid-epoch when configured."""
+        if snapshot_running:
+            return
+
+        interval = getattr(self.config, "validation_step_interval", None)
+        if interval is None or interval <= 0:
+            return
+        if self.global_step == 0 or self.global_step % interval != 0:
+            return
+
+        snapshot_batches_cfg = getattr(self.config, "validation_snapshot_batches", 0)
+        if snapshot_batches_cfg and snapshot_batches_cfg > 0:
+            snapshot_batches = snapshot_batches_cfg
+        else:
+            snapshot_batches = None
+
+        metrics = self._run_epoch(
+            RunMode.VALIDATE,
+            epoch,
+            max_batches=snapshot_batches,
+            snapshot_step=self.global_step,
+            snapshot=True
+        )
+
+        if self.config.is_ref_device:
+            loss_key = f"{RunMode.VALIDATE}/loss"
+            val_loss_raw = metrics.get(loss_key)
+            if isinstance(val_loss_raw, (int, float, np.floating)):
+                snapshot_loss = float(val_loss_raw)
+                is_best = False
+                if snapshot_loss < self.best_val_loss:
+                    self.best_val_loss = snapshot_loss
+                    is_best = True
+                self._save_model(
+                    epoch=epoch,
+                    loss=snapshot_loss,
+                    is_best=is_best,
+                    step=self.global_step
+                )
+
+        if self.config.is_ref_device:
+            log_payload: dict[str, float] = {}
+            for key, value in metrics.items():
+                if not isinstance(value, (int, float, np.floating)):
+                    continue
+                if key.startswith(f"{RunMode.VALIDATE}/"):
+                    metric_name = key.split("/", 1)[1]
+                    log_payload[f"val_snapshot/{metric_name}"] = float(value)
+            log_payload["val_snapshot/global_step"] = float(self.global_step)
+            log_payload["val_snapshot/epoch"] = float(epoch)
+            log_payload["val_snapshot/best_loss"] = float(self.best_val_loss)
+            if snapshot_batches is not None:
+                log_payload["val_snapshot/batches_requested"] = float(snapshot_batches)
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                # Anchor validation snapshot logs to current global step
+                self.wandb_wrapper.log(log_payload, step=int(self.global_step), commit=True)
+
+        DistributedUtils.sync_process_group(
+            world_size=self.config.world_size,
+            device_ids=self.config.device
+        )
     
     def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
         """Return only the assistant portion of the generated text."""
@@ -1046,13 +1717,13 @@ class LLMFinetuningRunner(BaseRunner):
         # We need to skip: prefix_offset + prompt_len
         start_idx = prefix_offset + prompt_len
         
-        # Ensure start_idx is within bounds
+        # If the model returned continuation-only tokens (no prompt ids in the sequence),
+        # fall back to decoding the entire generated sequence rather than returning empty.
         if start_idx >= generated_flat.size(0):
-            # No generated tokens after the prompt
-            return ""
-        
-        # Extract tokens from start_idx to the end
-        assistant_tokens = generated_flat[start_idx:]
+            assistant_tokens = generated_flat
+        else:
+            # Extract tokens from start_idx to the end
+            assistant_tokens = generated_flat[start_idx:]
 
         if assistant_tokens.numel() == 0:
             return ""
@@ -1061,17 +1732,30 @@ class LLMFinetuningRunner(BaseRunner):
 
     @staticmethod
     def _sanitize_chat_text(text: str, max_length: int = 512) -> str:
-        """Trim special chat tokens, collapse whitespace, and optionally truncate."""
+        """Trim special chat tokens, EOT artifacts, tidy semicolons, and optionally truncate.
+
+        Handles broken variants of the end-of-turn token (e.g. "<|eot_", "|eot_id|>")
+        that sometimes appear when the tokenizer doesn't mark them as special.
+        Also normalizes whitespace and excessive/leading semicolons.
+        """
         if not text:
             return ""
 
         cleaned = str(text)
 
-        # Remove any known chat delimiters and everything after the first end-of-turn marker
-        for delimiter in ("<|eot_id|>", "|eot_id|>"):
-            if delimiter in cleaned:
-                cleaned = cleaned.split(delimiter, 1)[0]
-        # Strip remaining special header markers
+        # 1) Robustly trim at end-of-turn artifacts (handle broken variants)
+        try:
+            # Match either proper tokens or broken fragments like "|eot_ids|=..."
+            eot_match = re.search(r"<\|\s*eot[^>]*>?|\|\s*eot[^\s]*", cleaned, flags=re.IGNORECASE)
+            if eot_match is not None:
+                cleaned = cleaned[: eot_match.start()]
+        except Exception:
+            # Fallback: common delimiters
+            for delimiter in ("<|eot_id|>", "|eot_id|>"):
+                if delimiter in cleaned:
+                    cleaned = cleaned.split(delimiter, 1)[0]
+
+        # 2) Strip remaining special header markers
         special_tokens = (
             "<|start_header_id|>",
             "<|end_header_id|>",
@@ -1083,8 +1767,10 @@ class LLMFinetuningRunner(BaseRunner):
         )
         for token in special_tokens:
             cleaned = cleaned.replace(token, "")
+        # Also strip residual textual header crumbs that may appear without brackets
+        cleaned = re.sub(r"\b(start_header_id|end_header_id)\b\|?", "", cleaned, flags=re.IGNORECASE)
 
-        # Strip common HTML fragments the model sometimes emits
+        # 3) Strip common HTML fragments the model sometimes emits
         cleaned = re.sub(r"<\s*br\s*/?>", " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</?p[^>]*>", " ", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</?div[^>]*>", " ", cleaned, flags=re.IGNORECASE)
@@ -1092,9 +1778,23 @@ class LLMFinetuningRunner(BaseRunner):
         # Remove any remaining generic tags
         cleaned = re.sub(r"<[^>]+>", " ", cleaned)
 
+        cleaned = cleaned.replace("\u2581", " ")
+
+        # 4) Normalize whitespace early so punctuation cleanup behaves well
         cleaned = cleaned.strip()
         if cleaned:
             cleaned = " ".join(cleaned.split())
+
+        # 5) Tidy semicolons:
+        #    - collapse consecutive semicolons
+        #    - ensure a single space after semicolons
+        #    - remove leading/trailing semicolons
+        if cleaned:
+            cleaned = re.sub(r"\s*;\s*", "; ", cleaned)
+            cleaned = re.sub(r"(?:;\s*){2,}", "; ", cleaned)
+            cleaned = re.sub(r"^;\s*", "", cleaned)
+            cleaned = re.sub(r";\s*\.", ".", cleaned)
+            cleaned = re.sub(r";\s*$", "", cleaned)
 
         if max_length is not None and len(cleaned) > max_length:
             cleaned = cleaned[: max_length - 1].rstrip() + "…"
@@ -1126,7 +1826,7 @@ class LLMFinetuningRunner(BaseRunner):
         index: int
     ) -> str:
         prompt_candidates: list[Any] = []
-        for key in ('prompt_text', 'prompt', 'question'):
+        for key in ('rendered_prompt', 'prompt_text', 'prompt', 'question'):
             value = batch.get(key)
             if isinstance(value, (list, tuple)) and index < len(value):
                 prompt_candidates.append(value[index])
@@ -1151,6 +1851,135 @@ class LLMFinetuningRunner(BaseRunner):
 
         return ""
 
+    def _print_first_batch_details(
+        self,
+        outputs: dict[str, Any],
+        batch: dict[str, Any],
+        labels: torch.Tensor,
+        pattern_targets: torch.Tensor | None,
+    ) -> bool:
+        """Pretty-print prompt, prediction, and multilabel targets for the first batch."""
+        if 'generated_ids' not in outputs:
+            return False
+
+        generated_ids = outputs['generated_ids']
+        if not isinstance(generated_ids, torch.Tensor) or generated_ids.size(0) == 0:
+            return False
+
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        decoder = getattr(model, 'decoder', None)
+        tokenizer = getattr(decoder, 'tokenizer', None) if decoder is not None else None
+        if tokenizer is None:
+            print("First-batch debug skipped: decoder tokenizer unavailable.")
+            return True
+
+        prompt_text = self._extract_prompt_text(tokenizer, batch, 0)
+
+        first_generated = generated_ids[0].detach().cpu()
+        first_label = labels[0].detach().cpu() if labels is not None and labels.size(0) > 0 else None
+        predicted_text = ""
+        try:
+            if first_label is not None:
+                # Use prefix-aware extraction to avoid empty generations
+                predicted_text = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, first_generated, first_label)
+                )
+            else:
+                predicted_text = self._sanitize_chat_text(
+                    tokenizer.decode(first_generated.tolist(), skip_special_tokens=True)
+                )
+        except Exception as exc:
+            predicted_text = f"<decode error: {exc}>"
+
+        positive_targets: list[str] = []
+        if pattern_targets is not None and pattern_targets.size(0) > 0:
+            first_targets = pattern_targets[0].detach().float().cpu()
+            for idx, score in enumerate(first_targets.tolist()):
+                if idx >= len(ECG_PATTERNS):
+                    break
+                if float(score) >= 0.5:
+                    positive_targets.append(f"{ECG_PATTERNS[idx]} ({score:.2f})")
+
+        print("\n" + "=" * 80)
+        print("First validation batch snapshot")
+        print("-" * 80)
+        print(f"Prompt: {prompt_text if prompt_text else '<empty>'}")
+        print("-" * 80)
+        print(f"Predicted report: {predicted_text if predicted_text else '<empty>'}")
+        print("-" * 80)
+        if positive_targets:
+            print("Positive ECG patterns: " + ", ".join(positive_targets))
+        else:
+            print("Positive ECG patterns: none")
+        print("=" * 80 + "\n")
+
+        if getattr(self.config, 'debug_prompt_dump', False):
+            try:
+                full_input = batch.get('input_ids')
+                attn_mask = batch.get('attention_mask')
+                prompt_ids = batch.get('prompt_input_ids')
+                prompt_mask = batch.get('prompt_attention_mask')
+                label_mask = labels[0] if labels is not None and labels.size(0) > 0 else None
+
+                def _decode(ids: torch.Tensor, mask: torch.Tensor | None = None, skip_special: bool = False) -> str:
+                    ids_cpu = ids.detach().cpu()
+                    if mask is not None:
+                        ids_cpu = ids_cpu[mask.detach().cpu().bool()]
+                    return tokenizer.decode(ids_cpu.tolist(), skip_special_tokens=skip_special)
+
+                if prompt_ids is not None:
+                    print("Prompt tokens (decoded):")
+                    print(_decode(prompt_ids[0], prompt_mask[0] if prompt_mask is not None else None, skip_special=False))
+                if full_input is not None:
+                    print("Full input (decoded):")
+                    print(_decode(full_input[0], attn_mask[0] if attn_mask is not None else None, skip_special=False))
+                if label_mask is not None and full_input is not None:
+                    kept = label_mask != -100
+                    print("Non-masked label tokens (decoded):")
+                    print(_decode(full_input[0][kept], None, skip_special=True))
+            except Exception as exc:
+                print(f"debug_prompt_dump failed: {exc}")
+
+        return True
+
+    def _debug_dump_prompt_batch(self, batch: dict[str, Any], labels: torch.Tensor, prefix: str = "") -> None:
+        """Decode prompt/input/label tokens for a single batch example."""
+        try:
+            model = self.model.module if hasattr(self.model, 'module') else self.model
+            decoder = getattr(model, 'decoder', None)
+            tokenizer = getattr(decoder, 'tokenizer', None) if decoder is not None else None
+            if tokenizer is None:
+                print("debug_prompt_dump: tokenizer unavailable.")
+                return
+
+            prompt_ids = batch.get('prompt_input_ids')
+            prompt_mask = batch.get('prompt_attention_mask')
+            input_ids = batch.get('input_ids')
+            attn_mask = batch.get('attention_mask')
+            label_mask = labels[0].detach().cpu() if labels is not None and labels.size(0) > 0 else None
+
+            def _decode(ids: torch.Tensor, mask: torch.Tensor | None = None, skip_special: bool = False) -> str:
+                ids_cpu = ids.detach().cpu()
+                if mask is not None:
+                    ids_cpu = ids_cpu[mask.detach().cpu().bool()]
+                return tokenizer.decode(ids_cpu.tolist(), skip_special_tokens=skip_special)
+
+            print("\n[DEBUG PROMPT DUMP]", prefix)
+            if prompt_ids is not None:
+                print("Prompt tokens (decoded):")
+                print(_decode(prompt_ids[0], prompt_mask[0] if prompt_mask is not None else None, skip_special=False))
+            if input_ids is not None:
+                print("Full input (decoded):")
+                print(_decode(input_ids[0], attn_mask[0] if attn_mask is not None else None, skip_special=False))
+            if label_mask is not None and input_ids is not None:
+                kept = label_mask != -100
+                ids_cpu = input_ids[0].detach().cpu()
+                print("Non-masked label tokens (decoded):")
+                print(_decode(ids_cpu[kept], None, skip_special=True))
+            print("[END DEBUG PROMPT DUMP]\n")
+        except Exception as exc:
+            print(f"debug_prompt_dump failed: {exc}")
+
     def _log_sample_generation(self, outputs: dict, labels: torch.Tensor, epoch: int, batch_idx: int):
         """Log sample generations for debugging."""
         try:
@@ -1161,8 +1990,11 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                raw_pred, raw_ref = decode_assistant_only_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
-                generated_text = self._sanitize_chat_text(raw_pred)
+                # Prefer prefix-aware extraction for logging
+                generated_text = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
+                )
+                _, raw_ref = decode_assistant_only_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
                 label_text = self._sanitize_chat_text(raw_ref)
 
                 print("\n" + "="*60)
@@ -1175,6 +2007,161 @@ class LLMFinetuningRunner(BaseRunner):
         except Exception as e:
             print(f"Error logging sample: {e}")
     
+    # ------------------------------------------------------------------
+    # CF evaluation (Choice-Free) – early signal during training
+    # ------------------------------------------------------------------
+    def _maybe_run_cf_evaluation(self) -> None:
+        """
+        Run CF evaluation periodically during training.
+
+        DDP-safe behavior:
+          - Single-GPU (world_size == 1): run CF eval as usual.
+          - Multi-GPU (world_size > 1): run CF eval on every rank by default
+            to keep collective ordering aligned; only skip if explicitly
+            disabled via config.cf_eval_ddp_mode = "off".
+        """
+        if getattr(self, "cf_evaluator", None) is None:
+            return
+
+        try:
+            interval = int(getattr(self.config, "cf_eval_interval", 0) or 0)
+        except Exception:
+            interval = 0
+        if interval <= 0:
+            return
+
+        step = int(getattr(self, "global_step", 0))
+        if step == 0 or (step % interval) != 0:
+            return
+
+        world_size = int(getattr(self.config, "world_size", 1) or 1)
+        ddp_mode = str(getattr(self.config, "cf_eval_ddp_mode", "all_ranks")).lower()
+
+        # Multi-GPU: run on all ranks by default to avoid desync; allow explicit opt-out.
+        if world_size > 1:
+            if ddp_mode in ("off", "disable", "disabled"):
+                return
+            self._run_cf_evaluation(step)
+            return
+
+        # Single-GPU: plain behavior.
+        self._run_cf_evaluation(step)
+
+    @torch.no_grad()
+    def _run_cf_evaluation(self, step: int) -> None:
+        """Run CF evaluation and log metrics to wandb/console."""
+        if getattr(self, "cf_evaluator", None) is None:
+            return
+
+        was_training = self.model.training
+        self.model.eval()
+
+        # Resolve tokenizer from decoder
+        base_model = self.model.module if hasattr(self.model, "module") else self.model
+        decoder = getattr(base_model, "decoder", None)
+        tokenizer = getattr(decoder, "tokenizer", None) if decoder is not None else None
+        if tokenizer is None:
+            if self.config.is_ref_device:
+                print("[CF Eval] Skipped: decoder tokenizer unavailable")
+            if was_training:
+                self.model.train(True)
+            return
+
+        try:
+            max_samples = int(getattr(self.config, "cf_eval_samples", 1000) or 1000)
+            log_details = bool(getattr(self.config, "cf_eval_log_details", False))
+
+            if log_details and hasattr(self.cf_evaluator, 'evaluate_with_details'):
+                metrics, details = self.cf_evaluator.evaluate_with_details(
+                    model=base_model,
+                    tokenizer=tokenizer,
+                    # For detailed logging, limit to cf_eval_log_k items to keep payload small
+                    max_samples=max_samples,
+                    max_details=int(getattr(self.config, "cf_eval_log_k", 10) or 10),
+                )
+            else:
+                metrics = self.cf_evaluator.evaluate(
+                    model=base_model,
+                    tokenizer=tokenizer,
+                    max_samples=max_samples,
+                )
+                details = []
+        except Exception as exc:
+            if self.config.is_ref_device:
+                print(f"[CF Eval] Error during evaluation at step {step}: {exc}")
+            if was_training:
+                self.model.train(True)
+            return
+
+        # Log to wandb (reference device only)
+        if (
+            self.wandb_wrapper is not None
+            and self.wandb_wrapper.is_initialized()
+            and self.config.is_ref_device
+        ):
+            payload = {**metrics, "cf_step": float(step)}
+            # Attach compact JSON for a few examples if requested
+            if details:
+                try:
+                    payload["cf_examples_json"] = json.dumps(details, ensure_ascii=False)
+                except Exception:
+                    pass
+            try:
+                self.wandb_wrapper.log(payload, step=int(self.global_step))
+            except Exception:
+                self.wandb_wrapper.log(payload)
+
+        # Print to console (reference device only)
+        if self.config.is_ref_device:
+            print(f"\n--- CF Evaluation (Step {step}) ---")
+            for k, v in sorted(metrics.items()):
+                try:
+                    print(f"  {k}: {float(v):.3f}")
+                except Exception:
+                    print(f"  {k}: {v}")
+            print("---\n")
+            if details:
+                print("CF Examples (first few):")
+                preview = details[: min(3, len(details))]
+                for ex in preview:
+                    print(f"  [{ex.get('category','')}] Q: {ex.get('question','')}")
+                    print(f"    pred: idx={ex.get('pred_index')}, ans={ex.get('pred_answer')}")
+                    print(f"    gt:   idx={ex.get('ground_truth_indices')}")
+                print()
+
+        # Optionally dump full per-question argmax predictions to a JSON file
+        try:
+            if (
+                self.config.is_ref_device
+                and bool(getattr(self.config, "cf_eval_write_predictions", False))
+                and hasattr(self.cf_evaluator, "evaluate_with_details")
+            ):
+                max_records = int(getattr(self.config, "cf_eval_predictions_max", 0) or 0)
+                # If max_records <= 0, fall back to the lighter cf_eval_samples
+                pred_eval_samples = max_records if max_records > 0 else max_samples
+                pred_detail_cap = (
+                    max_records if max_records > 0
+                    else int(getattr(self.config, "cf_eval_log_k", 10) or 10)
+                )
+                metrics_full, details_full = self.cf_evaluator.evaluate_with_details(
+                    model=base_model,
+                    tokenizer=tokenizer,
+                    max_samples=pred_eval_samples,
+                    max_details=pred_detail_cap,
+                )
+                out_dir = self._get_val_generations_dir()
+                os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, f"cf_predictions_step_{int(step)}.json")
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(details_full, f, ensure_ascii=False, indent=2)
+                print(f"[CF Eval] Wrote per-question argmax predictions: {out_path} ({len(details_full)} records)")
+        except Exception as dump_exc:
+            if self.config.is_ref_device:
+                print(f"[CF Eval] Failed to write prediction JSON: {dump_exc}")
+
+        if was_training:
+            self.model.train(True)
+
     def _log_epoch_summary(self, mode: RunMode, epoch: int, metrics: dict, total_loss: float, num_batches: int):
         """Log detailed epoch summary for debugging."""
         print("\n" + "="*80)
@@ -1196,6 +2183,83 @@ class LLMFinetuningRunner(BaseRunner):
         
         print("="*80 + "\n")
 
+    def _collect_grad_norms(self) -> Dict[str, float]:
+        """Compute gradient norms for key sub-modules after backward pass."""
+        base_model = self.model.module if hasattr(self.model, 'module') else self.model
+        decoder = getattr(base_model, 'decoder', None)
+        grad_norms: Dict[str, float] = {}
+
+        def _norm(params: List[torch.nn.Parameter]) -> float:
+            total = 0.0
+            for param in params:
+                if param is None or param.grad is None:
+                    continue
+                grad = param.grad.detach()
+                total += grad.float().pow(2).sum().item()
+            return math.sqrt(total) if total > 0.0 else 0.0
+
+        # LLM / decoder head
+        llm_module = None
+        if decoder is not None:
+            llm_module = getattr(decoder, 'llm_model', None)
+            if llm_module is None:
+                llm_module = getattr(decoder, 'llm', None)
+        if llm_module is not None:
+            llm_params = [p for p in llm_module.parameters() if p.requires_grad]
+            grad_norms['llm'] = _norm(llm_params)
+            lora_params = [param for name, param in llm_module.named_parameters()
+                           if 'lora_' in name and param.requires_grad]
+            if lora_params:
+                grad_norms['lora'] = _norm(lora_params)
+
+        # Q-Former / bridge
+        bridge = getattr(decoder, 'bridge', None) if decoder is not None else None
+        if bridge is not None:
+            bridge_params = [p for p in bridge.parameters() if p.requires_grad]
+            if bridge_params:
+                grad_norms['qformer'] = _norm(bridge_params)
+
+        # Adapter (if separate from bridge)
+        adapter = getattr(decoder, 'adapter', None) if decoder is not None else None
+        if adapter is not None:
+            adapter_params = [p for p in adapter.parameters() if p.requires_grad]
+            if adapter_params:
+                grad_norms['adapter'] = _norm(adapter_params)
+
+        # Cross-attention blocks (if present)
+        cross_layers = getattr(decoder, 'cross_attention_layers', None) if decoder is not None else None
+        if cross_layers:
+            cross_params: List[torch.nn.Parameter] = []
+            for layer in cross_layers:
+                cross_params.extend([p for p in layer.parameters() if p.requires_grad])
+            if cross_params:
+                grad_norms['cross_attention'] = _norm(cross_params)
+
+        # ECG tokenizer (encoder + quantizer)
+        tokenizer_params: List[torch.nn.Parameter] = []
+        encoder = getattr(base_model, 'encoder', None)
+        if encoder is not None:
+            tokenizer_params.extend([p for p in encoder.parameters() if p.requires_grad])
+        quantizer = getattr(base_model, 'quantizer', None)
+        if quantizer is not None:
+            tokenizer_params.extend([p for p in quantizer.parameters() if p.requires_grad])
+        if tokenizer_params:
+            grad_norms['ecg_tokenizer'] = _norm(tokenizer_params)
+
+        # Optimizer parameter groups for granular visibility
+        if self.optimizer is not None:
+            for group_idx, group in enumerate(self.optimizer.param_groups):
+                params = [
+                    p for p in group.get('params', [])
+                    if p is not None and p.requires_grad and p.grad is not None
+                ]
+                if not params:
+                    continue
+                group_name = str(group.get('name') or f"group_{group_idx}")
+                grad_norms[f"optimizer/{group_name}"] = _norm(params)
+
+        return grad_norms
+
     def _train_step(
         self, 
         ecg_signal: torch.Tensor,
@@ -1203,7 +2267,8 @@ class LLMFinetuningRunner(BaseRunner):
         attention_mask: torch.Tensor,
         labels: torch.Tensor,
         prompt_input_ids: torch.Tensor | None = None,
-        prompt_attention_mask: torch.Tensor | None = None
+        prompt_attention_mask: torch.Tensor | None = None,
+        pattern_targets: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Train a single step of the model.
@@ -1217,10 +2282,10 @@ class LLMFinetuningRunner(BaseRunner):
         Returns:
             dict[str, torch.Tensor]: Output from the model
         """
-        # Clear gradients
+        # Clear gradients (only at the start of an accumulation cycle)
         assert self.optimizer is not None
-        
-        self.optimizer.zero_grad()
+        if (self._grad_accum_counter % self.grad_accum) == 0:
+            self.optimizer.zero_grad(set_to_none=True)
         
         # Forward pass with autocast for mixed precision using bfloat16
         with autocast('cuda', dtype=torch.bfloat16):
@@ -1230,49 +2295,72 @@ class LLMFinetuningRunner(BaseRunner):
                 attention_mask=attention_mask,
                 labels=labels,
                 prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
-                prompt_attention_mask=prompt_attention_mask
+                prompt_attention_mask=prompt_attention_mask,
+                pattern_targets=pattern_targets,
             )
             loss: torch.Tensor = outputs['loss']
+            # Keep an unscaled copy for logging; use scaled loss for backward
+            raw_loss: torch.Tensor = loss.detach()
+            if self.grad_accum > 1:
+                loss = loss / self.grad_accum
 
         # Backward pass - bfloat16 doesn't need gradient scaling
         loss.backward()
-        
-        # Sync gradients across processes before optimizer step
-        DistributedUtils.sync_process_group(
-            world_size=self.config.world_size,
-            device_ids=self.config.device
-        )
+        self._grad_accum_counter += 1
 
-        max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
-        if max_grad_norm is not None and max_grad_norm > 0:
-            clip_params: list[torch.nn.Parameter] = []
-            for group in self.optimizer.param_groups:
-                for param in group['params']:
-                    if param is None:
-                        continue
-                    grad = getattr(param, 'grad', None)
-                    if grad is not None:
-                        clip_params.append(param)
-            if clip_params:
-                torch.nn.utils.clip_grad_norm_(clip_params, max_grad_norm)
-        
-        # Step optimizer directly without gradient scaling for bfloat16
-        self.optimizer.step()
+        did_step = False
+        if (self._grad_accum_counter % self.grad_accum) == 0:
+            # Sync gradients across processes before optimizer step
+            DistributedUtils.sync_process_group(
+                world_size=self.config.world_size,
+                device_ids=self.config.device
+            )
+
+            max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
+            if max_grad_norm is not None and max_grad_norm > 0:
+                clip_params: list[torch.nn.Parameter] = []
+                for group in self.optimizer.param_groups:
+                    for param in group['params']:
+                        if param is None:
+                            continue
+                        grad = getattr(param, 'grad', None)
+                        if grad is not None:
+                            clip_params.append(param)
+                if clip_params:
+                    torch.nn.utils.clip_grad_norm_(clip_params, max_grad_norm)
+
+            # Step optimizer directly without gradient scaling for bfloat16
+            self.optimizer.step()
+            did_step = True
                 
-        # Get learning rate metrics
+        # Get learning rate metrics (only change on optimizer step)
         lr_metrics = {}
-        for pg in self.optimizer.param_groups if self.optimizer else []:
-            if "name" in pg:
-                lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
+        if did_step:
+            for pg in self.optimizer.param_groups if self.optimizer else []:
+                if "name" in pg:
+                    lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
         
-        # Step the scheduler if it should be updated per-iteration
-        if self.scheduler and self.scheduler_per_iteration:
+        # Step the scheduler if it should be updated per-iteration and we just stepped optimizer
+        if did_step and self.scheduler and self.scheduler_per_iteration:
             self.scheduler.step()
         
-        return {
-            "loss": loss,
+        result: dict[str, Any] = {
+            "loss": raw_loss if 'raw_loss' in locals() else loss,
+            "did_step": did_step,
             **lr_metrics
         }
+        cf_loss_tensor = outputs.get("cf_loss")
+        if cf_loss_tensor is not None:
+            cf_loss_value = float(cf_loss_tensor.detach().item()) if torch.is_tensor(cf_loss_tensor) else float(cf_loss_tensor)
+            result["cf_loss"] = cf_loss_value
+        pattern_loss_tensor = outputs.get("pattern_loss")
+        if pattern_loss_tensor is not None:
+            pattern_loss_value = float(pattern_loss_tensor.detach().item()) if torch.is_tensor(pattern_loss_tensor) else float(pattern_loss_tensor)
+            result["pattern_loss"] = pattern_loss_value
+        grad_norms = self._collect_grad_norms()
+        for key, value in grad_norms.items():
+            result[f"grad_norm/{key}"] = value
+        return result
 
     def _val_step(
         self, 
@@ -1282,6 +2370,7 @@ class LLMFinetuningRunner(BaseRunner):
         labels: torch.Tensor,
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
+        pattern_targets: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Validate a single step of the model.
@@ -1302,25 +2391,39 @@ class LLMFinetuningRunner(BaseRunner):
                 attention_mask=attention_mask,
                 labels=labels,
                 prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
-                prompt_attention_mask=prompt_attention_mask
+                prompt_attention_mask=prompt_attention_mask,
+                pattern_targets=pattern_targets,
             )
             loss: torch.Tensor = outputs['loss']
             
-            if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
+            # Derive per-batch task hint when categories are uniform
+            task_hint = None
+            try:
+                if 'prompt_category' in batch and isinstance(batch['prompt_category'], list):
+                    cats = [str(c).lower() for c in batch['prompt_category'] if c is not None]
+                    uniq = set(cats)
+                    if len(uniq) == 1:
+                        cat = next(iter(uniq))
+                        if 'json' in cat:
+                            task_hint = 'json'
+                        elif 'yesno' in cat or 'binary' in cat:
+                            task_hint = 'binary'
+                        elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
+                            task_hint = 'scalar'
+            except Exception:
+                task_hint = None
+
+            skip_generation = bool(getattr(self.config, "skip_val_generation", False))
+            generated_ids = None
+            if not skip_generation:
                 model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
                 model_for_generation.eval()
                 generated_ids = model_for_generation.generate_report_with_question(
                     ecg_signal,
                     prompt_input_ids=prompt_input_ids,
                     prompt_attention_mask=prompt_attention_mask,
-                    max_token_length=self.config.max_token_length
-                )
-            else:
-                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
-                model_for_generation.eval()
-                generated_ids = model_for_generation.generate_report(
-                    ecg_signal,
-                    max_token_length=self.config.max_token_length
+                    max_token_length=self.config.max_token_length,
+                    task_hint=task_hint,
                 )
 
             # Get learning rate metrics
@@ -1329,11 +2432,24 @@ class LLMFinetuningRunner(BaseRunner):
                 if "name" in pg:
                     lr_metrics[f"lr_{pg['name']}"] = pg["lr"]
 
-            return {
+            result: dict[str, Any] = {
                 "loss": loss,
                 "generated_ids": generated_ids,
                 **lr_metrics
             }
+            cf_loss_tensor = outputs.get("cf_loss")
+            if cf_loss_tensor is not None:
+                result["cf_loss"] = float(cf_loss_tensor.detach().item()) if torch.is_tensor(cf_loss_tensor) else float(cf_loss_tensor)
+            pattern_loss_tensor = outputs.get("pattern_loss")
+            if pattern_loss_tensor is not None:
+                result["pattern_loss"] = float(pattern_loss_tensor.detach().item()) if torch.is_tensor(pattern_loss_tensor) else float(pattern_loss_tensor)
+            pattern_logits = outputs.get("pattern_logits")
+            pattern_targets_out = outputs.get("pattern_targets")
+            if pattern_logits is not None:
+                result["pattern_logits"] = pattern_logits.detach().float().cpu()
+            if pattern_targets_out is not None:
+                result["pattern_targets"] = pattern_targets_out.detach().float().cpu()
+            return result
 
     def _inference_step(
         self,
@@ -1343,6 +2459,7 @@ class LLMFinetuningRunner(BaseRunner):
         labels: torch.Tensor,
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
+        category_hint: Any | None = None,
     ) -> dict[str, torch.Tensor]:
         """Inference step that generates text using the model's decoder."""
 
@@ -1357,22 +2474,34 @@ class LLMFinetuningRunner(BaseRunner):
             )
             loss: torch.Tensor = outputs['loss']
 
-            if getattr(self.config, 'instruct_mode', False) and prompt_input_ids is not None:
-                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
-                model_for_generation.eval()
-                generated_ids = model_for_generation.generate_report_with_question(
-                    ecg_signal,
-                    prompt_input_ids=prompt_input_ids,
-                    prompt_attention_mask=prompt_attention_mask,
-                    max_token_length=self.config.max_token_length
-                )
-            else:
-                model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
-                model_for_generation.eval()
-                generated_ids = model_for_generation.generate_report(
-                    ecg_signal,
-                    max_token_length=self.config.max_token_length
-                )
+            # Derive task hint directly from provided category hint
+            task_hint = None
+            try:
+                if category_hint is not None:
+                    cats = category_hint if isinstance(category_hint, (list, tuple)) else [category_hint]
+                    cats = [str(c).lower() for c in cats if c is not None]
+                    uniq = set(cats)
+                    if len(uniq) == 1:
+                        cat = next(iter(uniq))
+                        if 'json' in cat:
+                            task_hint = 'json'
+                        elif 'yesno' in cat or 'binary' in cat:
+                            task_hint = 'binary'
+                        elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
+                            task_hint = 'scalar'
+            except Exception:
+                task_hint = None
+
+            model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
+            model_for_generation.eval()
+            generated_ids = model_for_generation.generate_report_with_question(
+                ecg_signal,
+                prompt_input_ids=prompt_input_ids,
+                prompt_attention_mask=prompt_attention_mask,
+                max_token_length=self.config.max_token_length,
+                task_hint=task_hint,
+                category_hint=category_hint,
+            )
 
             return {
                 "loss": loss,
@@ -1408,13 +2537,16 @@ class LLMFinetuningRunner(BaseRunner):
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
             
+            # Derive category hint directly from batch categories
+            cat_hint = batch.get('prompt_category') if isinstance(batch, dict) else None
             outputs: dict[str, torch.Tensor] = self._inference_step(
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
                 prompt_input_ids=(batch['prompt_input_ids'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None),
-                prompt_attention_mask=(batch['prompt_attention_mask'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None)
+                prompt_attention_mask=(batch['prompt_attention_mask'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None),
+                category_hint=cat_hint,
             )
             generated_ids: torch.Tensor = outputs['generated_ids']
             loss = outputs['loss'].item()
@@ -1481,7 +2613,8 @@ class LLMFinetuningRunner(BaseRunner):
         self,
         epoch: int,
         loss: float,
-        is_best: bool = False
+        is_best: bool = False,
+        step: Optional[int] = None
     ):
         """
         Save model checkpoint and optionally mark as best model.
@@ -1526,47 +2659,69 @@ class LLMFinetuningRunner(BaseRunner):
         # Prepare checkpoint
         checkpoint: dict[str, Any] = {
             'epoch': epoch,
+            'step': step,
             'model_state_dict': model_state_dict,
             'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
             'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'scaler_state_dict': self.scaler.state_dict() if self.scaler else None,
             'loss': loss,
+            'best_val_loss': self.best_val_loss,
             'config': self.config,
             'use_lora': self.config.use_lora  # Store LoRA flag for loading
         }
         
-        # Save regular checkpoint for current epoch
-        checkpoint_path: str = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
+        # Save checkpoint with epoch or step granularity
+        if step is not None:
+            checkpoint_path: str = os.path.join(save_dir, f'checkpoint_step_{step}.pt')
+        else:
+            checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
         torch.save(checkpoint, checkpoint_path)
         
-        # Delete the checkpoint from the previous epoch if it exists
-        if epoch > 0:
-            prev_checkpoint_path: str = os.path.join(save_dir, f'checkpoint_epoch_{epoch - 1}.pt')
-            if os.path.exists(prev_checkpoint_path):
-                os.remove(prev_checkpoint_path)
-                print(f"Deleted old checkpoint: {prev_checkpoint_path}")
+        if step is not None:
+            # Keep only the most recent snapshot checkpoint
+            if (
+                self._last_snapshot_checkpoint is not None
+                and self._last_snapshot_checkpoint != checkpoint_path
+                and os.path.exists(self._last_snapshot_checkpoint)
+            ):
+                os.remove(self._last_snapshot_checkpoint)
+                if self.config.is_ref_device:
+                    print(f"Deleted old snapshot checkpoint: {self._last_snapshot_checkpoint}")
+            self._last_snapshot_checkpoint = checkpoint_path
+        else:
+            # Delete the checkpoint from the previous epoch if it exists
+            if epoch > 0:
+                prev_checkpoint_path: str = os.path.join(save_dir, f'checkpoint_epoch_{epoch - 1}.pt')
+                if os.path.exists(prev_checkpoint_path):
+                    os.remove(prev_checkpoint_path)
+                    print(f"Deleted old checkpoint: {prev_checkpoint_path}")
         
         # If this is the best model, save it separately
         if is_best:
             best_model_path: str = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_model_path)
             
-        if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
-            # Get current learning rates
-            lr_metrics = {}
-            if self.optimizer is not None:
-                for pg in self.optimizer.param_groups:
-                    if "name" in pg:
-                        lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
+            if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
+                # Get current learning rates
+                lr_metrics = {}
+                if self.optimizer is not None:
+                    for pg in self.optimizer.param_groups:
+                        if "name" in pg:
+                            lr_metrics[f"checkpoint/lr_{pg['name']}"] = pg["lr"]
                 else:
                     # Fallback for any unnamed groups
                     lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
-                
-            self.wandb_wrapper.log({
+            
+            log_payload = {
                 "checkpoint/epoch": epoch,
                 "checkpoint/loss": loss,
                 **lr_metrics
-            })
+            }
+            if step is not None:
+                log_payload["checkpoint/step"] = float(step)
+            # Anchor checkpoint logs to the provided step or current global step
+            step_for_log = int(step) if step is not None else int(getattr(self, 'global_step', 0))
+            self.wandb_wrapper.log(log_payload, step=step_for_log)
 
     def _compute_metrics(
         self,
@@ -1599,7 +2754,15 @@ class LLMFinetuningRunner(BaseRunner):
         """
         computed_metrics: dict[str, float] = {}
         # Keep raw labels (with -100 prompt mask) so downstream metrics can drop prompt tokens
-        tokenizer = dataloader.dataset.tokenizer  # type: ignore
+        dataset_ref = dataloader.dataset
+        tokenizer = getattr(dataset_ref, "tokenizer", None)
+        if tokenizer is None and hasattr(dataset_ref, "dataset"):
+            base = getattr(dataset_ref, "dataset")
+            while base is not None and tokenizer is None:
+                tokenizer = getattr(base, "tokenizer", None)
+                base = getattr(base, "dataset", None) if hasattr(base, "dataset") else None
+        if tokenizer is None:
+            raise AttributeError("Unable to locate tokenizer on the provided dataloader dataset.")
         labels_for_metrics = labels
 
         # Decode predictions, references and prompts for logging/metrics enrichment
@@ -1607,20 +2770,26 @@ class LLMFinetuningRunner(BaseRunner):
         batch_references: list[str] = []
         batch_categories: list[str] = []
         batch_prompts: list[str] = []
+        gen_ids = outputs.get('generated_ids')
+        has_generation = isinstance(gen_ids, torch.Tensor)
 
-        if batch is not None and 'generated_ids' in outputs:
-            generated_ids = outputs['generated_ids']
+        if batch is not None and has_generation:
+            generated_ids = gen_ids
 
             for i in range(generated_ids.size(0)):
                 gen_tensor = generated_ids[i].cpu()
                 label_tensor = labels[i].cpu()
 
-                raw_prediction, raw_reference = decode_assistant_only_text(
+                # Use prefix-aware extraction for predictions used in logs/category metrics
+                prediction = self._sanitize_chat_text(
+                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
+                )
+                # Reference from labels
+                _, raw_reference = decode_assistant_only_text(
                     tokenizer,
                     gen_tensor,
                     label_tensor
                 )
-                prediction = self._sanitize_chat_text(raw_prediction)
                 reference = self._sanitize_chat_text(raw_reference)
 
                 category = ""
@@ -1641,6 +2810,14 @@ class LLMFinetuningRunner(BaseRunner):
                     references=batch_references,
                     categories=batch_categories
                 )
+            # Accumulate full-epoch predictions/references for unified epoch metrics
+            if hasattr(self, '_val_agg_preds') and hasattr(self, '_val_agg_refs'):
+                    self._val_agg_preds.extend(batch_predictions)
+                    self._val_agg_refs.extend(batch_references)
+
+        # If no generations are available (e.g., generation skipped for fast eval), skip text metrics
+        if not has_generation:
+            return computed_metrics
 
         for metric in self.config.metrics:
             metric_name_lower = metric.lower()
@@ -1659,13 +2836,13 @@ class LLMFinetuningRunner(BaseRunner):
                 BertScoreMetric
             ] = MetricRegistry.get(metric)
             
-            # Extract input_ids from batch if available for better prompt trimming
+            # Prefer prompt-only ids to help metrics trim prompts when available
             input_ids = None
-            if batch is not None and 'input_ids' in batch:
-                input_ids = batch['input_ids'].to(self.config.device)
+            if batch is not None and 'prompt_input_ids' in batch:
+                input_ids = batch['prompt_input_ids'].to(self.config.device)
             
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
-                outputs['generated_ids'],
+                gen_ids,
                 labels_for_metrics,
                 tokenizer,  # type: ignore
                 input_ids=input_ids
@@ -1714,7 +2891,8 @@ class LLMFinetuningRunner(BaseRunner):
     
     def _init_validation_metrics(
             self,
-            dataloader: DataLoader
+            dataloader: DataLoader,
+            max_batches: int | None = None
         ) -> tuple[
             dict[str, list[dict[str, Union[float, list[str]]]]],
             dict[str, list[dict[str, Union[float, list[str]]]]],
@@ -1741,8 +2919,20 @@ class LLMFinetuningRunner(BaseRunner):
             worst_batch_metrics = {}
             best_batch_metrics = {}
             random_batch_metrics = {}
-            # Select a random batch index
-            random_batch_idx = random.randint(0, len(dataloader) - 1)
+            # Select a random batch index using either max_batches or dataloader length
+            try:
+                dataloader_len = len(dataloader)  # type: ignore[arg-type]
+            except TypeError:
+                dataloader_len = None
+            if max_batches is not None and max_batches > 0:
+                if dataloader_len is None:
+                    total_batches = max_batches
+                else:
+                    total_batches = min(max_batches, dataloader_len)
+            else:
+                total_batches = dataloader_len if dataloader_len is not None else 1
+            total_batches = max(1, total_batches)
+            random_batch_idx = random.randint(0, total_batches - 1)
             return worst_batch_metrics, best_batch_metrics, random_batch_metrics, random_batch_idx
 
     def _get_val_generations_dir(self) -> str:
@@ -1783,11 +2973,21 @@ class LLMFinetuningRunner(BaseRunner):
 
         return self._val_generations_dir
 
-    def _get_val_generation_json_path(self, epoch: int) -> str:
-        """Return the epoch-specific JSON path for validation generations."""
+    def _get_val_generation_json_path(
+        self,
+        epoch: int,
+        step: int | None = None,
+        prefix: str | None = None
+    ) -> str:
+        """Return the validation generations path for an epoch (and optional step snapshot)."""
+        if step is None:
+            filename = f"val_generations_epoch_{epoch}.json"
+        else:
+            step_prefix = prefix if prefix else "step"
+            filename = f"val_generations_epoch_{epoch:03d}_{step_prefix}_{step}.json"
         return os.path.join(
             self._get_val_generations_dir(),
-            f"val_generations_epoch_{epoch}.json"
+            filename
         )
 
     def _append_batch_to_json(
@@ -1816,18 +3016,60 @@ class LLMFinetuningRunner(BaseRunner):
             if not isinstance(waveform_names, (list, tuple)):
                 waveform_names = [waveform_names] * generated_ids.size(0)
 
+            # Get num_ecg_tokens for proper decoding offset
+            # Q-Former uses num_query_tokens, projection bridge uses num_ecg_tokens
+            num_ecg_tokens = int(getattr(self.config, 'num_query_tokens', 0))
+            if num_ecg_tokens == 0:
+                num_ecg_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
+
             batch_data: dict[str, dict[str, Any]] = {}
 
             for i in range(generated_ids.size(0)):
                 gen_tensor = generated_ids[i].detach().cpu()
                 label_tensor = labels[i].detach().cpu()
 
-                raw_generation, raw_reference = decode_assistant_only_text(
+                # Get prompt_input_ids for proper offset calculation
+                prompt_ids_row = None
+                try:
+                    prompt_ids = batch.get('prompt_input_ids', None)
+                    if prompt_ids is not None:
+                        if isinstance(prompt_ids, torch.Tensor):
+                            prompt_ids_row = prompt_ids[i].detach().cpu()
+                        else:
+                            prompt_ids_row = torch.as_tensor(prompt_ids[i])
+                except Exception:
+                    prompt_ids_row = None
+
+                # Use the same robust helper as metric computation so it works
+                # for both input_ids+embeds and embeds-only generation paths.
+                try:
+                    inp_ids = batch.get('input_ids', None)
+                    if inp_ids is not None:
+                        if isinstance(inp_ids, torch.Tensor):
+                            inp_row = inp_ids[i].detach().cpu()
+                        else:
+                            inp_row = torch.as_tensor(inp_ids[i])
+                    else:
+                        inp_row = None
+                except Exception:
+                    inp_row = None
+
+                generation, _ = decode_assistant_only_text(
                     tokenizer,
                     gen_tensor,
-                    label_tensor
+                    label_tensor,
+                    input_ids=inp_row,
+                    prompt_input_ids=prompt_ids_row,
+                    num_ecg_tokens=num_ecg_tokens,
                 )
-                generation = self._sanitize_chat_text(raw_generation)
+                generation = self._sanitize_chat_text(generation)
+                # Reference decoded from label ids (drops -100 prompt tokens)
+                _, raw_reference = decode_assistant_only_text(
+                    tokenizer,
+                    gen_tensor,
+                    label_tensor,
+                    num_ecg_tokens=0,  # Reference doesn't need ECG offset
+                )
                 ground_truth = self._sanitize_chat_text(raw_reference)
 
                 question = self._extract_prompt_text(tokenizer, batch, i)
@@ -1892,6 +3134,28 @@ class LLMFinetuningRunner(BaseRunner):
                 return
 
             existing_data.update(merged_batch_data)
+
+            # Add a small preview of 5 randomly selected samples at the end of the JSON.
+            try:
+                preview_candidates = [
+                    k for k, v in existing_data.items()
+                    if isinstance(v, dict) and 'Question' in v and 'Generation' in v and k != '__sample_preview__'
+                ]
+                if preview_candidates:
+                    take = min(5, len(preview_candidates))
+                    chosen = random.sample(preview_candidates, take)
+                    preview = []
+                    for key in chosen:
+                        entry = existing_data.get(key, {})
+                        preview.append({
+                            'waveform': key,
+                            'question': entry.get('Question', ''),
+                            'generation': entry.get('Generation', ''),
+                            'ground_truth': entry.get('Ground truth', ''),
+                        })
+                    existing_data['__sample_preview__'] = preview
+            except Exception:
+                pass
 
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
@@ -2041,7 +3305,7 @@ class LLMFinetuningRunner(BaseRunner):
             if plot_images and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
                 self.wandb_wrapper.log({
                     f"val/ecg_plots_epoch_{epoch}": plot_images
-                })
+                }, step=int(getattr(self, 'global_step', 0)))
                 print(f"✓ Logged {len(plot_images)} ECG plots to WandB")
 
         except Exception as e:

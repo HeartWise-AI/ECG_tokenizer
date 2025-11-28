@@ -14,7 +14,12 @@ from utils.enums import (
 from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
 from utils.attention_visualization import ECGAttentionVisualizer, AttentionHook
-from models.bridge.bridge import ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge
+from models.bridge.bridge import (
+    ECGCodeBridge,
+    ECGProjectionBridge,
+    PerceiverProjectionBridge,
+    ECGQFormerBridge,
+)
 
 
 
@@ -111,6 +116,10 @@ class Llama32Decoder(nn.Module):
         self._prefix_debug_once = True
 
         visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
+        qformer_layers = int(unused_kwargs.pop("bridge_qformer_layers", 6))
+        qformer_text_hidden = int(unused_kwargs.pop("bridge_text_hidden_size", bridge_mid_dim))
+        qformer_bias_last = float(unused_kwargs.pop("bridge_bias_last_codebook", 0.5))
+        qformer_codebook_dropout = float(unused_kwargs.pop("bridge_codebook_dropout", 0.0))
 
         # Get codebook selection parameters from kwargs (passed from config)
         kept = unused_kwargs.pop('num_codebooks_kept', None)
@@ -136,7 +145,8 @@ class Llama32Decoder(nn.Module):
         if bridge_name in {
             BridgeName.LLAMA32_ECG_CODE_BRIDGE,
             BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
-            BridgeName.ECG_PERCEIVER_BRIDGE
+            BridgeName.ECG_PERCEIVER_BRIDGE,
+            BridgeName.LLAMA32_ECG_QFORMER_BRIDGE,
         }:
             if bridge_name == BridgeName.LLAMA32_ECG_CODE_BRIDGE:
                 self.bridge = ECGCodeBridge(
@@ -177,14 +187,75 @@ class Llama32Decoder(nn.Module):
                     "num_heads": bridge_num_heads,
                     "dropout": bridge_dropout,
                 }
+            elif bridge_name == BridgeName.LLAMA32_ECG_QFORMER_BRIDGE:
+                num_steps = quantized_feature_shape[0] if len(quantized_feature_shape) > 0 else visual_tokens
+                self.bridge = ECGQFormerBridge(
+                    vocab_size=ecg_codebook_size,
+                    num_codebooks=requested_keep,
+                    d_mid=bridge_mid_dim,
+                    d_llm=llm_input_embedding_size,
+                    d_txt=qformer_text_hidden,
+                    num_steps=num_steps,
+                    num_query_tokens=visual_tokens,
+                    num_layers=qformer_layers,
+                    num_heads=bridge_num_heads,
+                    dropout=bridge_dropout,
+                    num_special_tokens=bridge_num_special_tokens,
+                    bias_last_codebook=qformer_bias_last,
+                    codebook_dropout=qformer_codebook_dropout,
+                )
+                self.bridge_config = {
+                    "style": "qformer",
+                    "vocab_size": ecg_codebook_size,
+                    "mid_dim": bridge_mid_dim,
+                    "output_tokens": visual_tokens,
+                    "num_heads": bridge_num_heads,
+                    "dropout": bridge_dropout,
+                    "num_layers": qformer_layers,
+                    "text_hidden_size": qformer_text_hidden,
+                    "bias_last_codebook": qformer_bias_last,
+                    "codebook_dropout": qformer_codebook_dropout,
+                }
             else:
                 feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
-                self.bridge = ECGProjectionBridge(
-                    input_dim=feature_dim,
-                    d_model=llm_input_embedding_size,
-                    num_tokens=visual_tokens,
-                    dropout=bridge_dropout,
-                )
+                # Optional projection-bridge kwargs surfaced from config
+                proj_kwargs: dict = {
+                    'input_dim': feature_dim,
+                    'd_model': llm_input_embedding_size,
+                    'num_tokens': visual_tokens,
+                    'dropout': bridge_dropout,
+                }
+                # Positional encoding flexibility
+                use_sinusoidal = kwargs.pop('bridge_use_sinusoidal_pos_emb', None)
+                max_pos = kwargs.pop('bridge_pos_embedding_max_len', None)
+                if use_sinusoidal is not None:
+                    proj_kwargs['use_sinusoidal_pos_emb'] = bool(use_sinusoidal)
+                if max_pos is not None:
+                    try:
+                        proj_kwargs['pos_embedding_max_len'] = int(max_pos)
+                    except Exception:
+                        pass
+                # Optional knobs
+                softmax_temp = kwargs.pop('bridge_softmax_temp', None)
+                mix_residual = kwargs.pop('bridge_mix_residual', None)
+                add_modality_embed = kwargs.pop('bridge_add_modality_embed', None)
+                add_cls_token = kwargs.pop('bridge_add_cls_token', None)
+                if softmax_temp is not None:
+                    try:
+                        proj_kwargs['softmax_temp'] = float(softmax_temp)
+                    except Exception:
+                        pass
+                if mix_residual is not None:
+                    try:
+                        proj_kwargs['mix_residual'] = float(mix_residual)
+                    except Exception:
+                        pass
+                if add_modality_embed is not None:
+                    proj_kwargs['add_modality_embed'] = bool(add_modality_embed)
+                if add_cls_token is not None:
+                    proj_kwargs['add_cls_token'] = bool(add_cls_token)
+
+                self.bridge = ECGProjectionBridge(**proj_kwargs)
                 self.bridge_config = {
                     "style": "projection",
                     "input_dim": feature_dim,
@@ -404,22 +475,43 @@ class Llama32Decoder(nn.Module):
                 if quantized_codes is None:
                     raise ValueError("quantized_codes must be provided when using the ECG code bridge")
                 ecg_ids = quantized_codes
-                if isinstance(ecg_ids, tuple):
+                if isinstance(ecg_ids, (tuple, list)):
                     ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
                 if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
                     ecg_ids = ecg_ids.squeeze(-1)
-                elif ecg_ids.dim() == 3:
-                    ecg_ids = ecg_ids[..., 0]
-                elif ecg_ids.dim() != 2:
+                if ecg_ids.dim() not in (2, 3):
                     raise ValueError(
                         f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
                     )
+                ecg_ids = ecg_ids.to(device=text_embeddings.device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
 
-                ecg_mask = (ecg_ids >= 0)
-                ecg_ids = ecg_ids.clamp_min(0).to(device=text_embeddings.device, dtype=torch.long)
-                ecg_mask = ecg_mask.to(device=text_embeddings.device)
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(device=text_embeddings.device, dtype=torch.bool)
 
-                ecg_embeddings = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embeddings = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embeddings = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embeddings is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embeddings = bridge_output
             else:
                 if quantized_features is None:
                     raise ValueError(
@@ -564,21 +656,44 @@ class Llama32Decoder(nn.Module):
                     raise ValueError("quantized_codes must be provided when using the ECG code bridge")
 
                 ecg_ids = quantized_codes
-                if isinstance(ecg_ids, tuple):
+                if isinstance(ecg_ids, (tuple, list)):
                     ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
                 if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
                     ecg_ids = ecg_ids.squeeze(-1)
-                elif ecg_ids.dim() == 3:
-                    ecg_ids = ecg_ids[..., 0]
-                elif ecg_ids.dim() != 2:
+                if ecg_ids.dim() not in (2, 3):
                     raise ValueError(
                         f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
                     )
 
-                ecg_mask = (ecg_ids >= 0).to(model_device)
-                ecg_ids = ecg_ids.clamp_min(0).to(model_device, dtype=torch.long)
+                ecg_ids = ecg_ids.to(model_device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
+
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(model_device, dtype=torch.bool)
                 batch_size = ecg_ids.size(0)
-                ecg_embedding = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embedding = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embedding = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embedding is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embedding = bridge_output
             else:
                 if quantized_features is None:
                     raise ValueError("quantized_features must be provided when using the ECG projection bridge")
@@ -740,21 +855,44 @@ class Llama32Decoder(nn.Module):
                     raise ValueError("quantized_codes must be provided when using the ECG code bridge")
 
                 ecg_ids = quantized_codes
-                if isinstance(ecg_ids, tuple):
+                if isinstance(ecg_ids, (tuple, list)):
                     ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
                 if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
                     ecg_ids = ecg_ids.squeeze(-1)
-                elif ecg_ids.dim() == 3:
-                    ecg_ids = ecg_ids[..., 0]
-                elif ecg_ids.dim() != 2:
+                if ecg_ids.dim() not in (2, 3):
                     raise ValueError(
                         f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
                     )
 
-                ecg_mask = (ecg_ids >= 0).to(model_device)
-                ecg_ids = ecg_ids.clamp_min(0).to(model_device, dtype=torch.long)
+                ecg_ids = ecg_ids.to(model_device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
+
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(model_device, dtype=torch.bool)
                 batch_size = ecg_ids.size(0)
-                ecg_embedding = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embedding = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embedding = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embedding is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embedding = bridge_output
             else:
                 if quantized_features is None:
                     raise ValueError("quantized_features must be provided when using the ECG projection bridge")

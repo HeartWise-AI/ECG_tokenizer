@@ -36,6 +36,7 @@ class ProjectName(str, Enum):
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
+    ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
     
     def __str__(self):
         return self.value
@@ -47,6 +48,7 @@ class RunnerName(str, Enum):
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing_Runner"
     SIGLIP_PHASE1 = "SigLIP_Phase1_Runner"
+    ECG_TEXT_STAGE1 = "ECG_Text_Stage1_Runner"
     
     def __str__(self):
         return self.value
@@ -58,6 +60,7 @@ class ConfigName(str, Enum):
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
+    ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
     
     def __str__(self):
         return self.value
@@ -110,6 +113,9 @@ class BridgeName(str, Enum):
     LLAMA32_SIMPLE_TOKEN_BRIDGE = "Llama32_SimpleTokenBridge"
     LLAMA32_ECG_CODE_BRIDGE = "Llama32_ECGCodeBridge"
     LLAMA32_ECG_PROJECTION_BRIDGE = "Llama32_ECGProjectionBridge"
+    LLAMA32_ECG_QFORMER_BRIDGE = "Llama32_ECGQFormerBridge"
+    ECG_STAGE1_QFORMER_BRIDGE = "ECGQFormerBridgeStage1"
+    INSTRUCTION_AWARE_ECG_QFORMER_BRIDGE = "InstructionAwareECGQFormerBridge"
     ECG_PERCEIVER_BRIDGE = "ECGPerceiverBridge"
     CROSS_MODAL_SEQUENCE_TOKEN_BRIDGE = "CrossModalSequenceTokenBridge"
 

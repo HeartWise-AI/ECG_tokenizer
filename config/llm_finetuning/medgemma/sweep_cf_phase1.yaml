@@ -1,0 +1,56 @@
+command:
+  - torchrun
+  - "--nproc_per_node=2"
+  - "--master_port=29500"
+  - "scripts/main.py"
+  - "--base_config"
+  - "config/llm_finetuning/medgemma/medgemma_4b_cf_projection.yaml"
+  - ${args}
+name: "medgemma_cf_phase1_sweep"
+project: "ECG_tokenizer_MedGemma"
+entity: "mhi_ai"
+method: bayes
+metric:
+  name: cf_overall_acc
+  goal: maximize
+parameters:
+  # Core learning rates
+  llm_lr:
+    distribution: log_uniform_values
+    min: 0.00002
+    max: 0.00008
+  adapter_lr:
+    distribution: log_uniform_values
+    min: 0.0002
+    max: 0.0012
+  # Weight decay
+  llm_weight_decay:
+    values: [0.0, 0.000001, 0.00001]
+  adapter_weight_decay:
+    values: [0.0, 0.000001, 0.00001]
+  # Scheduler and warmup
+  scheduler_type:
+    values: ["cosine_with_warmup", "linear_warmup"]
+  num_warmup_percent:
+    values: [0.0, 0.03, 0.08]
+  # LoRA capacity
+  lora_top_k_layers:
+    values: [8, 12, 16]
+  lora_r:
+    values: [16, 32, 48]
+  lora_alpha:
+    values: [32, 64, 96]
+  # Bridge stability
+  instruction_dropout:
+    values: [0.0, 0.1, 0.2]
+  bridge_dropout:
+    values: [0.05, 0.1, 0.15]
+  num_query_tokens:
+    values: [24, 32, 40]
+  # Batch/accumulation
+  batch_size:
+    values: [8, 16]
+  gradient_accumulation_steps:
+    values: [16, 24, 32]
+run_mode: train
+use_wandb: true

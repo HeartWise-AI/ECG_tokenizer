@@ -111,8 +111,10 @@ PTBXL_COLUMNS = {
 }
 
 
-# MHI dataset columns - uses same column names as MIMIC since the data is preprocessed
+# MHI dataset columns - uses same column names as MIMIC since the data is preprocessed,
+# but prefers the translated diagnosis text when available.
 MHI_COLUMNS = MIMIC_COLUMNS.copy()
+MHI_COLUMNS['report'] = ['translated_diagnosis', 'report']
 
 # Dataset registry
 DATASET_MAPPINGS = {

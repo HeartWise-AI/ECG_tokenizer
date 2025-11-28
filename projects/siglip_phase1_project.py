@@ -5,25 +5,28 @@ import os
 import csv
 import re
 from collections import Counter
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, Optional, Tuple, cast
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import AdamW
+import torch.optim as optim
 
 from data.siglip_dataset import SiglipBatchCollatorInfoNCE, SiglipDataset, get_siglip_dataloader
+from models.decoder.medgemma_decoder import MedGemmaDecoder
 from projects.base_project import BaseProject
 from runners.siglip_phase1_runner import SiglipPhase1Runner
 from utils.config.siglip_phase1_config import SiglipPhase1Config
-from utils.enums import ProjectName, RunMode
+from utils.enums import ProjectName, RunMode, BridgeName
 from utils.registry import ModelRegistry, ProjectRegistry
 from utils.ddp import DistributedUtils
 from utils.debug import log_once, ensure_dir
 
 from transformers import AutoModel, AutoTokenizer
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def build_alpha_map_from_effective_num(
@@ -117,6 +120,7 @@ class SiglipBridgeWrapper(nn.Module):
         self.bridge = bridge
         self.hidden_size = hidden_size
         self.uses_codes = bool(getattr(bridge, "uses_codes", False))
+        self.target_embedding_std: float | None = None
 
         # Pooling components mirror the original SiglipECGBridge behaviour
         self.pool_norm = self._RMSNorm(hidden_size)
@@ -151,8 +155,12 @@ class SiglipBridgeWrapper(nn.Module):
 
         bridge_output = self.bridge(bridge_input, **kwargs)
 
+        pooled_from_bridge: Optional[torch.Tensor] = None
+
         if isinstance(bridge_output, tuple):
             token_embeddings = bridge_output[0]
+            if len(bridge_output) > 1:
+                pooled_from_bridge = bridge_output[1]
         elif isinstance(bridge_output, dict):
             if "token_embeddings" in bridge_output:
                 token_embeddings = bridge_output["token_embeddings"]
@@ -163,6 +171,8 @@ class SiglipBridgeWrapper(nn.Module):
                     "Bridge returned a dictionary without recognised embedding keys: "
                     f"{list(bridge_output.keys())}"
                 )
+            if "pooled" in bridge_output:
+                pooled_from_bridge = bridge_output["pooled"]
         else:
             token_embeddings = bridge_output
 
@@ -175,10 +185,21 @@ class SiglipBridgeWrapper(nn.Module):
                 f"got {token_embeddings.shape}"
             )
 
-        mean_pool = token_embeddings.mean(dim=1)
-        gated = torch.sigmoid(self.pool_gate(self.pool_norm(mean_pool))) * mean_pool
-        pooled = self.out_proj(gated)
-        pooled = F.normalize(pooled, dim=-1)
+        if self.target_embedding_std is not None:
+            original_dtype = token_embeddings.dtype
+            work = token_embeddings.float()
+            with torch.no_grad():
+                cur_std = work.std(dim=(1, 2), keepdim=True).clamp_min(1e-6)
+            work = work / cur_std * float(self.target_embedding_std)
+            token_embeddings = work.to(dtype=original_dtype)
+
+        if pooled_from_bridge is not None:
+            pooled = F.normalize(pooled_from_bridge, dim=-1)
+        else:
+            mean_pool = token_embeddings.mean(dim=1)
+            gated = torch.sigmoid(self.pool_gate(self.pool_norm(mean_pool))) * mean_pool
+            pooled = self.out_proj(gated)
+            pooled = F.normalize(pooled, dim=-1)
 
         return pooled, token_embeddings
 
@@ -193,6 +214,64 @@ class SiglipPhase1Project(BaseProject):
     def __init__(self, config: SiglipPhase1Config, wandb_wrapper) -> None:
         super().__init__(config, wandb_wrapper)
         self.config = config
+
+    def _apply_decoder_unfreeze_policy(self, decoder: MedGemmaDecoder) -> None:
+        num_layers = getattr(self.config, "llm_unfreeze_last_n_layers", None)
+        extra_patterns = list(getattr(self.config, "llm_unfreeze_additional_param_patterns", []) or [])
+        include_lm_head = bool(getattr(self.config, "llm_unfreeze_lm_head", False))
+
+        if (not num_layers or num_layers <= 0) and not extra_patterns and not include_lm_head:
+            return
+
+        llm_model = getattr(decoder, "llm_model", None)
+        if llm_model is None:
+            print("[SigLIP] Decoder does not expose an llm_model; unable to apply unfreeze policy.")
+            return
+
+        layer_pattern = re.compile(r"\.(layers|h|block|blocks)\.(\d+)\.")
+        layer_params: dict[int, list[nn.Parameter]] = {}
+
+        for name, param in llm_model.named_parameters():
+            match = layer_pattern.search(name)
+            if match:
+                layer_idx = int(match.group(2))
+                layer_params.setdefault(layer_idx, []).append(param)
+
+        target_layers: list[int] = []
+        if num_layers and num_layers > 0:
+            if layer_params:
+                max_idx = max(layer_params.keys())
+                target_layers = [idx for idx in layer_params if idx >= max_idx - num_layers + 1]
+                for idx in target_layers:
+                    for param in layer_params[idx]:
+                        param.requires_grad = True
+                target_layers.sort()
+                print(f"[SigLIP] Unfroze last {len(target_layers)} LLM transformer layers: {target_layers}")
+            else:
+                print("[SigLIP] Warning: could not identify transformer blocks in llm_model; "
+                      "layer-specific unfreeze skipped.")
+
+        if include_lm_head:
+            lm_head = getattr(llm_model, "lm_head", None)
+            if lm_head is None and hasattr(llm_model, "get_output_embeddings"):
+                lm_head = llm_model.get_output_embeddings()
+            if lm_head is not None:
+                for param in lm_head.parameters():
+                    param.requires_grad = True
+                print("[SigLIP] Unfroze LLM output head for fine-tuning.")
+            else:
+                print("[SigLIP] Warning: LLM model lacks an lm_head module; cannot unfreeze head.")
+
+        if extra_patterns:
+            matched = False
+            for name, param in llm_model.named_parameters():
+                if any(pattern in name for pattern in extra_patterns):
+                    param.requires_grad = True
+                    matched = True
+            if matched:
+                print(f"[SigLIP] Unfroze additional LLM parameters matching patterns: {extra_patterns}")
+            else:
+                print(f"[SigLIP] Warning: no LLM parameters matched extra unfreeze patterns {extra_patterns}.")
 
     def run(self) -> None:
         super().run()
@@ -491,10 +570,15 @@ class SiglipPhase1Project(BaseProject):
             self.config.checkpoint_dir = ckpt_dir
         log_once(f"Checkpoint directory: {self.config.checkpoint_dir}", rank=int(self.config.device))
 
+        model_name_cfg = (
+            getattr(self.config, "text_encoder_model_name", None)
+            or getattr(self.config, "medgemma_model_name", None)
+            or "google/medgemma-4b-it"
+        )
         text_embeddings, text_id_to_idx = self._prepare_text_embeddings(
             text_bank_path=self.config.text_bank_csv,
             cache_path=self.config.text_embedding_cache_path,
-            model_name=self.config.medgemma_model_name,
+            model_name=model_name_cfg,
         )
 
         if text_embeddings.shape[1] != self.config.bridge_hidden_size:
@@ -603,7 +687,7 @@ class SiglipPhase1Project(BaseProject):
                 f"Bridge sequence length {seq_len} exceeds bridge_max_seq_len={self.config.bridge_max_seq_len}"
             )
 
-        bridge = self._build_bridge(
+        bridge_wrapper, raw_bridge = self._build_bridge(
             bridge_features=bridge_features,
             bridge_codes=bridge_codes,
             device=device,
@@ -611,16 +695,118 @@ class SiglipPhase1Project(BaseProject):
             tokenizer_config=tokenizer_cfg,
         )
 
-        optimizer = AdamW(
-            bridge.parameters(),
-            lr=self.config.lr,
-            weight_decay=self.config.weight_decay,
-        )
+        decoder = self._build_decoder(raw_bridge=raw_bridge, device=device)
+        decoder.bridge = raw_bridge
+        decoder.num_ecg_tokens = getattr(raw_bridge, "num_tokens", decoder.num_ecg_tokens)
+
+        optimizer_settings = self.config.optimizer
+        base_lr = float(self.config.lr)
+        weight_decay = float(self.config.weight_decay)
+        component_scales = getattr(self.config, "component_lr_scales", None)
+        optimizer_type = "AdamW"
+
+        if isinstance(optimizer_settings, dict):
+            optimizer_type = str(optimizer_settings.get("type", optimizer_type))
+            base_lr = float(optimizer_settings.get("lr", base_lr))
+            weight_decay = float(optimizer_settings.get("weight_decay", weight_decay))
+            component_scales = optimizer_settings.get("component_lr_scales", component_scales)
+        elif isinstance(optimizer_settings, str):
+            optimizer_type = optimizer_settings or optimizer_type
+        elif optimizer_settings is not None:
+            optimizer_type = str(optimizer_settings)
+
+        optimizer_cls = getattr(optim, optimizer_type, None)
+        if optimizer_cls is None:
+            raise ValueError(f"Unsupported optimizer type '{optimizer_type}' for SigLIP Phase-1 project.")
+
+        param_groups = []
+        assigned_param_ids: set[int] = set()
+
+        def _add_group(params_iterable: Iterable[nn.Parameter], scale: float, group_name: str | None) -> None:
+            params: list[nn.Parameter] = []
+            for param in params_iterable:
+                if not isinstance(param, nn.Parameter):
+                    continue
+                if not param.requires_grad:
+                    continue
+                pid = id(param)
+                if pid in assigned_param_ids:
+                    continue
+                assigned_param_ids.add(pid)
+                params.append(param)
+            if not params:
+                return
+            param_groups.append(
+                {
+                    "params": params,
+                    "lr": base_lr * float(scale),
+                    "weight_decay": weight_decay,
+                    "name": group_name or "",
+                }
+            )
+
+        if component_scales:
+            resolved_scales = dict(component_scales)
+            recognized: set[str] = set()
+
+            shared_scale = resolved_scales.get("shared_bridge")
+            if shared_scale is not None:
+                recognized.add("shared_bridge")
+                _add_group(raw_bridge.parameters(), shared_scale, "shared_bridge")
+
+            projector_scale = resolved_scales.get("siglip_projector")
+            if projector_scale is not None:
+                recognized.add("siglip_projector")
+                wrapper_params = [
+                    param
+                    for name, param in bridge_wrapper.named_parameters()
+                    if not name.startswith("bridge.")
+                ]
+                _add_group(wrapper_params, projector_scale, "siglip_projector")
+
+            decoder_scale = resolved_scales.get("llm_decoder")
+            if decoder_scale is not None:
+                recognized.add("llm_decoder")
+                if decoder is not None:
+                    _add_group(decoder.parameters(), decoder_scale, "llm_decoder")
+
+            unknown_components = set(resolved_scales.keys()) - recognized
+            if unknown_components:
+                raise ValueError(
+                    f"Unknown component(s) specified in component_lr_scales: {sorted(unknown_components)}"
+                )
+
+        remaining_params: list[nn.Parameter] = []
+        for module in (bridge_wrapper, decoder):
+            if module is None:
+                continue
+            for param in module.parameters():
+                if not param.requires_grad:
+                    continue
+                if id(param) in assigned_param_ids:
+                    continue
+                assigned_param_ids.add(id(param))
+                remaining_params.append(param)
+
+        if param_groups and remaining_params:
+            _add_group(remaining_params, 1.0, "default")
+        elif not param_groups:
+            param_groups = [
+                {
+                    "params": [param for param in bridge_wrapper.parameters() if param.requires_grad],
+                    "lr": base_lr,
+                    "weight_decay": weight_decay,
+                    "name": "default",
+                }
+            ]
+
+        optimizer = optimizer_cls(param_groups, lr=base_lr, weight_decay=weight_decay)
 
         runner_kwargs = {
             "encoder": encoder,
             "quantizer": quantizer,
-            "bridge": bridge,
+            "bridge": bridge_wrapper,
+            "decoder": decoder,
             "train_dataloader": train_loader,
             "optimizer": optimizer,
             "config": self.config,
@@ -751,7 +937,7 @@ class SiglipPhase1Project(BaseProject):
         device: torch.device,
         configured_name: Optional[str],
         tokenizer_config: Optional[Dict[str, Any]],
-    ) -> SiglipBridgeWrapper:
+    ) -> tuple[SiglipBridgeWrapper, nn.Module]:
         bridge_name = self._resolve_bridge_name(configured_name)
         bridge_class = ModelRegistry.get(bridge_name)
         uses_codes = bool(getattr(bridge_class, "uses_codes", False))
@@ -777,16 +963,36 @@ class SiglipPhase1Project(BaseProject):
                     "codebook_size must be set in config or checkpoint metadata to use ECGCodeBridge."
                 )
 
-            kwargs = dict(
-                vocab_size=int(vocab_size),
-                d_mid=self.config.bridge_hidden_size,
-                d_model=self.config.bridge_hidden_size,
-                num_output_tokens=seq_len,
-                num_heads=self.config.bridge_num_heads,
-                num_special_tokens=int(getattr(self.config, "bridge_num_special_tokens", 0)),
-                dropout=self.config.bridge_dropout,
-                num_codebooks=int(num_codebooks),
-            )
+            if bridge_name == "ECGQFormerBridge" or bridge_name == BridgeName.LLAMA32_ECG_QFORMER_BRIDGE.value:
+                # BLIP-2 style: fixed number of query tokens (default 32), configurable via `num_query_tokens`.
+                cfg_q = getattr(self.config, "num_query_tokens", None)
+                num_query_tokens = int(cfg_q) if cfg_q is not None else 32
+                kwargs = dict(
+                    vocab_size=int(vocab_size),
+                    num_codebooks=int(num_codebooks),
+                    d_mid=self.config.bridge_hidden_size,
+                    d_llm=self.config.bridge_hidden_size,
+                    d_txt=self.config.bridge_hidden_size,
+                    num_steps=int(seq_len),
+                    num_query_tokens=num_query_tokens,
+                    num_layers=int(self.config.bridge_num_layers),
+                    num_heads=int(self.config.bridge_num_heads),
+                    dropout=float(self.config.bridge_dropout),
+                    num_special_tokens=int(getattr(self.config, "bridge_num_special_tokens", 0)),
+                    bias_last_codebook=float(getattr(self.config, "bridge_bias_last_codebook", 0.5)),
+                    codebook_dropout=float(getattr(self.config, "bridge_codebook_dropout", 0.0)),
+                )
+            else:
+                kwargs = dict(
+                    vocab_size=int(vocab_size),
+                    d_mid=self.config.bridge_hidden_size,
+                    d_model=self.config.bridge_hidden_size,
+                    num_output_tokens=seq_len,
+                    num_heads=self.config.bridge_num_heads,
+                    num_special_tokens=int(getattr(self.config, "bridge_num_special_tokens", 0)),
+                    dropout=self.config.bridge_dropout,
+                    num_codebooks=int(num_codebooks),
+                )
         else:
             if bridge_features.dim() != 3:
                 raise ValueError(
@@ -797,11 +1003,15 @@ class SiglipPhase1Project(BaseProject):
             kwargs = self._bridge_kwargs_from_signature(bridge_class, seq_len, feature_dim)
 
         raw_bridge = bridge_class(**kwargs).to(device)
-        return SiglipBridgeWrapper(
+        wrapper = SiglipBridgeWrapper(
             bridge=raw_bridge,
             hidden_size=self.config.bridge_hidden_size,
             temperature_init=self.config.temperature_init,
         ).to(device)
+        target_std = getattr(self.config, "target_embedding_std", None)
+        if target_std is not None:
+            wrapper.target_embedding_std = float(target_std)
+        return wrapper, raw_bridge
 
     def _resolve_bridge_name(self, configured_name: Optional[str]) -> str:
         """Map legacy bridge names onto the standard registry."""
@@ -870,6 +1080,51 @@ class SiglipPhase1Project(BaseProject):
                 kwargs["target_std"] = float(target_std)
 
         return kwargs
+
+    def _build_decoder(
+        self,
+        raw_bridge: nn.Module,
+        device: torch.device,
+    ) -> MedGemmaDecoder:
+        dtype_str = str(getattr(self.config, "dtype", "bf16") or "bf16").lower()
+        if dtype_str in {"bf16", "bfloat16"}:
+            torch_dtype = torch.bfloat16
+        elif dtype_str in {"fp16", "float16", "half"}:
+            torch_dtype = torch.float16
+        else:
+            torch_dtype = torch.float32
+
+        num_visual_tokens = getattr(raw_bridge, "num_tokens", None)
+        if num_visual_tokens is None:
+            raise ValueError("Shared bridge does not expose `num_tokens`; required for decoder integration.")
+
+        model_name_cfg = (
+            getattr(self.config, "text_encoder_model_name", None)
+            or getattr(self.config, "medgemma_model_name", None)
+            or "google/medgemma-4b-it"
+        )
+        decoder = MedGemmaDecoder(
+            huggingface_model_name=model_name_cfg,
+            llm_input_embedding_size=self.config.bridge_hidden_size,
+            bridge_name=self.config.bridge_name,
+            quantized_feature_shape=(num_visual_tokens, getattr(self.config, "bridge_hidden_size", 2560)),
+            num_quantizers=getattr(self.config, "num_quantizers", 8) or 8,
+            ecg_codebook_size=getattr(self.config, "codebook_size", 512) or 512,
+            num_visual_tokens=num_visual_tokens,
+            bridge_mid_dim=self.config.bridge_hidden_size,
+            bridge_num_heads=self.config.bridge_num_heads,
+            bridge_dropout=self.config.bridge_dropout,
+            bridge_num_special_tokens=getattr(self.config, "bridge_num_special_tokens", 0),
+            torch_dtype=torch_dtype,
+            prefix_tuning=False,
+        ).to(device)
+
+        decoder.bridge = raw_bridge
+        decoder.num_ecg_tokens = num_visual_tokens
+        decoder.freeze_llm_parameters()
+        self._apply_decoder_unfreeze_policy(decoder)
+        decoder.eval()
+        return decoder
 
     def _prepare_text_embeddings(
         self,

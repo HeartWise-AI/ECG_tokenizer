@@ -526,6 +526,31 @@ DEEPECG_CATEGORIES = {
         "Early repolarization",
         "ST upslopping",
         "no_qrs"
+    ],
+    "OTHER": [
+        "ST downslopping",
+        "ST depression (septal- V1-V2)",
+        "R/S ratio in V1-V2 >1",
+        "RV1 + SV6 > 11 mm",
+        "Polymorph",
+        "rSR' in V1-V2",
+        "QRS complex negative in III",
+        "qRS in V5-V6-I, aVL",
+        "QS complex in V1-V2-V3",
+        "R complex in V5-V6",
+        "RaVL > 11 mm",
+        "T wave inversion (septal- V1-V2)",
+        "SV1 + RV5 or RV6 > 35 mm",
+        "T wave inversion (inferior - II, III, aVF)",
+        "Monomorph",
+        "T wave inversion (anterior - V3-V4)",
+        "T wave inversion (lateral -I, aVL, V5-V6)",
+        "Low voltage",
+        "Lead misplacement",
+        "ST depression (anterior - V3-V4)",
+        "Early repolarization",
+        "ST upslopping",
+        "no_qrs"
     ]
 }
 

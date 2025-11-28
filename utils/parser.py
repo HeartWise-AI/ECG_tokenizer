@@ -51,6 +51,12 @@ class HeartWiseParser:
         train_group.add_argument('--gradient_accumulation_steps', type=int)
         train_group.add_argument('--num_codebooks_kept', type=int)
         train_group.add_argument('--codebook_offset', type=int)
+        train_group.add_argument('--phase2_freeze_llm', type=str_to_bool)
+        train_group.add_argument('--bridge_dropout', type=float)
+        train_group.add_argument('--instruction_dropout', type=float)
+        train_group.add_argument('--lora_r', type=int)
+        train_group.add_argument('--lora_alpha', type=int)
+        train_group.add_argument('--lora_top_k_layers', type=int)
         
         # Optimization parameters
         optim_group = parser.add_argument_group('Optimization')
@@ -78,6 +84,24 @@ class HeartWiseParser:
         loss_group.add_argument('--implicit_negatives_per_row', type=int)
         loss_group.add_argument('--negatives_mode', type=str)
         loss_group.add_argument('--loss_type', type=str)
+
+        # Stage-1 / Bridge-specific parameters (also usable by SigLIP)
+        stage1_group = parser.add_argument_group('Stage1/Bridge & CE')
+        stage1_group.add_argument('--bridge_num_layers', type=int)
+        stage1_group.add_argument('--bridge_num_heads', type=int)
+        stage1_group.add_argument('--num_query_tokens', type=int)
+        stage1_group.add_argument('--cross_every', type=int)
+        stage1_group.add_argument('--etc_weight', type=float)
+        stage1_group.add_argument('--etm_weight', type=float)
+        stage1_group.add_argument('--etg_weight', type=float)
+        stage1_group.add_argument('--etm_hard_neg_k', type=int)
+        stage1_group.add_argument('--etm_warmup_steps', type=int)
+        stage1_group.add_argument('--etg_delay_steps', type=int)
+        stage1_group.add_argument('--etg_warmup_steps', type=int)
+        stage1_group.add_argument('--focal_infonce', type=str_to_bool)
+        stage1_group.add_argument('--validate_with_etg', type=str_to_bool)
+        stage1_group.add_argument('--validate_etg_fraction', type=float)
+        stage1_group.add_argument('--validate_etg_save', type=str_to_bool)
 
         # Tokenizer parameters
         tokenizer_group = parser.add_argument_group('Tokenizer')

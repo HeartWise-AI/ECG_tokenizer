@@ -46,6 +46,7 @@ class SiglipSample:
     ecg_id: str
     targets: List[tuple[str, int, float]]
     split: str
+    report: str = ""
 
 
 class SiglipDataset(Dataset):
@@ -80,6 +81,17 @@ class SiglipDataset(Dataset):
 
         self.qa_positive_weight_multiplier = float(qa_positive_weight_multiplier) if qa_positive_weight_multiplier else 1.0
 
+        report_lookup: Dict[str, str] = {}
+        for candidate in ("diagnosis", "report", "original_report"):
+            if candidate in mapping_df.columns:
+                subset = mapping_df[["ecg_id", candidate]].dropna(subset=[candidate])
+                if subset.empty:
+                    continue
+                subset = subset.astype({candidate: str})
+                subset = subset.drop_duplicates(subset=["ecg_id"], keep="first")
+                report_lookup = dict(zip(subset["ecg_id"], subset[candidate]))
+                break
+
         grouped = mapping_df.groupby("ecg_id")
         self.samples: List[SiglipSample] = []
         for ecg_id, group in grouped:
@@ -96,7 +108,14 @@ class SiglipDataset(Dataset):
                 if label > 0 and text_id.startswith("QA_"):
                     weight *= self.qa_positive_weight_multiplier
                 adjusted_entries.append((text_id, label, weight))
-            self.samples.append(SiglipSample(ecg_id=ecg_id, targets=adjusted_entries, split=str(ecg_split)))
+            self.samples.append(
+                SiglipSample(
+                    ecg_id=ecg_id,
+                    targets=adjusted_entries,
+                    split=str(ecg_split),
+                    report=report_lookup.get(ecg_id, ""),
+                )
+            )
 
         if shuffle:
             rng = np.random.default_rng(shuffle_seed)
@@ -135,6 +154,7 @@ class SiglipDataset(Dataset):
             "ecg_id": sample.ecg_id,
             "targets": sample.targets,
             "split": sample.split,
+            "report": sample.report,
         }
 
 
@@ -242,10 +262,12 @@ class SiglipBatchCollatorInfoNCE:
         positives: List[List[str]] = []
         positive_weights: List[List[float]] = []
         required_negs: List[List[str]] = []
+        reports: List[str] = []
 
         for item in batch:
             signals.append(torch.from_numpy(item["signal"]))
             ecg_ids.append(item.get("ecg_id", ""))
+            reports.append(item.get("report", ""))
 
             triples = self._extract_item_targets(item)
             pos_ids: List[str] = []
@@ -342,6 +364,7 @@ class SiglipBatchCollatorInfoNCE:
             "text_ids": candidate_ids,
             "labels": labels,
             "weights": weights,
+            "reports": reports,
         }
 
 

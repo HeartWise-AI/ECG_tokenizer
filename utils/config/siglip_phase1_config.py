@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
@@ -13,7 +14,6 @@ class SiglipPhase1Config(HeartWiseConfig):
     runner_name: str
     bridge_name: str
     pretrained_encoder_checkpoint: str
-    medgemma_model_name: str
     text_bank_csv: str
     mapping_csv: str
     mapping_split: str
@@ -32,7 +32,7 @@ class SiglipPhase1Config(HeartWiseConfig):
     num_epochs: int
     gradient_accumulation_steps: int
 
-    optimizer: str
+    optimizer: str | dict[str, Any]
     lr: float
     weight_decay: float
 
@@ -56,6 +56,21 @@ class SiglipPhase1Config(HeartWiseConfig):
     bridge_num_special_tokens: int = 0
     num_codebooks_kept: int | None = None
     codebook_offset: int = 0
+    bridge_bias_last_codebook: float = 0.5
+    bridge_codebook_dropout: float = 0.0
+    num_query_tokens: int | None = None
+    lm_loss_weight: float = 1.0
+    siglip_loss_weight: float = 0.5
+    ce_max_length: int = 512
+    ce_report_probability: float = 0.6
+    ce_max_samples_per_batch: int = 64
+    lm_weight_warmup_steps: int = 0
+    ce_scale_cap: float = 0.0
+    component_lr_scales: dict[str, float] | None = None
+
+    llm_unfreeze_last_n_layers: int | None = None
+    llm_unfreeze_additional_param_patterns: list[str] | None = None
+    llm_unfreeze_lm_head: bool = False
 
     implicit_negatives_per_batch: int = 128
     implicit_negatives_per_row: int | None = None
@@ -94,6 +109,15 @@ class SiglipPhase1Config(HeartWiseConfig):
     tail_class_ids: list[str] | None = None
     tail_include_regex: list[str] | None = None
     tail_exclude_regex: list[str] | None = None
+    system_prompts: dict[str, str] | None = None
+
+    # Standardized: prefer text_encoder_model_name; keep medgemma_model_name for backward compatibility
+    text_encoder_model_name: str | None = None
+    medgemma_model_name: str | None = None
+
+    # Logging of generated token IDs (validation analysis)
+    log_generated_token_ids: bool = False
+    generated_token_sample_k: int = 50
 
     # Backwards compatibility alias for older configs using `model_name`
     @property

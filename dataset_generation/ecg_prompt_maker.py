@@ -173,12 +173,13 @@ class ECGPromptMaker:
         }
         
         # JSON interpretation prompts
+        # Make schema explicit so the model knows expected keys
         self.json_prompts = [
-            "Output as JSON only following the schema for ECG findings",
-            "Provide structured JSON output for this ECG analysis",
-            "Return ECG findings as JSON with binary indicators",
-            "Generate JSON representation of ECG abnormalities",
-            "Output ECG interpretation in JSON format only"
+            "Output JSON ONLY with keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification. Values must be lists of present findings (omit missing categories).",
+            "Provide structured JSON output for this ECG analysis using keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
+            "Return ECG findings as JSON with keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
+            "Generate JSON representation of ECG abnormalities. Keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
+            "Output ECG interpretation in JSON format only (keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification)."
         ]
         
         # ECG interval prompts (heart rate and intervals combined)
@@ -222,10 +223,10 @@ class ECGPromptMaker:
         
         # ACS severity prompts (MHI only - using acs_condition_severity)
         self.acs_severity_prompts = [
-            "Is there an acute coronary occlusion, and if so is it complete or incomplete?",
-            "Does this patient have an acute complete or incomplete coronary artery occlusion?",
-            "Is there evidence of an acute coronary occlusion (complete vs incomplete)?",
-            "Is this an acute coronary occlusion? Specify whether it is complete or incomplete."
+            "IS there an acute coornary occlusion/ if yes is it complete or incomplete and what is the culprit?",
+            "Does this patient have an acute coronary occlusion? If present, specify whether it is complete or incomplete and identify the culprit artery.",
+            "Is there evidence of an acute coronary occlusion? Please state the completeness and the likely culprit artery.",
+            "Is this an acute coronary occlusion? If yes, indicate whether it is complete or incomplete and name the culprit artery."
         ]
         
         # Culprit artery prompts (MHI only - follow-up when acute occlusion present)
@@ -520,14 +521,15 @@ class ECGPromptMaker:
         Returns list of (prompt, category, weight) tuples.
         """
         prompts = []
-        
-        # PRIORITY: If this ECG is marked for special questions AND we're limited to 1 prompt
-        # Then ONLY generate the special question
-        if 'has_special_question' in row.index and row.get('has_special_question') == True:
-            special_q = self._generate_special_question_for_ecg(row)
-            if special_q:
-                # When limited to 1 prompt per ECG, return ONLY the special question
-                return [special_q]
+        special_prompt = None
+
+        if 'has_special_question' in row.index and bool(row.get('has_special_question')):
+            special_prompt = self._generate_special_question_for_ecg(row)
+            if special_prompt:
+                prompts.append(special_prompt)
+
+        def prompt_exists(category: str) -> bool:
+            return any(existing[1] == category for existing in prompts)
         
         # Get ECG characteristics
         ecg_type = row.get('ecg_type', 'unknown')
@@ -656,11 +658,9 @@ class ECGPromptMaker:
             elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
                 is_mhi = True  # This column is MHI-specific
             
-            if is_mhi:
-                # Add with 5% probability to achieve ~5% overall
-                if random.random() < 0.05:
-                    shd_prompt = random.choice(self.structural_heart_disease_prompts)
-                    prompts.append((shd_prompt, 'structural_heart_disease', 0.95))
+            if is_mhi and not prompt_exists('structural_heart_disease'):
+                shd_prompt = random.choice(self.structural_heart_disease_prompts)
+                prompts.append((shd_prompt, 'structural_heart_disease', 0.99))
         
         # 8. Add LVEF questions for MHI dataset (if deepecho_Visually_Estimated_EF is present)
         if 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')):
@@ -673,11 +673,9 @@ class ECGPromptMaker:
             elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
                 is_mhi = True
             
-            if is_mhi:
-                # Add with 2% probability
-                if random.random() < 0.02:
-                    lvef_prompt = random.choice(self.lvef_prompts)
-                    prompts.append((lvef_prompt, 'lvef', 0.95))
+            if is_mhi and not prompt_exists('lvef'):
+                lvef_prompt = random.choice(self.lvef_prompts)
+                prompts.append((lvef_prompt, 'lvef', 0.97))
         
         # 9. Add ACS questions for MHI dataset (if acs_condition_severity is present)
         if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
@@ -690,23 +688,21 @@ class ECGPromptMaker:
             elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
                 is_mhi = True
             
-            if is_mhi:
-                # Add with 10% probability to achieve ~5% overall (since many ECGs have ACS data)
-                if random.random() < 0.10:
-                    acs_prompt = random.choice(self.acs_severity_prompts)
-                    prompts.append((acs_prompt, 'acs_severity', 0.98))  # High priority for acute conditions
-                    
-                    # Check if it's an acute occlusion to add culprit artery question
-                    from utils.constants import ACS_ACUTE_CONDITIONS
-                    acs_condition = row.get('acs_condition_severity')
-                    
-                    # If it's an acute occlusion and we have PCI regions data, add culprit artery question
-                    if (acs_condition in ACS_ACUTE_CONDITIONS and 
-                        'acs_pci_regions' in row.index and 
-                        pd.notna(row.get('acs_pci_regions'))):
-                        # Add culprit artery follow-up question
-                        culprit_prompt = random.choice(self.culprit_artery_prompts)
-                        prompts.append((culprit_prompt, 'culprit_artery', 0.97))
+            if is_mhi and not prompt_exists('acs_severity'):
+                acs_prompt = random.choice(self.acs_severity_prompts)
+                prompts.append((acs_prompt, 'acs_severity', 0.98))  # High priority for acute conditions
+                
+                # Check if it's an acute occlusion to add culprit artery question
+                from utils.constants import ACS_ACUTE_CONDITIONS
+                acs_condition = row.get('acs_condition_severity')
+                
+                # If it's an acute occlusion and we have PCI regions data, add culprit artery question
+                if (acs_condition in ACS_ACUTE_CONDITIONS and 
+                    'acs_pci_regions' in row.index and 
+                    pd.notna(row.get('acs_pci_regions')) and
+                    not prompt_exists('culprit_artery')):
+                    culprit_prompt = random.choice(self.culprit_artery_prompts)
+                    prompts.append((culprit_prompt, 'culprit_artery', 0.96))
         
         # 10. Add AFib risk questions for MHI dataset (if afib_label_2y and afib_label_5y are present)
         if ('afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and
@@ -720,11 +716,9 @@ class ECGPromptMaker:
             elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
                 is_mhi = True
             
-            if is_mhi:
-                # Add with 2.5% probability to achieve max 5% overall (since AFib data is very common)
-                if random.random() < 0.025:
-                    afib_risk_prompt = random.choice(self.afib_risk_prompts)
-                    prompts.append((afib_risk_prompt, 'afib_risk', 0.95))
+            if is_mhi and not prompt_exists('afib_risk'):
+                afib_risk_prompt = random.choice(self.afib_risk_prompts)
+                prompts.append((afib_risk_prompt, 'afib_risk', 0.96))
         
         return prompts
     
@@ -773,6 +767,39 @@ class ECGPromptMaker:
                 else:
                     new_row['expected_output_type'] = 'general'
                 
+                # If this is the generic "key findings" prompt, populate a dataset-specific answer
+                try:
+                    if isinstance(prompt_text, str) and prompt_text.strip().lower() == "what are the key findings in this electrocardiogram?":
+                        # Detect dataset (MHI vs MIMIC) from row metadata/columns
+                        is_mhi = False
+                        if 'dataset' in row.index and str(row.get('dataset')).lower() == 'mhi':
+                            is_mhi = True
+                        elif 'dataset_source' in row.index and str(row.get('dataset_source')).lower() == 'mhi':
+                            is_mhi = True
+                        elif 'translated_diagnosis' in row.index:
+                            is_mhi = True
+
+                        answer_val = None
+                        if is_mhi:
+                            answer_val = row.get('translated_diagnosis')
+                        else:
+                            # Default to MIMIC diagnosis if present
+                            answer_val = row.get('diagnosis')
+
+                        # Fallbacks if missing/NaN
+                        if answer_val is None or (hasattr(pd, 'isna') and pd.isna(answer_val)) or str(answer_val).strip() == "":
+                            # Try any existing free text report columns
+                            for alt_col in ('generated_answer', 'report', 'free_text_report', 'final_report'):
+                                if alt_col in row.index and not (hasattr(pd, 'isna') and pd.isna(row.get(alt_col))):
+                                    answer_val = row.get(alt_col)
+                                    if answer_val is not None and str(answer_val).strip() != "":
+                                        break
+
+                        if answer_val is not None and str(answer_val).strip() != "":
+                            new_row['generated_answer'] = str(answer_val).strip()
+                except Exception:
+                    pass
+
                 all_rows.append(new_row)
         
         # Create new dataframe

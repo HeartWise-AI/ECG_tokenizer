@@ -11,19 +11,40 @@ Each class is registered with MetricRegistry for consistent retrieval.
 """
 
 import warnings
+import os
+import sys
+import contextlib
 from typing import Dict, List, Tuple, Union, Optional
+import json as _json
+import re as _re
 import torch
 import numpy as np
 from transformers import PreTrainedTokenizerBase
 
 from utils.registry import MetricRegistry
+from utils.constants import DEEPECG_CATEGORIES, DEEPECG_DIAGNOSIS_TRANSLATION
+
+
+@contextlib.contextmanager
+def _suppress_stdout_stderr():
+    """Temporarily silence stdout/stderr (for noisy 3rd-party downloads)."""
+    saved_out, saved_err = sys.stdout, sys.stderr
+    try:
+        with open(os.devnull, 'w') as devnull:
+            sys.stdout = devnull  # type: ignore
+            sys.stderr = devnull  # type: ignore
+            yield
+    finally:
+        sys.stdout, sys.stderr = saved_out, saved_err
 
 
 def decode_assistant_only_text(
     tokenizer: PreTrainedTokenizerBase,
     generated: torch.Tensor,
     labels: torch.Tensor,
-    input_ids: Optional[torch.Tensor] = None
+    input_ids: Optional[torch.Tensor] = None,
+    prompt_input_ids: Optional[torch.Tensor] = None,
+    num_ecg_tokens: int = 0,
 ) -> Tuple[str, str]:
     """Decode assistant-only text for predictions and references.
 
@@ -31,11 +52,18 @@ def decode_assistant_only_text(
     Drops prompt tokens (where labels are -100) from both the generated output and
     the reference so that metrics focus on the assistant response.
     
+    IMPORTANT: When ECG tokens are injected after <start_of_image>, the generated
+    sequence is longer than the original prompt by num_ecg_tokens. This function
+    accounts for this by using prompt_input_ids length + num_ecg_tokens as the
+    offset to find where the generated answer starts.
+    
     Args:
         tokenizer: Tokenizer instance
-        generated: Generated token ids
-        labels: Label token ids with -100 for prompt tokens
-        input_ids: Original input token ids (optional, for better prompt trimming)
+        generated: Generated token ids (includes prompt with ECG + new generated tokens)
+        labels: Label token ids with -100 for prompt tokens (aligned with input_ids, NOT generated)
+        input_ids: Original input token ids (question + answer, optional)
+        prompt_input_ids: Question-only input ids used for generation (optional but recommended)
+        num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0).
     
     Returns:
         Tuple of (prediction_text, reference_text) with normalized whitespace
@@ -43,22 +71,34 @@ def decode_assistant_only_text(
     label_tensor = labels.detach().cpu()
     generated_tensor = generated.detach().cpu()
 
-    # Reference: drop -100s (prompt tokens)
+    # Reference: drop -100s (prompt tokens) - this is correct regardless of ECG injection
     ref_ids = label_tensor[label_tensor != -100].tolist()
 
-    # Prediction: trim prompt if we know its exact length
+    # Prediction: find where the generated answer starts
     gen_ids = generated_tensor.tolist()
     
-    if input_ids is not None:
-        # Use exact prompt length when available
-        prompt_len = int(input_ids.shape[-1])
+    # Best case: we know the prompt length used for generation + ECG tokens
+    if prompt_input_ids is not None:
+        prompt_len = int(prompt_input_ids.shape[-1]) + int(num_ecg_tokens)
         if len(gen_ids) >= prompt_len:
             gen_ids = gen_ids[prompt_len:]
+    elif input_ids is not None:
+        # Fallback: use input_ids but this may be wrong if it's question+answer
+        # We need to find where the answer starts in labels and use that offset
+        label_list = label_tensor.tolist()
+        first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
+        # Adjust for ECG tokens that were injected
+        adjusted_idx = first_answer_idx + int(num_ecg_tokens)
+        if len(gen_ids) >= adjusted_idx:
+            gen_ids = gen_ids[adjusted_idx:]
     else:
-        # Fallback: find first non--100 index in labels
-        first_idx = next((i for i, t in enumerate(label_tensor.tolist()) if t != -100), 0)
-        if len(gen_ids) >= first_idx:
-            gen_ids = gen_ids[first_idx:]
+        # Last resort: use labels to find first non--100
+        label_list = label_tensor.tolist()
+        first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
+        # Adjust for ECG tokens
+        adjusted_idx = first_answer_idx + int(num_ecg_tokens)
+        if len(gen_ids) >= adjusted_idx:
+            gen_ids = gen_ids[adjusted_idx:]
 
     # Decode and normalize text (strip + collapse whitespace)
     pred = " ".join(tokenizer.decode(gen_ids, skip_special_tokens=True).strip().split())
@@ -219,7 +259,8 @@ class MeteorMetric:
         if MeteorMetric._metric is None:
             try:
                 from evaluate import load as load_metric
-                MeteorMetric._metric = load_metric("meteor")
+                with _suppress_stdout_stderr():
+                    MeteorMetric._metric = load_metric("meteor")
             except Exception as e:
                 warnings.warn(f"METEOR unavailable (likely missing nltk data): {e}. Returning 0.")
                 return {"meteor": 0.0, "predictions": [], "references": []}
@@ -234,7 +275,9 @@ class MeteorMetric:
             references.append(ref)
         
         try:
-            result = MeteorMetric._metric.compute(predictions=predictions, references=references)
+            # Suppress any NLTK downloader logs during compute
+            with _suppress_stdout_stderr():
+                result = MeteorMetric._metric.compute(predictions=predictions, references=references)
             meteor_score = float(result["meteor"])
         except Exception as e:
             warnings.warn(f"METEOR computation failed: {e}. Returning 0.")
@@ -334,6 +377,199 @@ class BertScoreMetric:
             "hf-f1": f1,
             "predictions": predictions,
             "references": references
+        }
+
+
+@MetricRegistry.register("json_parse_rate")
+class JsonParseRateMetric:
+    @staticmethod
+    def compute_score(
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+        tokenizer: PreTrainedTokenizerBase,
+        input_ids: Optional[torch.Tensor] = None
+    ) -> Dict[str, Union[float, List[str]]]:
+        parsed = 0
+        total = 0
+        predictions: List[str] = []
+        references: List[str] = []
+        for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
+            ii = input_ids[i] if input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            predictions.append(pred)
+            references.append(ref)
+            total += 1
+            ok = False
+            try:
+                _json.loads(pred)
+                ok = True
+            except Exception:
+                # Try trimming to bracketed JSON
+                try:
+                    start_obj = pred.find('{')
+                    end_obj = pred.rfind('}')
+                    start_arr = pred.find('[')
+                    end_arr = pred.rfind(']')
+                    cand = None
+                    if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+                        cand = pred[start_obj:end_obj + 1]
+                    elif start_arr != -1 and end_arr != -1 and end_arr > start_arr:
+                        cand = pred[start_arr:end_arr + 1]
+                    if cand is not None:
+                        _json.loads(cand)
+                        ok = True
+                except Exception:
+                    ok = False
+            if ok:
+                parsed += 1
+        rate = float(parsed) / float(max(1, total))
+        return {
+            "json_parse_rate": rate,
+            "predictions": predictions,
+            "references": references,
+        }
+
+
+@MetricRegistry.register("structured_f1")
+class StructuredSlotF1Metric:
+    """
+    Slot-level (micro) precision/recall/F1 for structured JSON fields.
+    Expects categories similar to DEEPECG_CATEGORIES keys. Applies translation
+    normalization from DEEPECG_DIAGNOSIS_TRANSLATION.
+    """
+
+    @staticmethod
+    def _build_translation_map() -> Dict[str, str]:
+        tr_map: Dict[str, str] = {}
+        try:
+            entries = DEEPECG_DIAGNOSIS_TRANSLATION.get('deepecg', [])
+            for item in entries:
+                name = str(item.get('column_name', '')).strip().lower()
+                trans = str(item.get('translation_en', name)).strip().lower()
+                if name:
+                    tr_map[name] = trans
+        except Exception:
+            pass
+        # Common aliases
+        tr_map.setdefault('sinusal', 'sinus rhythm')
+        tr_map.setdefault('afib', 'atrial fibrillation')
+        tr_map.setdefault('stemi', 'acute mi')
+        return tr_map
+
+    @staticmethod
+    def _normalize_label(label: str, tr_map: Dict[str, str]) -> str:
+        s = (label or '').strip().lower()
+        s = _re.sub(r"[\s\-_/]+", " ", s)
+        s = s.replace("’", "'").replace("`", "'")
+        if s in tr_map:
+            return tr_map[s]
+        return s
+
+    @staticmethod
+    def _collect_items(obj: Union[dict, list, str, int, float], tr_map: Dict[str, str]) -> List[str]:
+        items: List[str] = []
+        if isinstance(obj, dict):
+            for _, v in obj.items():
+                items.extend(StructuredSlotF1Metric._collect_items(v, tr_map))
+        elif isinstance(obj, list):
+            for v in obj:
+                items.extend(StructuredSlotF1Metric._collect_items(v, tr_map))
+        elif isinstance(obj, (str, int, float)):
+            s = str(obj)
+            # Split comma-separated lists cautiously
+            parts = [p.strip() for p in s.split(',') if p.strip()]
+            if not parts:
+                parts = [s.strip()]
+            for p in parts:
+                if p:
+                    items.append(StructuredSlotF1Metric._normalize_label(p, tr_map))
+        return items
+
+    @staticmethod
+    def _unify_keys(k: str) -> str:
+        key = (k or '').strip().upper()
+        key = key.replace('INFARCT_ISCHEMIA', 'INFARCT, ISCHEMIA')
+        key = key.replace('ISCHEMIA', 'INFARCT, ISCHEMIA') if 'INFARCT' in key else key
+        return key
+
+    @staticmethod
+    def _extract_slots(json_obj: dict, tr_map: Dict[str, str]) -> List[str]:
+        all_items: List[str] = []
+        try:
+            for k, v in json_obj.items():
+                key = StructuredSlotF1Metric._unify_keys(k)
+                if key in DEEPECG_CATEGORIES:
+                    all_items.extend(StructuredSlotF1Metric._collect_items(v, tr_map))
+        except Exception:
+            pass
+        # Deduplicate
+        seen: set[str] = set()
+        out: List[str] = []
+        for it in all_items:
+            if it and it not in seen:
+                seen.add(it)
+                out.append(it)
+        return out
+
+    @staticmethod
+    def _try_load_json(text: str) -> Optional[dict]:
+        if not text:
+            return None
+        try:
+            obj = _json.loads(text)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            # Try to trim to bracketed JSON
+            start_obj = text.find('{')
+            end_obj = text.rfind('}')
+            if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+                try:
+                    obj = _json.loads(text[start_obj:end_obj + 1])
+                    return obj if isinstance(obj, dict) else None
+                except Exception:
+                    return None
+            return None
+
+    @staticmethod
+    def compute_score(
+        generated_ids: torch.Tensor,
+        labels: torch.Tensor,
+        tokenizer: PreTrainedTokenizerBase,
+        input_ids: Optional[torch.Tensor] = None
+    ) -> Dict[str, Union[float, List[str]]]:
+        tr_map = StructuredSlotF1Metric._build_translation_map()
+        tp = 0
+        fp = 0
+        fn = 0
+        predictions_out: List[str] = []
+        references_out: List[str] = []
+
+        for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
+            ii = input_ids[i] if input_ids is not None else None
+            pred_text, ref_text = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            predictions_out.append(pred_text)
+            references_out.append(ref_text)
+            pred_obj = StructuredSlotF1Metric._try_load_json(pred_text)
+            ref_obj = StructuredSlotF1Metric._try_load_json(ref_text)
+            if pred_obj is None or ref_obj is None:
+                # If either side isn't structured, skip this sample for F1
+                continue
+            pred_items = set(StructuredSlotF1Metric._extract_slots(pred_obj, tr_map))
+            ref_items = set(StructuredSlotF1Metric._extract_slots(ref_obj, tr_map))
+            tp += len(pred_items & ref_items)
+            fp += len(pred_items - ref_items)
+            fn += len(ref_items - pred_items)
+
+        precision = float(tp) / float(tp + fp) if (tp + fp) > 0 else 0.0
+        recall = float(tp) / float(tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+
+        return {
+            "structured_precision": precision,
+            "structured_recall": recall,
+            "structured_f1": f1,
+            "predictions": predictions_out,
+            "references": references_out,
         }
 
 

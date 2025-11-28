@@ -3,7 +3,7 @@
 import math
 import re
 import warnings
-from typing import Callable, List, Optional, Tuple, Union, cast
+from typing import Callable, Dict, List, Optional, Tuple, Union, cast, Literal, Sequence, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -12,10 +12,15 @@ import torch.nn.functional as F
 from utils.registry import ModelRegistry
 from utils.enums import BridgeName
 
+if TYPE_CHECKING:
+    from transformers.models.bert.modeling_bert import BertLayer
+
 __all__ = [
     "ECGCodeBridge",
     "ECGProjectionBridge",
     "PerceiverProjectionBridge",
+    "ECGQFormerBridge",
+    "ECGQFormerBridgeStage1",
     "LinearBridge",
     "EmbeddingBridge",
     "SimpleEmbeddingBridge",
@@ -25,6 +30,7 @@ __all__ = [
     "CrossModalSequenceTokenBridge",
     "CrossAttentionLayer",
     "calibrate_bridge_scale",
+    "InstructionAwareECGQFormerBridge",
 ]
 
 
@@ -507,6 +513,1033 @@ class ECGCodeBridge(nn.Module):
         return out
 
 
+@ModelRegistry.register(BridgeName.LLAMA32_ECG_QFORMER_BRIDGE)
+@ModelRegistry.register("ECGQFormerBridge")
+class ECGQFormerBridge(nn.Module):
+    """BLIP-2 style Q-Former bridge that resamples discrete ECG codes for LLM conditioning.
+
+    The bridge consumes residual VQ code indices (up to 8 codebooks by default), mixes them
+    dynamically per time-step, and produces both:
+      • Prefix tokens projected into the LLM embedding space (shape [B, K, d_llm])
+      • A pooled ECG embedding suited for SigLIP-style contrastive losses (shape [B, d_txt])
+    """
+
+    uses_codes: bool = True
+
+    def __init__(
+        self,
+        vocab_size: int,
+        num_codebooks: int,
+        d_mid: int,
+        d_llm: int,
+        d_txt: int,
+        num_steps: int = 128,
+        num_query_tokens: int = 32,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+        num_special_tokens: int = 4,
+        bias_last_codebook: float = 0.5,
+        codebook_dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+
+        if d_mid % num_heads != 0:
+            raise ValueError(f"d_mid ({d_mid}) must be divisible by num_heads ({num_heads}).")
+        if num_codebooks <= 0:
+            raise ValueError("num_codebooks must be positive for ECGQFormerBridge.")
+
+        self.vocab_size = int(vocab_size)
+        self.pad_id = int(vocab_size)
+        self.num_codebooks = int(num_codebooks)
+        self.num_steps = int(num_steps)
+        self.num_query_tokens = int(num_query_tokens)
+        self.bias_last_codebook = float(bias_last_codebook)
+        self.codebook_dropout = float(codebook_dropout)
+
+        total_vocab = self.vocab_size + max(1, int(num_special_tokens))
+        self.embed_tables = nn.ModuleList([
+            nn.Embedding(total_vocab, d_mid)
+            for _ in range(self.num_codebooks)
+        ])
+
+        self.input_norm = nn.RMSNorm(d_mid)
+        self.mix_gate = nn.Sequential(
+            nn.Linear(self.num_codebooks * d_mid, d_mid),
+            nn.GELU(),
+            nn.Linear(d_mid, self.num_codebooks),
+        )
+
+        self.register_buffer("time_pe_cache", torch.empty(0), persistent=False)
+
+        query_init = torch.randn(self.num_query_tokens, d_mid) * (1.0 / math.sqrt(d_mid))
+        self.queries = nn.Parameter(query_init)
+
+        self.blocks = nn.ModuleList([
+            _QFormerBlock(
+                d_mid=d_mid,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
+            for _ in range(int(num_layers))
+        ])
+
+        self.to_llm = nn.Linear(d_mid, d_llm)
+        self.norm_out = nn.RMSNorm(d_llm)
+        self.output_scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+
+        self.pool_norm = nn.RMSNorm(d_mid)
+        self.pool_gate = nn.Linear(d_mid, d_mid)
+        self.to_txt = nn.Linear(d_mid, d_txt)
+
+        self.dropout = nn.Dropout(dropout if dropout and dropout > 0 else 0.0)
+
+    @property
+    def num_tokens(self) -> int:
+        return self.num_query_tokens
+
+    def _prepare_ids(self, ecg_ids: torch.Tensor) -> torch.Tensor:
+        if ecg_ids.dim() == 2:
+            ecg_ids = ecg_ids.unsqueeze(-1)
+        elif ecg_ids.dim() != 3:
+            raise ValueError(f"ECG ids must be 2D or 3D, got {ecg_ids.shape}.")
+
+        batch, seq_len, depth = ecg_ids.shape
+        if depth > self.num_codebooks:
+            ecg_ids = ecg_ids[..., -self.num_codebooks:]
+        elif depth < self.num_codebooks:
+            pad = torch.full(
+                (batch, seq_len, self.num_codebooks - depth),
+                self.pad_id,
+                dtype=ecg_ids.dtype,
+                device=ecg_ids.device,
+            )
+            ecg_ids = torch.cat([ecg_ids, pad], dim=-1)
+        return ecg_ids
+
+    def _time_pe(self, length: int, dim: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if self.time_pe_cache.numel() == 0 or self.time_pe_cache.size(0) < length or self.time_pe_cache.size(1) != dim:
+            positions = torch.arange(length, device=device).unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, dim, 2, device=device, dtype=torch.float32)
+                * (-math.log(10000.0) / dim)
+            )
+            pe = torch.zeros(length, dim, device=device, dtype=torch.float32)
+            pe[:, 0::2] = torch.sin(positions * div_term)
+            pe[:, 1::2] = torch.cos(positions * div_term)
+            self.time_pe_cache = pe
+        return self.time_pe_cache[:length].to(device=device, dtype=dtype)
+
+    def forward(
+        self,
+        ecg_ids: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if ecg_ids.dtype != torch.long:
+            ecg_ids = ecg_ids.long()
+
+        ecg_ids = self._prepare_ids(ecg_ids)
+        batch_size, seq_len, _ = ecg_ids.shape
+
+        original_ids = ecg_ids
+        ids = ecg_ids.clamp_min(0)
+        valid_levels = original_ids >= 0
+        if self.pad_id is not None:
+            valid_levels = valid_levels & (original_ids != self.pad_id)
+
+        embeddings: List[torch.Tensor] = []
+        for level, table in enumerate(self.embed_tables):
+            level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
+            level_embed = table(level_ids)
+            embeddings.append(level_embed)
+        x_stack = torch.stack(embeddings, dim=2)  # [B, L, num_codebooks, d_mid]
+
+        time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
+        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
+
+        level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
+        x_stack = x_stack * level_mask
+
+        gate_input = x_stack.reshape(batch_size, seq_len, -1)
+        gate_logits = self.mix_gate(gate_input)
+
+        if self.bias_last_codebook:
+            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
+
+        if self.training and self.codebook_dropout > 0.0:
+            drop_prob = torch.rand_like(gate_logits) < self.codebook_dropout
+            drop_prob = drop_prob & valid_levels
+            gate_logits = gate_logits.masked_fill(drop_prob, -1e4)
+
+        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
+        gate_logits = gate_logits + mask_logits
+
+        weights = gate_logits.softmax(dim=-1)
+        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
+
+        valid_positions = valid_levels.any(dim=-1)
+        mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
+        mixed = self.input_norm(mixed)
+        mixed = self.dropout(mixed)
+
+        if attn_mask is not None:
+            if attn_mask.dim() > 2:
+                raise ValueError("attn_mask for ECGQFormerBridge must be [batch, seq].")
+            attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)
+            valid_positions = valid_positions & attn_mask_bool
+
+        key_padding_mask = ~valid_positions
+
+        queries = self.queries.unsqueeze(0).expand(batch_size, -1, -1)
+        queries = queries.to(device=mixed.device, dtype=mixed.dtype)
+
+        for block in self.blocks:
+            queries = block(queries, mixed, key_padding_mask=key_padding_mask)
+
+        prefix = self.to_llm(queries)
+        prefix = self.norm_out(prefix)
+        prefix = prefix * self.output_scale
+
+        pooled = self.pool_norm(queries)
+        gate = torch.sigmoid(self.pool_gate(pooled))
+        gated = gate * pooled
+        ecg_vec = self.to_txt(gated.mean(dim=1))
+        ecg_vec = F.normalize(ecg_vec, p=2, dim=-1, eps=1e-6)
+
+        return prefix, ecg_vec
+
+
+class _QFormerBlock(nn.Module):
+    """Transformer block that mirrors BLIP-2 Q-Former behaviour."""
+
+    def __init__(self, d_mid: int, num_heads: int, dropout: float) -> None:
+        super().__init__()
+        self.self_norm = nn.RMSNorm(d_mid)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=d_mid,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.cross_norm_q = nn.RMSNorm(d_mid)
+        self.cross_norm_kv = nn.RMSNorm(d_mid)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_mid,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.ffn_norm = nn.RMSNorm(d_mid)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_mid, d_mid * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_mid * 4, d_mid),
+            nn.Dropout(dropout),
+        )
+        self.dropout = nn.Dropout(dropout if dropout and dropout > 0 else 0.0)
+
+    def forward(
+        self,
+        queries: torch.Tensor,
+        kv: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        residual = queries
+        q_norm = self.self_norm(queries)
+        self_out, _ = self.self_attn(q_norm, q_norm, q_norm, need_weights=False)
+        queries = residual + self.dropout(self_out)
+
+        residual = queries
+        q_norm = self.cross_norm_q(queries)
+        kv_norm = self.cross_norm_kv(kv)
+        cross_out, _ = self.cross_attn(
+            q_norm,
+            kv_norm,
+            kv_norm,
+            need_weights=False,
+            key_padding_mask=key_padding_mask,
+        )
+        queries = residual + self.dropout(cross_out)
+
+        residual = queries
+        ffn_out = self.ffn(self.ffn_norm(queries))
+        queries = residual + ffn_out
+        return queries
+
+
+Stage1Mode = Literal["ETC", "ETM", "ETG"]
+
+
+class _Stage1Block(nn.Module):
+    """Shared self-attention over [queries || text] with optional cross-attn into ECG memory."""
+
+    def __init__(
+        self,
+        d_mid: int,
+        num_heads: int,
+        dropout: float,
+        *,
+        do_cross: bool,
+        bert_layer: Optional["BertLayer"] = None,
+    ) -> None:
+        super().__init__()
+        self.do_cross = bool(do_cross)
+
+        self.self_norm = nn.RMSNorm(d_mid)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=d_mid,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+        self.cross_norm_q = nn.RMSNorm(d_mid)
+        self.cross_norm_kv = nn.RMSNorm(d_mid)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_mid,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+        self.ffn_norm = nn.RMSNorm(d_mid)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_mid, d_mid * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_mid * 4, d_mid),
+            nn.Dropout(dropout),
+        )
+        self.dropout = nn.Dropout(dropout if dropout and dropout > 0 else 0.0)
+
+        if bert_layer is not None:
+            self._init_from_bert_layer(bert_layer)
+
+    def _init_from_bert_layer(self, bert_layer: "BertLayer") -> None:
+        self_attention = bert_layer.attention.self
+        self_output = bert_layer.attention.output
+        intermediate = bert_layer.intermediate
+        output = bert_layer.output
+
+        hidden_size = self_attention.query.weight.size(0)
+        if hidden_size != self.self_attn.embed_dim:
+            raise ValueError(
+                "BERT layer hidden size does not match Q-Former hidden size: "
+                f"{hidden_size} vs {self.self_attn.embed_dim}"
+            )
+
+        with torch.no_grad():
+            self.self_attn.in_proj_weight.copy_(
+                torch.cat(
+                    [self_attention.query.weight, self_attention.key.weight, self_attention.value.weight],
+                    dim=0,
+                )
+            )
+            self.self_attn.in_proj_bias.copy_(
+                torch.cat(
+                    [self_attention.query.bias, self_attention.key.bias, self_attention.value.bias],
+                    dim=0,
+                )
+            )
+            self.self_attn.out_proj.weight.copy_(self_output.dense.weight)
+            self.self_attn.out_proj.bias.copy_(self_output.dense.bias)
+
+            attn_norm = getattr(self_output, "LayerNorm", None)
+            if attn_norm is None:
+                attn_norm = getattr(self_attention, "layer_norm", None)
+            if attn_norm is not None and hasattr(attn_norm, "weight"):
+                self.self_norm.weight.copy_(attn_norm.weight)
+
+            self.ffn[0].weight.copy_(intermediate.dense.weight)
+            self.ffn[0].bias.copy_(intermediate.dense.bias)
+            self.ffn[-2].weight.copy_(output.dense.weight)
+            self.ffn[-2].bias.copy_(output.dense.bias)
+
+            ffn_norm = getattr(output, "LayerNorm", None)
+            if ffn_norm is not None and hasattr(ffn_norm, "weight"):
+                self.ffn_norm.weight.copy_(ffn_norm.weight)
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        kv: torch.Tensor,
+        *,
+        query_len: int,
+        self_attn_mask: Optional[torch.Tensor],
+        self_key_pad: Optional[torch.Tensor],
+        kv_key_pad: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        residual = tokens
+        norm_tokens = self.self_norm(tokens)
+        self_out, _ = self.self_attn(
+            norm_tokens,
+            norm_tokens,
+            norm_tokens,
+            attn_mask=self_attn_mask,
+            key_padding_mask=self_key_pad,
+            need_weights=False,
+        )
+        tokens = residual + self.dropout(self_out)
+
+        if self.do_cross and query_len > 0:
+            q_tokens = tokens[:, :query_len, :]
+            residual_q = q_tokens
+            q_norm = self.cross_norm_q(q_tokens)
+            kv_norm = self.cross_norm_kv(kv)
+            cross_out, _ = self.cross_attn(
+                q_norm,
+                kv_norm,
+                kv_norm,
+                key_padding_mask=kv_key_pad,
+                need_weights=False,
+            )
+            q_tokens = residual_q + self.dropout(cross_out)
+            tokens = torch.cat([q_tokens, tokens[:, query_len:, :]], dim=1)
+
+        residual = tokens
+        ffn_out = self.ffn(self.ffn_norm(tokens))
+        tokens = residual + ffn_out
+        return tokens
+
+
+@ModelRegistry.register("ECGQFormerBridgeStage1")
+class ECGQFormerBridgeStage1(ECGQFormerBridge):
+    """Extends ECGQFormerBridge with BLIP-2 style Stage-1 ECG↔text objectives."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        num_codebooks: int,
+        d_mid: int,
+        d_llm: int,
+        d_txt: int,
+        num_steps: int = 128,
+        num_query_tokens: int = 32,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+        num_special_tokens: int = 4,
+        bias_last_codebook: float = 0.5,
+        codebook_dropout: float = 0.0,
+        *,
+        txt_vocab_size: int,
+        txt_pad_id: int,
+        txt_cls_id: Optional[int] = None,
+        cross_every: int = 2,
+        bert_layers: Optional[Sequence["BertLayer"]] = None,
+    ) -> None:
+        if txt_vocab_size <= 0:
+            raise ValueError("txt_vocab_size must be positive for ECGQFormerBridgeStage1.")
+        if cross_every <= 0:
+            raise ValueError("cross_every must be >= 1 for ECGQFormerBridgeStage1.")
+
+        super().__init__(
+            vocab_size=vocab_size,
+            num_codebooks=num_codebooks,
+            d_mid=d_mid,
+            d_llm=d_llm,
+            d_txt=d_txt,
+            num_steps=num_steps,
+            num_query_tokens=num_query_tokens,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            dropout=dropout,
+            num_special_tokens=num_special_tokens,
+            bias_last_codebook=bias_last_codebook,
+            codebook_dropout=codebook_dropout,
+        )
+
+        self.txt_pad_id = int(txt_pad_id)
+        self.txt_cls_id = int(txt_cls_id) if txt_cls_id is not None else None
+        self.stage1_cross_every = int(cross_every)
+
+        self.txt_embed = nn.Embedding(txt_vocab_size, d_mid, padding_idx=self.txt_pad_id)
+        self.lm_head = nn.Linear(d_mid, txt_vocab_size, bias=False)
+        self.lm_head.weight = self.txt_embed.weight
+
+        bert_layer_list: Optional[Sequence["BertLayer"]] = None
+        if bert_layers is not None:
+            bert_layer_list = list(bert_layers)
+            if not bert_layer_list:
+                bert_layer_list = None
+            else:
+                bert_hidden = bert_layer_list[0].attention.self.query.weight.size(0)
+                if bert_hidden != d_mid:
+                    raise ValueError(
+                        "Text encoder layer hidden size does not match bridge hidden size: "
+                        f"{bert_hidden} vs {d_mid}."
+                    )
+
+        stage1_blocks: List[_Stage1Block] = []
+        for i in range(int(num_layers)):
+            bert_layer_ref = None
+            if bert_layer_list is not None and i < len(bert_layer_list):
+                bert_layer_ref = bert_layer_list[i]
+            stage1_blocks.append(
+                _Stage1Block(
+                    d_mid=d_mid,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    do_cross=(i % self.stage1_cross_every == 0),
+                    bert_layer=bert_layer_ref,
+                )
+            )
+        self.stage1_blocks = nn.ModuleList(stage1_blocks)
+
+        self.txt_pool_norm = nn.RMSNorm(d_mid)
+        self.itm_head = nn.Linear(d_mid, 2)
+        self.log_tau = nn.Parameter(torch.tensor(math.log(0.07), dtype=torch.float32))
+
+    def temperature(self) -> torch.Tensor:
+        return self.log_tau.exp()
+
+    def _build_self_attn_mask(self, mode: Stage1Mode, query_len: int, text_len: int, *, device, dtype) -> Optional[torch.Tensor]:
+        if text_len == 0:
+            return None
+
+        total = query_len + text_len
+        mask = torch.zeros((total, total), device=device, dtype=torch.bool)
+
+        if mode == "ETC":
+            if query_len > 0 and text_len > 0:
+                mask[:query_len, query_len:] = True
+                mask[query_len:, :query_len] = True
+            return mask
+
+        if mode == "ETM":
+            return None
+
+        if mode == "ETG":
+            if query_len > 0 and text_len > 0:
+                mask[:query_len, query_len:] = True
+            if text_len > 0:
+                causal = torch.triu(torch.ones((text_len, text_len), device=device, dtype=torch.bool), diagonal=1)
+                mask[query_len:, query_len:] = causal
+            return mask
+
+        raise ValueError(f"Unknown Stage1 mode: {mode}")
+
+    def _pool_queries(self, queries: torch.Tensor) -> torch.Tensor:
+        pooled = self.pool_norm(queries)
+        gate = torch.sigmoid(self.pool_gate(pooled))
+        pooled = (gate * pooled).mean(dim=1)
+        vec = self.to_txt(pooled)
+        return F.normalize(vec, p=2, dim=-1, eps=1e-6)
+
+    def _pool_text(self, hidden: torch.Tensor, text_ids: torch.Tensor, text_pad: torch.Tensor) -> torch.Tensor:
+        normed = self.txt_pool_norm(hidden)
+        if self.txt_cls_id is not None:
+            cls_mask = (text_ids == self.txt_cls_id)
+            has_cls = cls_mask.any(dim=1)
+            if has_cls.all():
+                idx = cls_mask.float().argmax(dim=1)
+                batch_idx = torch.arange(normed.size(0), device=normed.device)
+                pooled = normed[batch_idx, idx, :]
+            else:
+                valid = ~text_pad
+                weights = valid.unsqueeze(-1).to(normed.dtype)
+                pooled = (normed * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+        else:
+            valid = ~text_pad
+            weights = valid.unsqueeze(-1).to(normed.dtype)
+            pooled = (normed * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+
+        return F.normalize(pooled, p=2, dim=-1, eps=1e-6)
+
+    def _siglip_loss(self, ecg_vec: torch.Tensor, txt_vec: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+        scale = self.logit_scale.clamp(min=math.log(1.0), max=math.log(100.0)).exp()
+        logits_ecg_to_txt = scale * ecg_vec @ txt_vec.t()
+        logits_txt_to_ecg = logits_ecg_to_txt.t()
+        labels = torch.arange(ecg_vec.size(0), device=ecg_vec.device)
+        one_hot = F.one_hot(labels, ecg_vec.size(0)).to(ecg_vec.dtype)
+        loss_e2t = F.binary_cross_entropy_with_logits(logits_ecg_to_txt, one_hot)
+        loss_t2e = F.binary_cross_entropy_with_logits(logits_txt_to_ecg, one_hot)
+        loss = 0.5 * (loss_e2t + loss_t2e)
+        return loss, {"logit_scale": float(scale.detach().item())}
+
+    def _ecg_to_hidden(
+        self,
+        ecg_ids: torch.Tensor,
+        attn_mask: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if ecg_ids.dtype != torch.long:
+            ecg_ids = ecg_ids.long()
+
+        ecg_ids = self._prepare_ids(ecg_ids)
+        batch_size, seq_len, _ = ecg_ids.shape
+
+        original_ids = ecg_ids
+        ids = ecg_ids.clamp_min(0)
+        valid_levels = original_ids >= 0
+        if self.pad_id is not None:
+            valid_levels = valid_levels & (original_ids != self.pad_id)
+
+        embeddings: List[torch.Tensor] = []
+        for level, table in enumerate(self.embed_tables):
+            level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
+            embeddings.append(table(level_ids))
+        x_stack = torch.stack(embeddings, dim=2)
+
+        time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
+        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
+
+        level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
+        x_stack = x_stack * level_mask
+
+        gate_input = x_stack.reshape(batch_size, seq_len, -1)
+        gate_logits = self.mix_gate(gate_input)
+
+        if self.bias_last_codebook:
+            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
+
+        if self.training and self.codebook_dropout > 0.0:
+            drop_mask = (torch.rand_like(gate_logits) < self.codebook_dropout) & valid_levels
+            gate_logits = gate_logits.masked_fill(drop_mask, -1e4)
+
+        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
+        gate_logits = gate_logits + mask_logits
+
+        weights = gate_logits.softmax(dim=-1)
+        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
+
+        valid_positions = valid_levels.any(dim=-1)
+        mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
+        mixed = self.input_norm(mixed)
+        mixed = self.dropout(mixed)
+
+        if attn_mask is not None:
+            if attn_mask.dim() > 2:
+                raise ValueError("ecg attn_mask must be 2D for ECGQFormerBridgeStage1.")
+            attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)
+            valid_positions = valid_positions & attn_mask_bool
+
+        key_padding_mask = ~valid_positions
+        return mixed, key_padding_mask
+
+    def forward_stage1(
+        self,
+        ecg_ids: torch.Tensor,
+        text_ids: Optional[torch.Tensor],
+        text_attn_mask: Optional[torch.Tensor],
+        mode: Stage1Mode,
+        *,
+        ecg_attn_mask: Optional[torch.Tensor] = None,
+        labels_for_etg: Optional[torch.Tensor] = None,
+    ):
+        memory, kv_key_pad = self._ecg_to_hidden(ecg_ids, ecg_attn_mask)
+        batch_size = memory.size(0)
+        query_len = self.num_query_tokens
+
+        queries = self.queries.unsqueeze(0).expand(batch_size, -1, -1)
+        queries = queries.to(device=memory.device, dtype=memory.dtype)
+
+        text_ids_tensor: Optional[torch.Tensor] = None
+        text_pad: torch.Tensor
+        if mode == "ETC":
+            tokens = queries
+            text_len = 0
+            text_pad = torch.zeros((batch_size, 0), dtype=torch.bool, device=memory.device)
+        else:
+            if text_ids is None:
+                raise ValueError("text_ids must be provided for ETM and ETG modes.")
+            if text_ids.dtype != torch.long:
+                text_ids = text_ids.long()
+            text_ids_tensor = text_ids.to(memory.device)
+            if text_attn_mask is None:
+                text_attn_mask = (text_ids_tensor != self.txt_pad_id)
+            text_pad = ~text_attn_mask.to(dtype=torch.bool, device=memory.device)
+            text_tokens = self.txt_embed(text_ids_tensor).to(dtype=memory.dtype)
+            tokens = torch.cat([queries, text_tokens], dim=1)
+            text_len = text_tokens.size(1)
+
+        self_key_pad = torch.cat(
+            [
+                torch.zeros((batch_size, query_len), dtype=torch.bool, device=memory.device),
+                text_pad,
+            ],
+            dim=1,
+        )
+
+        attn_mask = self._build_self_attn_mask(
+            mode,
+            query_len,
+            text_len,
+            device=memory.device,
+            dtype=memory.dtype,
+        )
+
+        for block in self.stage1_blocks:
+            tokens = block(
+                tokens,
+                memory,
+                query_len=query_len,
+                self_attn_mask=attn_mask,
+                self_key_pad=self_key_pad,
+                kv_key_pad=kv_key_pad,
+            )
+
+        q_out = tokens[:, :query_len, :]
+        t_out = tokens[:, query_len:, :]
+
+        if mode == "ETC":
+            ecg_vec = self._pool_queries(q_out)
+            return ecg_vec, None
+
+        if mode == "ETM":
+            logits_per_query = self.itm_head(q_out)
+            return logits_per_query.mean(dim=1)
+
+        if mode == "ETG":
+            if text_ids_tensor is None:
+                raise ValueError("ETG mode requires text inputs.")
+            lm_logits = self.lm_head(t_out)
+            if labels_for_etg is None:
+                if text_len <= 1:
+                    raise ValueError("ETG requires at least two text tokens when labels are not provided.")
+                lm_input = lm_logits[:, :-1, :]
+                target = text_ids_tensor[:, 1:]
+            else:
+                if labels_for_etg.shape != lm_logits.shape[:2]:
+                    raise ValueError("labels_for_etg shape must match text length.")
+                lm_input = lm_logits
+                target = labels_for_etg.to(device=lm_logits.device, dtype=torch.long)
+
+            loss = F.cross_entropy(
+                lm_input.reshape(-1, lm_input.size(-1)),
+                target.reshape(-1),
+                ignore_index=self.txt_pad_id,
+            )
+            return lm_logits, loss
+
+        raise ValueError(f"Unknown Stage1 mode received: {mode}")
+
+
+@ModelRegistry.register("InstructionAwareECGQFormerBridge")
+class InstructionAwareECGQFormerBridge(ECGQFormerBridge):
+    """Q-Former bridge that consumes Stage-1 checkpoints but exposes instruction-aware fusion.
+
+    The module mirrors the Stage-1 architecture (including the shared self-attention blocks) so
+    that we can load the pre-trained weights while bypassing the Stage-1 text embedding head.
+    Instruction token embeddings are expected to already live in the Q-Former hidden dimension.
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        num_codebooks: int,
+        d_mid: int,
+        d_llm: int,
+        d_txt: int,
+        num_steps: int = 128,
+        num_query_tokens: int = 32,
+        num_layers: int = 6,
+        num_heads: int = 8,
+        dropout: float = 0.1,
+        num_special_tokens: int = 4,
+        bias_last_codebook: float = 0.5,
+        codebook_dropout: float = 0.0,
+        *,
+        cross_every: int = 2,
+    ) -> None:
+        super().__init__(
+            vocab_size=vocab_size,
+            num_codebooks=num_codebooks,
+            d_mid=d_mid,
+            d_llm=d_llm,
+            d_txt=d_txt,
+            num_steps=num_steps,
+            num_query_tokens=num_query_tokens,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            dropout=dropout,
+            num_special_tokens=num_special_tokens,
+            bias_last_codebook=bias_last_codebook,
+            codebook_dropout=codebook_dropout,
+        )
+
+        if cross_every <= 0:
+            raise ValueError("cross_every must be >= 1 for InstructionAwareECGQFormerBridge.")
+
+        self.stage1_cross_every = int(cross_every)
+        self.stage1_blocks = nn.ModuleList([
+            _Stage1Block(
+                d_mid=d_mid,
+                num_heads=num_heads,
+                dropout=dropout,
+                do_cross=(idx % self.stage1_cross_every == 0),
+            )
+            for idx in range(int(num_layers))
+        ])
+        # Light normalization so downstream callers can feed raw LLM embeddings if desired.
+        self.instruction_norm = nn.RMSNorm(d_mid)
+
+    def forward_instruction_hidden(
+        self,
+        ecg_ids: torch.Tensor,
+        instruction_hidden: Optional[torch.Tensor],
+        instruction_attention_mask: Optional[torch.Tensor] = None,
+        *,
+        ecg_attn_mask: Optional[torch.Tensor] = None,
+        project_to_llm: bool = True,
+        detach_soft_prompts: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Run the Q-Former with ECG codes plus instruction embeddings.
+
+        Args:
+            ecg_ids: Residual VQ code indices, shape [batch, seq, depth] or [batch, seq].
+            instruction_hidden: Instruction embeddings already projected into d_mid.
+            instruction_attention_mask: Optional mask where 1 denotes valid tokens.
+            ecg_attn_mask: Optional mask over ECG timestep dimension.
+            project_to_llm: Whether to map query outputs into the LLM embedding space.
+            detach_soft_prompts: Detach the projected prompts (useful for inference).
+
+        Returns:
+            Dictionary containing:
+              • token_embeddings: [B, num_query_tokens, d_llm] soft prompts.
+              • query_hidden: [B, num_query_tokens, d_mid] Q-Former query states.
+              • instruction_hidden: [B, T, d_mid] instruction states after fusion (if any tokens).
+              • pooled_queries: [B, d_txt] pooled query representation.
+        """
+        memory, kv_key_pad = self._ecg_to_hidden(ecg_ids, ecg_attn_mask)
+        batch_size = memory.size(0)
+        query_len = self.num_query_tokens
+
+        queries = self.queries.unsqueeze(0).expand(batch_size, -1, -1)
+        queries = queries.to(device=memory.device, dtype=memory.dtype)
+
+        if instruction_hidden is not None:
+            if instruction_hidden.size(-1) != queries.size(-1):
+                raise ValueError(
+                    "instruction_hidden must match Q-Former hidden size: "
+                    f"{instruction_hidden.size(-1)} vs {queries.size(-1)}."
+                )
+            instr = instruction_hidden.to(device=memory.device, dtype=memory.dtype)
+            instr = self.instruction_norm(instr)
+            text_len = instr.size(1)
+            if instruction_attention_mask is None:
+                instruction_attention_mask = torch.ones(
+                    batch_size, text_len, device=memory.device, dtype=torch.long
+                )
+            text_pad = ~(instruction_attention_mask.to(dtype=torch.bool, device=memory.device))
+        else:
+            instr = torch.zeros(batch_size, 0, queries.size(-1), device=memory.device, dtype=memory.dtype)
+            text_pad = torch.zeros(batch_size, 0, device=memory.device, dtype=torch.bool)
+            text_len = 0
+
+        tokens = torch.cat([queries, instr], dim=1)
+        self_key_pad = torch.cat(
+            [
+                torch.zeros((batch_size, query_len), dtype=torch.bool, device=memory.device),
+                text_pad,
+            ],
+            dim=1,
+        )
+
+        # Allow full self-attention between queries and instruction tokens.
+        attn_mask = None
+
+        for block in self.stage1_blocks:
+            tokens = block(
+                tokens,
+                memory,
+                query_len=query_len,
+                self_attn_mask=attn_mask,
+                self_key_pad=self_key_pad,
+                kv_key_pad=kv_key_pad,
+            )
+
+        q_hidden = tokens[:, :query_len, :]
+        instr_hidden = tokens[:, query_len:, :] if text_len > 0 else torch.zeros_like(instr)
+
+        if project_to_llm:
+            soft_prompts = self.to_llm(q_hidden)
+            soft_prompts = self.norm_out(soft_prompts)
+            soft_prompts = soft_prompts * self.output_scale
+            if detach_soft_prompts:
+                soft_prompts = soft_prompts.detach()
+        else:
+            soft_prompts = q_hidden
+
+        pooled_queries = self.pool_norm(q_hidden)
+        gate = torch.sigmoid(self.pool_gate(pooled_queries))
+        pooled_queries = gate * pooled_queries
+        pooled_queries = self.to_txt(pooled_queries.mean(dim=1))
+        pooled_queries = F.normalize(pooled_queries, p=2, dim=-1, eps=1e-6)
+
+        return {
+            "token_embeddings": soft_prompts,
+            "query_hidden": q_hidden,
+            "instruction_hidden": instr_hidden,
+            "pooled_queries": pooled_queries,
+        }
+
+    def _ecg_to_hidden(
+        self,
+        ecg_ids: torch.Tensor,
+        attn_mask: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if ecg_ids.dtype != torch.long:
+            ecg_ids = ecg_ids.long()
+
+        ecg_ids = self._prepare_ids(ecg_ids)
+        batch_size, seq_len, _ = ecg_ids.shape
+
+        original_ids = ecg_ids
+        ids = ecg_ids.clamp_min(0)
+        valid_levels = original_ids >= 0
+        pad_id = getattr(self, "pad_id", None)
+        if pad_id is not None:
+            valid_levels = valid_levels & (original_ids != pad_id)
+
+        embeddings: List[torch.Tensor] = []
+        for level, table in enumerate(self.embed_tables):
+            level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
+            embeddings.append(table(level_ids))
+        x_stack = torch.stack(embeddings, dim=2)
+
+        time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
+        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
+
+        level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
+        x_stack = x_stack * level_mask
+
+        gate_input = x_stack.reshape(batch_size, seq_len, -1)
+        gate_logits = self.mix_gate(gate_input)
+
+        if self.bias_last_codebook:
+            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
+
+        if self.training and self.codebook_dropout > 0.0:
+            drop_mask = (torch.rand_like(gate_logits) < self.codebook_dropout) & valid_levels
+            gate_logits = gate_logits.masked_fill(drop_mask, -1e4)
+
+        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
+        gate_logits = gate_logits + mask_logits
+
+        weights = gate_logits.softmax(dim=-1)
+        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
+
+        valid_positions = valid_levels.any(dim=-1)
+        mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
+        mixed = self.input_norm(mixed)
+        mixed = self.dropout(mixed)
+
+        if attn_mask is not None:
+            if attn_mask.dim() > 2:
+                raise ValueError("ecg attn_mask must be 2D for instruction-aware bridge.")
+            attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)
+            valid_positions = valid_positions & attn_mask_bool
+
+        key_padding_mask = ~valid_positions
+        return mixed, key_padding_mask
+
+    def load_stage1_checkpoint(
+        self,
+        checkpoint_path: str,
+        *,
+        strict: bool = False,
+        map_location: Union[str, torch.device] = "cpu",
+    ) -> Dict[str, List[str]]:
+        """Load weights from a Stage-1 checkpoint, adapting to tokenizer/depth changes."""
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        if "model_state_dict" not in checkpoint:
+            raise ValueError(f"Checkpoint at {checkpoint_path} is missing 'model_state_dict'.")
+        stage1_state = checkpoint["model_state_dict"]
+        current_state = self.state_dict()
+
+        block_pattern = re.compile(r"^blocks\.(\d+)\.")
+        stage1_block_pattern = re.compile(r"^stage1_blocks\.(\d+)\.")
+
+        def _count_layers(pattern: re.Pattern[str]) -> int:
+            indices = [
+                int(match.group(1))
+                for key in stage1_state.keys()
+                if (match := pattern.match(key)) is not None
+            ]
+            return (max(indices) + 1) if indices else 0
+
+        stage1_block_count = _count_layers(block_pattern)
+        stage1_instruction_block_count = _count_layers(stage1_block_pattern)
+
+        loadable_state: Dict[str, torch.Tensor] = {}
+        partially_loaded_keys: List[str] = []
+        missing_keys: List[str] = []
+        reinitialized_keys: List[str] = []
+        shape_mismatched_keys: List[Tuple[str, Tuple[int, ...], Tuple[int, ...]]] = []
+
+        expected_reinit_prefixes: Tuple[str, ...] = ("to_llm", "norm_out", "instruction_norm")
+
+        def _is_expected_reinit(key: str) -> bool:
+            return any(key == prefix or key.startswith(prefix + ".") for prefix in expected_reinit_prefixes)
+
+        for key, tensor in current_state.items():
+            ckpt_tensor = stage1_state.get(key)
+            if ckpt_tensor is None:
+                block_match = block_pattern.match(key)
+                if block_match is not None and int(block_match.group(1)) >= stage1_block_count:
+                    continue
+
+                instruction_match = stage1_block_pattern.match(key)
+                if instruction_match is not None and int(instruction_match.group(1)) >= stage1_instruction_block_count:
+                    continue
+
+                if _is_expected_reinit(key):
+                    reinitialized_keys.append(key)
+                    continue
+
+                missing_keys.append(key)
+                continue
+
+            if tensor.shape == ckpt_tensor.shape:
+                loadable_state[key] = ckpt_tensor
+                continue
+
+            loaded = False
+            if key.startswith("embed_tables.") and tensor.ndim >= 2 and tensor.shape[1:] == ckpt_tensor.shape[1:]:
+                rows = min(tensor.shape[0], ckpt_tensor.shape[0])
+                if rows > 0:
+                    new_tensor = tensor.clone()
+                    new_tensor[:rows] = ckpt_tensor[:rows]
+                    loadable_state[key] = new_tensor
+                    partially_loaded_keys.append(key)
+                    loaded = True
+            elif key == "queries" and tensor.shape[1:] == ckpt_tensor.shape[1:]:
+                rows = min(tensor.shape[0], ckpt_tensor.shape[0])
+                if rows > 0:
+                    new_tensor = tensor.clone()
+                    new_tensor[:rows] = ckpt_tensor[:rows]
+                    loadable_state[key] = new_tensor
+                    partially_loaded_keys.append(key)
+                    loaded = True
+
+            if loaded:
+                continue
+
+            if _is_expected_reinit(key):
+                reinitialized_keys.append(key)
+                continue
+
+            shape_mismatched_keys.append((key, tuple(ckpt_tensor.shape), tuple(tensor.shape)))
+
+        self.load_state_dict(loadable_state, strict=strict and not missing_keys)
+
+        unexpected_keys = [key for key in stage1_state.keys() if key not in current_state]
+        unused_checkpoint_keys = [key for key in stage1_state.keys() if key not in loadable_state]
+
+        return {
+            "missing_keys": missing_keys,
+            "unexpected_keys": unexpected_keys,
+            "unused_checkpoint_keys": unused_checkpoint_keys,
+            "partially_loaded_keys": partially_loaded_keys,
+            "reinitialized_keys": sorted(set(reinitialized_keys)),
+            "shape_mismatched_keys": shape_mismatched_keys,
+            "stage1_block_count": stage1_block_count,
+            "model_block_count": len(self.blocks),
+            "stage1_instruction_block_count": stage1_instruction_block_count,
+            "model_instruction_block_count": len(self.stage1_blocks),
+        }
+
 @ModelRegistry.register(BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE)
 @ModelRegistry.register("ECGProjectionBridge")
 class ECGProjectionBridge(nn.Module):
@@ -523,6 +1556,15 @@ class ECGProjectionBridge(nn.Module):
         num_codebooks: int = 1,
         code_dim: Optional[int] = None,
         target_std: Optional[float] = None,
+        # Stability and fusion controls
+        softmax_temp: float = 1.0,
+        mix_residual: float = 0.2,
+        max_downsample_steps: int = 6,
+        add_modality_embed: bool = True,
+        pos_embedding_max_len: Optional[int] = None,
+        add_cls_token: bool = False,
+        gating_init: float = 1e-3,
+        use_sinusoidal_pos_emb: bool = False,
     ) -> None:
         super().__init__()
 
@@ -558,10 +1600,30 @@ class ECGProjectionBridge(nn.Module):
             nn.Linear(d_model, d_model)
         )
         self.dropout = nn.Dropout(dropout if dropout and dropout > 0 else 0.0)
-        self.positional_embedding = nn.Embedding(num_tokens, d_model)
+        # Positional embedding with flexibility for varying token counts
+        self.max_pos = int(pos_embedding_max_len) if pos_embedding_max_len is not None else max(int(num_tokens), 4096)
+        self.use_sinusoidal_pos_emb = bool(use_sinusoidal_pos_emb)
+        if not self.use_sinusoidal_pos_emb:
+            self.positional_embedding = nn.Embedding(self.max_pos, d_model)
+        else:
+            self.register_buffer("_sin_pos_cache", None, persistent=False)
         self.out_norm = nn.RMSNorm(d_model)
-        scale_init = float(target_std) if target_std is not None else 1.0
+        # Match typical LLM embedding scale (~0.02) unless overridden
+        scale_init = float(target_std) if target_std is not None else 0.02
         self.output_scale = nn.Parameter(torch.tensor(scale_init, dtype=torch.float32))
+        # Tiny residual gate for safer optimization
+        self.alpha = nn.Parameter(torch.tensor(float(gating_init), dtype=torch.float32))
+        # Optional modality/type embedding to flag ECG tokens
+        self.modality_embed = nn.Parameter(torch.zeros(1, 1, d_model)) if add_modality_embed else None
+        # Optional CLS token that can be prepended when desired
+        self.add_cls_token = bool(add_cls_token)
+        if self.add_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        # Mixing controls
+        self.soft_temp = float(max(1e-6, softmax_temp))
+        self.mix_residual = float(min(max(mix_residual, 0.0), 1.0))
+        # Resampling guard
+        self.max_downsample_steps = int(max(0, max_downsample_steps))
 
         # Simple anti-aliasing stack: depthwise stride-2 conv followed by
         # a smoothing conv before final interpolation.
@@ -591,6 +1653,15 @@ class ECGProjectionBridge(nn.Module):
         final_linear = cast(nn.Linear, self.mlp[-1])
         nn.init.normal_(final_linear.weight, std=1e-3)
         nn.init.zeros_(final_linear.bias)
+
+    def _sinusoidal_positions(self, length: int, dim: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        """Create sinusoidal positional embeddings [1, length, dim]."""
+        position = torch.arange(length, device=device, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, dim, 2, device=device, dtype=torch.float32) * (-math.log(10000.0) / dim))
+        pe = torch.zeros(length, dim, device=device, dtype=torch.float32)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0).to(dtype=dtype)
 
     def _prepare_features(self, features: torch.Tensor) -> torch.Tensor:
         if features.dim() == 4:
@@ -632,8 +1703,12 @@ class ECGProjectionBridge(nn.Module):
             return reshaped.view(batch, self.code_dim, length)
 
         gate_logits = self.token_gate(reshaped.flatten(1, 2))  # [B, num_codebooks, length]
-        weights = torch.softmax(gate_logits, dim=1).unsqueeze(2)  # [B, num_codebooks, 1, length]
+        weights = torch.softmax(gate_logits / self.soft_temp, dim=1).unsqueeze(2)  # [B, num_codebooks, 1, length]
         mixed = (reshaped * weights).sum(dim=1)  # [B, code_dim, length]
+        # Residual path from uniform average to avoid collapse
+        if self.mix_residual > 0:
+            avg = reshaped.mean(dim=1, keepdim=False)
+            mixed = (1.0 - self.mix_residual) * mixed + self.mix_residual * avg
         return mixed
 
     def _resample_to_tokens(self, features: torch.Tensor) -> torch.Tensor:
@@ -643,9 +1718,11 @@ class ECGProjectionBridge(nn.Module):
             return features.transpose(1, 2).contiguous()
 
         x = features
-        # Repeatedly apply stride-2 convolution until close to target length
-        while x.size(-1) > self.num_tokens * 2:
+        # Repeatedly apply stride-2 convolution until close to target length, with a safety cap
+        steps = 0
+        while x.size(-1) > self.num_tokens * 2 and steps < self.max_downsample_steps:
             x = self.resample_activation(self.downsample_conv(x))
+            steps += 1
 
         # Apply smoothing before final interpolation
         x = self.resample_activation(self.prefilter_conv(x))
@@ -666,11 +1743,21 @@ class ECGProjectionBridge(nn.Module):
         x = self.mlp(x)
         x = self.dropout(x)
 
-        positions = torch.arange(self.num_tokens, device=x.device, dtype=torch.long)
-        pos_emb = self.positional_embedding(positions).unsqueeze(0)
+        seq_len = x.size(1)
+        if not self.use_sinusoidal_pos_emb:
+            positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
+            pos_emb = self.positional_embedding(positions.clamp_max(self.max_pos - 1)).unsqueeze(0)
+        else:
+            pos_emb = self._sinusoidal_positions(seq_len, x.size(-1), x.device, x.dtype)
         x = x + pos_emb
+        if self.modality_embed is not None:
+            x = x + self.modality_embed
         x = self.out_norm(x)
-        return x * self.output_scale
+        if self.add_cls_token:
+            cls = self.cls_token.expand(x.size(0), -1, -1)
+            x = torch.cat([cls, x], dim=1)
+        # Apply scale and gentle residual gate
+        return (x * self.output_scale) * torch.sigmoid(self.alpha)
 
 
 @ModelRegistry.register(BridgeName.GPT2_LINEAR_BRIDGE)
@@ -1548,6 +2635,16 @@ def calibrate_bridge_scale(
         outputs = bridge(sample_batch, attn_mask=attn_mask_tensor)
     else:
         outputs = bridge(sample_batch)
+
+    if isinstance(outputs, tuple):
+        outputs = outputs[0]
+    elif isinstance(outputs, dict):
+        outputs = outputs.get("token_embeddings") or outputs.get("embeddings")
+
+    if not isinstance(outputs, torch.Tensor):
+        raise TypeError(
+            "Bridge output must be a tensor (or tuple/dict containing one) for calibration."
+        )
 
     current_rms = outputs.float().pow(2).mean().sqrt().item()
     scale = target_rms / (current_rms + 1e-8)

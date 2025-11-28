@@ -7,7 +7,8 @@ if TYPE_CHECKING:
         LLMFinetuningProject, 
         ECGTokenizerLinearProbing,
         BertReportClassifierProject, 
-        ECGTokenizerTrainingProject
+        ECGTokenizerTrainingProject,
+        ECGTextStage1Project,
     )
 
 class ProjectProtocol(Protocol):
@@ -30,6 +31,7 @@ ProjectUnionT = Union[
     "LLMFinetuningProject", 
     "ECGTokenizerLinearProbing",
     "BertReportClassifierProject", 
-    "ECGTokenizerTrainingProject"
+    "ECGTokenizerTrainingProject",
+    "ECGTextStage1Project",
 ]
 ProjectClassUnionT = Type[ProjectUnionT]

@@ -2,6 +2,7 @@ from models.bridge import (
     ECGCodeBridge,
     ECGProjectionBridge,
     PerceiverProjectionBridge,
+    ECGQFormerBridge,
     LinearBridge,
     EmbeddingBridge,
     SimpleEmbeddingBridge,
@@ -25,11 +26,13 @@ from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Quantizer_RVQ
 )
 from models.local_residual_vq import ResidualVQ
+from models.text_encoder import TextEncoder
 
 __all__ = [
     "ECGCodeBridge",
     "ECGProjectionBridge",
     "PerceiverProjectionBridge",
+    "ECGQFormerBridge",
     "LinearBridge",
     "EmbeddingBridge",
     "SimpleEmbeddingBridge",
@@ -51,4 +54,5 @@ __all__ = [
     "ECG_Tokenizer_Quantizer",
     "ECG_Tokenizer_Quantizer_RVQ",
     "ResidualVQ",
+    "TextEncoder",
 ]

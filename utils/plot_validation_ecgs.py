@@ -422,7 +422,8 @@ def plot_validation_ecgs(
     parquet_path: Optional[str] = None,
     output_dir: str = "validation_plots",
     num_ecgs: int = 10,
-    epoch: Optional[int] = None
+    epoch: Optional[int] = None,
+    only_ecg_name: Optional[str] = None,
 ):
     """Plot ECGs from validation generations JSON with Q&A annotations."""
 
@@ -438,7 +439,15 @@ def plot_validation_ecgs(
 
     scored_ecgs: List[Dict[str, Any]] = []
     missing_lookup: List[str] = []
-    for ecg_name, ecg_info in val_data.items():
+    # If a specific ECG is requested, narrow the iteration set
+    items_iter = val_data.items()
+    if only_ecg_name:
+        if only_ecg_name not in val_data:
+            print(f"Requested ECG '{only_ecg_name}' not found in validation JSON")
+            return
+        items_iter = [(only_ecg_name, val_data[only_ecg_name])]
+
+    for ecg_name, ecg_info in items_iter:
         score, metric_name = compute_ecg_score(ecg_info)
         ecg_path, dataset_label = resolve_ecg_source(ecg_name, ecg_info, parquet_lookup)
 
@@ -462,8 +471,11 @@ def plot_validation_ecgs(
         print("No ECG entries with resolvable paths found in validation JSON")
         return
 
-    total_requested = min(num_ecgs, len(scored_ecgs)) if num_ecgs else len(scored_ecgs)
-    selected_ecgs = select_tiered_ecg_samples(scored_ecgs, total_requested)
+    if only_ecg_name:
+        selected_ecgs = scored_ecgs
+    else:
+        total_requested = min(num_ecgs, len(scored_ecgs)) if num_ecgs else len(scored_ecgs)
+        selected_ecgs = select_tiered_ecg_samples(scored_ecgs, total_requested)
 
     print(f"\nPlotting {len(selected_ecgs)} ECGs (tiered sampling)...")
 
@@ -533,6 +545,7 @@ def main():
     parser.add_argument("--num-ecgs", type=int, help="Number of ECGs to plot", 
                        default=10)
     parser.add_argument("--epoch", type=int, help="Epoch number for labeling")
+    parser.add_argument("--ecg-name", type=str, help="Plot only this ECG name (e.g., 47242287.npy)")
     
     args = parser.parse_args()
     
@@ -541,7 +554,8 @@ def main():
         parquet_path=args.parquet,
         output_dir=args.output_dir,
         num_ecgs=args.num_ecgs,
-        epoch=args.epoch
+        epoch=args.epoch,
+        only_ecg_name=args.ecg_name,
     )
 
 

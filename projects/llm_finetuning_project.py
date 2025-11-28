@@ -78,6 +78,11 @@ class LLMFinetuningProject(BaseProject):
         """Execute the LLM finetuning workflow."""
         super().run()
 
+    def _uses_qformer_bridge(self) -> bool:
+        """Return True if the configured bridge is a Q-Former style bridge."""
+        name = str(getattr(self.config, 'bridge_name', '')).lower()
+        return 'qformer' in name
+
     def _resolve_checkpoint_structure(
         self,
         checkpoint_config: Any,
@@ -192,6 +197,14 @@ class LLMFinetuningProject(BaseProject):
         
         # Determine whether any training phase requests LoRA even if globally disabled
         training_phases = getattr(self.config, 'training_phases', {}) or {}
+        # Allow sweep override to freeze/unfreeze phase2 LLM backbone
+        phase2_override = getattr(self.config, 'phase2_freeze_llm', None)
+        if phase2_override is not None:
+            phase2_cfg = training_phases.get('phase2_finetuning', {}) or {}
+            phase2_cfg['freeze_llm'] = bool(phase2_override)
+            training_phases['phase2_finetuning'] = phase2_cfg
+            # Persist override for downstream usage
+            self.config.training_phases = training_phases  # type: ignore[attr-defined]
         phase_requests_lora = any(
             isinstance(phase_cfg, dict) and phase_cfg.get('use_lora', False)
             for phase_cfg in training_phases.values()
@@ -231,19 +244,37 @@ class LLMFinetuningProject(BaseProject):
             llm_input_embedding_size=self.config.llm_input_embedding_size,
             tokenizer=tokenizer,
             processor=processor,
-            num_visual_tokens=self.config.bridge_num_visual_tokens or self.config.num_ecg_tokens,
+            num_visual_tokens=(getattr(self.config, 'num_query_tokens', None)
+                               or self.config.bridge_num_visual_tokens
+                               or self.config.num_ecg_tokens),
             bridge_mid_dim=self.config.bridge_mid_dim,
             bridge_num_heads=self.config.bridge_num_heads,
             bridge_dropout=self.config.bridge_dropout,
             bridge_num_special_tokens=self.config.bridge_num_special_tokens,
+            bridge_qformer_layers=getattr(self.config, 'bridge_qformer_layers', None),
+            bridge_text_hidden_size=getattr(self.config, 'bridge_text_hidden_size', None),
+            bridge_bias_last_codebook=getattr(self.config, 'bridge_bias_last_codebook', None),
+            bridge_codebook_dropout=getattr(self.config, 'bridge_codebook_dropout', None),
+            bridge_cross_every=getattr(self.config, 'bridge_cross_every', None),
+            instruction_dropout=getattr(self.config, 'instruction_dropout', 0.0),
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             ecg_projection_config=getattr(self.config, 'ecg_projection_config', None),
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             prefix_tuning=getattr(self.config, 'prefix_tuning', False),
             default_generation_kwargs=getattr(self.config, 'default_generation_kwargs', None),
+            # Projection-bridge knobs
+            bridge_use_sinusoidal_pos_emb=getattr(self.config, 'bridge_use_sinusoidal_pos_emb', None),
+            bridge_pos_embedding_max_len=getattr(self.config, 'bridge_pos_embedding_max_len', None),
+            bridge_softmax_temp=getattr(self.config, 'bridge_softmax_temp', None),
+            bridge_mix_residual=getattr(self.config, 'bridge_mix_residual', None),
+            bridge_add_modality_embed=getattr(self.config, 'bridge_add_modality_embed', None),
+            bridge_add_cls_token=getattr(self.config, 'bridge_add_cls_token', None),
             use_lora=self.config.use_lora,
-            lora_config=lora_config
+            lora_config=lora_config,
+            stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
+            pattern_loss_weight=getattr(self.config, 'pattern_loss_weight', None),
+            pattern_label_count=(len(self.config.pattern_label_columns) if getattr(self.config, 'pattern_label_columns', None) else None),
         ).to(self.config.device)
         
         # Resize model embeddings if new tokens were added
@@ -288,10 +319,43 @@ class LLMFinetuningProject(BaseProject):
         # Print training configuration using the pre-DDP model so parameter counts reflect freezing
         self._print_training_config(ecg_tokenizer)
 
+        # Resolve dataset mode-specific columns and instruct toggle
+        mode = str(getattr(self.config, 'data_mode', 'qa')).lower()
+        if mode not in ("qa", "cf"):
+            mode = "qa"
+        if mode == "cf":
+            instruct_flag = bool(getattr(self.config, 'instruct_mode', False))
+            signal_col = "signal_path"
+            prompt_col = "question"
+            answer_col = "ground_truth_answer"
+            category_col = "category"
+            # Auto-enable CF eval if not set
+            if not getattr(self.config, 'use_cf_eval', False):
+                setattr(self.config, 'use_cf_eval', True)
+            if not getattr(self.config, 'cf_eval_dataset_path', None):
+                setattr(self.config, 'cf_eval_dataset_path', str(self.config.validation_dataset_path))
+        else:
+            instruct_flag = bool(getattr(self.config, 'instruct_mode', False))
+            signal_col = self.config.signal_path_column
+            prompt_col = self.config.prompt_column
+            answer_col = self.config.answer_column
+            category_col = self.config.category_column
+        # Use MedGemma-style prompts only when explicitly requested or when base model is MedGemma
+        name_blob = f"{getattr(self.config, 'tokenizer_name', '')} {getattr(self.config, 'huggingface_model_name', '')}".lower()
+        medgemma_prompt_style = bool(
+            getattr(self.config, 'medgemma_prompt_style', False)
+            or "medgemma" in name_blob
+        )
+        debug_print_example = bool(getattr(self.config, 'debug_print_example', False))
+        prefix_tuning_enabled = getattr(self.config, 'prefix_tuning', False)
+        num_ecg_tokens = getattr(self.config, 'num_ecg_tokens', 128)
+        if self._uses_qformer_bridge() or prefix_tuning_enabled:
+            num_ecg_tokens = 0
+
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
-            signal_path_column=self.config.signal_path_column,
+            signal_path_column=signal_col,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
@@ -302,18 +366,25 @@ class LLMFinetuningProject(BaseProject):
             rank=self.config.device,
             shuffle=True, 
             pin_memory=True,
-            instruct_mode=getattr(self.config, 'instruct_mode', False),
-            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            instruct_mode=instruct_flag,
+            # Use 0 placeholders when using Q-Former (or prefix tuning).
+            num_ecg_tokens=num_ecg_tokens,
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
-            prompt_column=self.config.prompt_column,
-            answer_column=self.config.answer_column,
-            category_column=self.config.category_column,
-            prefix_tuning=getattr(self.config, 'prefix_tuning', False)
+            prompt_column=prompt_col,
+            answer_column=answer_col,
+            category_column=category_col,
+            prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+            pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+            subset_size=None,
+            balance_categories=False,
+            sampling_seed=None,
+            medgemma_prompt_style=medgemma_prompt_style,
+            debug_print_example=debug_print_example,
         )
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
-            signal_path_column=self.config.signal_path_column,
+            signal_path_column=signal_col,
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             tokenizer=tokenizer,
@@ -322,15 +393,22 @@ class LLMFinetuningProject(BaseProject):
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
             rank=self.config.device,
-            shuffle=False, 
+            shuffle=getattr(self.config, "validation_shuffle", False), 
             pin_memory=True,
-            instruct_mode=getattr(self.config, 'instruct_mode', False),
-            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            instruct_mode=instruct_flag,
+            # Use 0 placeholders when using Q-Former (or prefix tuning).
+            num_ecg_tokens=num_ecg_tokens,
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
-            prompt_column=self.config.prompt_column,
-            answer_column=self.config.answer_column,
-            category_column=self.config.category_column,
-            prefix_tuning=getattr(self.config, 'prefix_tuning', False)
+            prompt_column=prompt_col,
+            answer_column=answer_col,
+            category_column=category_col,
+            prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+            pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+            subset_size=getattr(self.config, "validation_subset_size", None),
+            balance_categories=getattr(self.config, "validation_balance_prompt_categories", False),
+            sampling_seed=getattr(self.config, "validation_sampling_seed", None),
+            medgemma_prompt_style=medgemma_prompt_style,
+            debug_print_example=debug_print_example,
         )
 
         # Wrap the model in DDP
@@ -455,7 +533,8 @@ class LLMFinetuningProject(BaseProject):
             if embedding_param is not None:
                 if any(p is embedding_param for p in llm_params):
                     llm_params = [p for p in llm_params if p is not embedding_param]
-                if not embedding_param.requires_grad:
+                # Never optimize embeddings for Q-Former or prefix-tuning paths
+                if (not embedding_param.requires_grad) or self._uses_qformer_bridge() or getattr(decoder_module, 'prefix_tuning', False):
                     embedding_param = None
         if getattr(decoder_module, 'prefix_tuning', False):
             embedding_param = None
@@ -731,6 +810,44 @@ class LLMFinetuningProject(BaseProject):
             for key, value in bridge_config.items():
                 print(f"  {key}: {value}")
         
+        bridge_module = getattr(model.decoder, 'bridge', None)
+        if bridge_module is not None:
+            bridge_total = sum(p.numel() for p in bridge_module.parameters())
+            bridge_trainable = sum(p.numel() for p in bridge_module.parameters() if p.requires_grad)
+            print(f"\nBridge parameters: {bridge_trainable:,}/{bridge_total:,} trainable")
+
+            bridge_state_count = len(bridge_module.state_dict())
+            bridge_load_info = getattr(model.decoder, "bridge_load_info", None)
+            if isinstance(bridge_load_info, dict):
+                missing = len(bridge_load_info.get("missing_keys") or [])
+                reinit = len(bridge_load_info.get("reinitialized_keys") or [])
+                partial = len(bridge_load_info.get("partially_loaded_keys") or [])
+                stage1_layers = bridge_load_info.get("stage1_block_count")
+                model_layers = bridge_load_info.get("model_block_count")
+                stage1_instr = bridge_load_info.get("stage1_instruction_block_count")
+                model_instr = bridge_load_info.get("model_instruction_block_count")
+
+                loaded_full = max(bridge_state_count - missing - reinit, 0)
+                print("  Stage-1 checkpoint load:")
+                print(f"    tensors loaded: {loaded_full}/{bridge_state_count}")
+                if partial:
+                    print(f"    partially loaded: {partial}")
+                if reinit:
+                    print(f"    reinitialised: {reinit}")
+                if missing:
+                    print(f"    missing: {missing}")
+                if isinstance(stage1_layers, int) and isinstance(model_layers, int):
+                    diff = model_layers - stage1_layers
+                    if diff > 0:
+                        print(f"    new Q-Former layers: {diff}")
+                if isinstance(stage1_instr, int) and isinstance(model_instr, int):
+                    diff = model_instr - stage1_instr
+                    if diff > 0:
+                        print(f"    new instruction layers: {diff}")
+                unused = len(bridge_load_info.get("unused_checkpoint_keys") or [])
+                if unused:
+                    print(f"    unused checkpoint tensors: {unused}")
+        
         # Print LoRA configuration if enabled
         if self.config.use_lora:
             print(f"\nLoRA Configuration:")
@@ -835,6 +952,12 @@ class LLMFinetuningProject(BaseProject):
             tokenizer=infer_tokenizer,
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             prefix_tuning=getattr(pretrained_config, 'prefix_tuning', getattr(self.config, 'prefix_tuning', False)),
+            bridge_qformer_layers=getattr(pretrained_config, 'bridge_qformer_layers', getattr(self.config, 'bridge_qformer_layers', None)),
+            bridge_text_hidden_size=getattr(pretrained_config, 'bridge_text_hidden_size', getattr(self.config, 'bridge_text_hidden_size', None)),
+            bridge_bias_last_codebook=getattr(pretrained_config, 'bridge_bias_last_codebook', getattr(self.config, 'bridge_bias_last_codebook', None)),
+            bridge_codebook_dropout=getattr(pretrained_config, 'bridge_codebook_dropout', getattr(self.config, 'bridge_codebook_dropout', None)),
+            bridge_cross_every=getattr(pretrained_config, 'bridge_cross_every', getattr(self.config, 'bridge_cross_every', None)),
+            instruction_dropout=getattr(pretrained_config, 'instruction_dropout', getattr(self.config, 'instruction_dropout', 0.0)),
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': getattr(pretrained_config, 'lora_r', 16),
@@ -842,7 +965,8 @@ class LLMFinetuningProject(BaseProject):
                 'dropout': getattr(pretrained_config, 'lora_dropout', 0.1),
                 'target_modules': getattr(pretrained_config, 'lora_target_modules', None),
                 'bias': getattr(pretrained_config, 'lora_bias', 'none')
-            } if use_lora_for_inference else None
+            } if use_lora_for_inference else None,
+            stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
         ).to(self.config.device)
         # Set the codebook size to the pretrained codebook size
         self.config.codebook_size = codebook_size # required to compute % of active codebook during training
@@ -864,6 +988,7 @@ class LLMFinetuningProject(BaseProject):
             self.config.processor = processor  # type: ignore[attr-defined]
         
         # Get the dataloaders
+        medgemma_prompt_style = bool(getattr(self.config, 'medgemma_prompt_style', False))
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
             signal_path_column=self.config.signal_path_column,
@@ -875,15 +1000,21 @@ class LLMFinetuningProject(BaseProject):
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
             rank=self.config.device,
-            shuffle=False, 
+            shuffle=getattr(self.config, "validation_shuffle", False), 
             pin_memory=True,
             instruct_mode=getattr(self.config, 'instruct_mode', False),
-            num_ecg_tokens=getattr(self.config, 'num_ecg_tokens', 128),
+            # Use 0 placeholders when using Q-Former (or prefix tuning).
+            num_ecg_tokens=(
+                0 if (self._uses_qformer_bridge() or getattr(self.config, 'prefix_tuning', False))
+                else getattr(self.config, 'num_ecg_tokens', 128)
+            ),
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             prompt_column=self.config.prompt_column,
             answer_column=self.config.answer_column,
             category_column=self.config.category_column,
-            prefix_tuning=getattr(self.config, 'prefix_tuning', False)
+            prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+            pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+            medgemma_prompt_style=medgemma_prompt_style,
         )
 
         # Wrap the model in DDP
@@ -910,6 +1041,36 @@ class LLMFinetuningProject(BaseProject):
         """Return the text tokenizer and optional processor based on configuration."""
 
         use_processor = getattr(self.config, 'use_auto_processor', False)
+        tokenizer_name_lower = tokenizer_name.lower()
+        model_name_lower = str(getattr(self.config, "huggingface_model_name", "")).lower()
+        medgemma_like = bool(
+            getattr(self.config, "medgemma_prompt_style", False)
+            or "medgemma" in tokenizer_name_lower
+            or "medgemma" in model_name_lower
+        )
+
+        llama_chat_template = (
+            "<|begin_of_text|>"
+            "{% for message in messages %}"
+            "{% if message['role'] == 'system' %}"
+            "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+            "{% elif message['role'] == 'user' %}"
+            "<|start_header_id|>user<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+            "{% elif message['role'] == 'assistant' %}"
+            "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+            "{% endif %}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
+        )
+        medgemma_chat_template = (
+            "{{ bos_token }}"
+            "{% for message in messages %}"
+            "{% set role = message['role'] %}"
+            "{% if role == 'assistant' %}{% set role = 'model' %}{% endif %}"
+            "<start_of_turn>{{ role }}\n{{ message['content'] }}<end_of_turn>\n"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}<start_of_turn>model\n{% endif %}"
+        )
 
         processor = None
         if use_processor:
@@ -922,27 +1083,8 @@ class LLMFinetuningProject(BaseProject):
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
         if getattr(self.config, 'instruct_mode', False) and processor is None:
-            if getattr(self.config, 'prefix_tuning', False):
-                ecg_block = "<|start_ecg|><|end_ecg|>\n"
-            else:
-                ecg_tokens = "".join(f"<|ecg_pos_{i}|>" for i in range(self.config.num_ecg_tokens))
-                ecg_block = f"<|start_ecg|>{ecg_tokens}<|end_ecg|>\n"
-            custom_template = (
-                "<|begin_of_text|>"
-                "{% for message in messages %}"
-                "{% if message['role'] == 'system' %}"
-                "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-                "{% elif message['role'] == 'user' %}"
-                "<|start_header_id|>user<|end_header_id|>\n\n"
-            ) + ecg_block + (
-                "{{ message['content'] }}<|eot_id|>"
-                "{% elif message['role'] == 'assistant' %}"
-                "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-                "{% endif %}"
-                "{% endfor %}"
-                "{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}"
-            )
-            tokenizer.chat_template = custom_template
+            # Do not include any ECG delimiters in chat template; text only
+            tokenizer.chat_template = medgemma_chat_template if medgemma_like else llama_chat_template
 
         if hasattr(tokenizer, 'pad_token') and tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -952,43 +1094,17 @@ class LLMFinetuningProject(BaseProject):
             tokenizer.pad_token_id = tokenizer.pad_token_id[0]
 
         if getattr(self.config, 'instruct_mode', False) and processor is None:
-            special_tokens_dict = {
-                'additional_special_tokens': ['<|start_ecg|>', '<|end_ecg|>']
-            }
-            num_added_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-            if num_added_tokens > 0 and self.config.is_ref_device:
-                print(f"Added {num_added_tokens} ECG special tokens to tokenizer")
-            if getattr(self.config, 'prefix_tuning', False):
-                # Prefix-tuning path: rely on per-example embeddings instead of dedicated vocab rows
-                self.config.ecg_token_start_id = None
-            else:
-                ecg_tokens = [f"<|ecg_pos_{i}|>" for i in range(getattr(self.config, 'num_ecg_tokens', 128))]
-                existing_id = tokenizer.convert_tokens_to_ids(ecg_tokens[0])
-                unk_id = getattr(tokenizer, 'unk_token_id', None)
-                if existing_id is None or existing_id == -1 or (unk_id is not None and int(existing_id) == int(unk_id)):
-                    original_vocab_size = len(tokenizer)
-                    tokenizer.add_tokens(ecg_tokens, special_tokens=True)
-                    self.config.ecg_token_start_id = original_vocab_size
-                    if self.config.is_ref_device:
-                        print(f"Added {len(ecg_tokens)} ECG position tokens starting at id {self.config.ecg_token_start_id}")
-                else:
-                    self.config.ecg_token_start_id = int(existing_id)
-                    if self.config.is_ref_device:
-                        print(f"ECG position tokens already present starting at id {self.config.ecg_token_start_id}")
+            # Do not add ECG-specific special tokens; rely on bridge-only conditioning
+            self.config.ecg_token_start_id = None
 
         # Ensure chat template exists for instruction tuning
         if getattr(self.config, 'instruct_mode', False):
             chat_tmpl = getattr(tokenizer, 'chat_template', None)
-            if not chat_tmpl and 'llama' in tokenizer_name.lower():
-                tokenizer.chat_template = (
-                    "{{ bos_token }}"
-                    "{% for message in messages %}"
-                    "<|start_header_id|>{{ message['role'] }}<|end_header_id|>\n\n"
-                    "{{ message['content'] }}<|eot_id|>"
-                    "{% endfor %}"
-                    "{% if add_generation_prompt %}"
-                    "<|start_header_id|>assistant<|end_header_id|>\n\n"
-                )
+            if not chat_tmpl:
+                if 'llama' in tokenizer_name_lower:
+                    tokenizer.chat_template = llama_chat_template
+                elif medgemma_like:
+                    tokenizer.chat_template = medgemma_chat_template
 
         return tokenizer, processor if use_processor else None
 

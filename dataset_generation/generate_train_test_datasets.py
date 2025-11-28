@@ -18,7 +18,7 @@ import multiprocessing as mp
 from pathlib import Path
 from collections import defaultdict, Counter
 from dataclasses import dataclass
-from typing import Optional, Set, List, Dict, Any
+from typing import Optional, Set, List, Dict, Any, Tuple
 from tqdm import tqdm
 from ecg_prompt_maker import ECGPromptMaker
 from ecg_answer_generator import ECGAnswerGenerator
@@ -129,10 +129,24 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
     Returns exactly target_samples ECGs with at least target_special_questions having special question data.
     """
     print(f"   Applying stratified sampling for MHI special questions (target: {target_special_questions} special questions)...")
-    
+
+    # Check if special question columns exist (v1.6 may not have them)
+    required_cols = ['afib_label_2y', 'afib_label_5y', 'GT_Afib', 'BERT_Afib',
+                     'echonext_shd', 'acs_condition_severity', 'deepecho_Visually_Estimated_EF']
+    missing_cols = [col for col in required_cols if col not in df_mhi.columns]
+
+    if missing_cols:
+        print(f"     WARNING: Special columns missing from data: {missing_cols}")
+        print(f"     Falling back to random sampling (no stratification)")
+        # Fall back to random sampling
+        available_ecgs = df_mhi['waveform_name'].unique()
+        np.random.seed(42)
+        sampled_ecgs = np.random.choice(available_ecgs, size=min(target_samples, len(available_ecgs)), replace=False)
+        return df_mhi[df_mhi['waveform_name'].isin(sampled_ecgs)]
+
     # First, collect all ECGs that qualify for special questions
     special_ecgs = set()
-    
+
     # Track which ECGs qualify for which categories
     afib_high_risk_ecgs = set()
     afib_low_risk_ecgs = set()
@@ -141,13 +155,15 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
     acs_acute_ecgs = set()
     acs_non_acute_ecgs = set()
     lvef_ecgs = set()
-    
+
     # 1. Identify AFib risk ECGs
     afib_data = df_mhi[(df_mhi['afib_label_2y'].notna()) & (df_mhi['afib_label_5y'].notna())]
     if len(afib_data) > 0:
-        # Exclude patients already in AFib
-        afib_data = afib_data[(afib_data['Afib'] == 0) | (afib_data['Afib'].isna())]
-        afib_data = afib_data[(afib_data['Afib_bert_model'] <= 0.5) | (afib_data['Afib_bert_model'].isna())]
+        # Exclude patients already in AFib (using GT and BERT labels)
+        if 'GT_Afib' in afib_data.columns:
+            afib_data = afib_data[(afib_data['GT_Afib'] == 0) | (afib_data['GT_Afib'].isna())]
+        if 'BERT_Afib' in afib_data.columns:
+            afib_data = afib_data[(afib_data['BERT_Afib'] <= 0.5) | (afib_data['BERT_Afib'].isna())]
         
         # High risk: 2-year or 5-year risk is True
         high_risk = afib_data[(afib_data['afib_label_2y'] == True) | (afib_data['afib_label_5y'] == True)]
@@ -276,21 +292,18 @@ def apply_mhi_special_stratified_sampling(df_mhi, target_samples, target_special
         all_sampled.extend(duplicates)
     
     # Create the final DataFrame
-    sampled_df = df_mhi[df_mhi['waveform_name'].isin(set(all_sampled[:target_samples]))].copy()
-    
-    # If we used duplicates, handle them properly
-    if len(all_sampled) > len(set(all_sampled)):
-        ecg_counts = {}
-        for ecg in all_sampled[:target_samples]:
-            ecg_counts[ecg] = ecg_counts.get(ecg, 0) + 1
-        
-        dfs_to_concat = []
-        for ecg, count in ecg_counts.items():
-            ecg_rows = df_mhi[df_mhi['waveform_name'] == ecg]
-            for _ in range(count):
-                dfs_to_concat.append(ecg_rows)
-        
-        sampled_df = pd.concat(dfs_to_concat, ignore_index=True)
+    trimmed_waveforms = all_sampled[:target_samples]
+
+    if 'waveform_name' not in df_mhi.columns:
+        raise KeyError("Expected 'waveform_name' column in MHI dataframe for sampling.")
+
+    # Preserve ordering (including duplicates) without repeatedly filtering the full dataframe.
+    df_mhi_indexed = df_mhi.set_index('waveform_name', drop=False)
+    try:
+        sampled_df = df_mhi_indexed.loc[trimmed_waveforms].reset_index(drop=True)
+    except KeyError as exc:
+        missing = set(trimmed_waveforms) - set(df_mhi_indexed.index)
+        raise KeyError(f"Sampled ECGs missing from MHI dataframe: {list(missing)[:5]}") from exc
     
     # Mark special ECGs for tracking
     sampled_df['has_special_question'] = sampled_df['waveform_name'].isin(sampled_special)
@@ -558,6 +571,72 @@ def _init_prompt_worker(max_prompts_per_ecg: Optional[int]) -> None:
     np.random.seed()
 
 
+def _prioritize_prompts(
+    prompt_list: List[Tuple[str, str, float]],
+    max_prompts: Optional[int],
+) -> List[Tuple[str, str, float]]:
+    """Select a deterministic, priority-ordered subset of prompts for an ECG."""
+
+    if not prompt_list:
+        return []
+
+    if not max_prompts or max_prompts <= 0 or len(prompt_list) <= max_prompts:
+        return prompt_list
+
+    sorted_prompts = sorted(prompt_list, key=lambda item: item[2], reverse=True)
+    selected: List[Tuple[str, str, float]] = []
+    used_categories: Set[str] = set()
+
+    priority_rules: List[Tuple[str, str]] = [
+        ("exact", "interpretation"),
+        ("exact", "structural_heart_disease"),
+        ("exact", "lvef"),
+        ("exact", "afib_risk"),
+        ("exact", "acs_severity"),
+        ("exact", "culprit_artery"),
+        ("exact", "json_interpretation"),
+        ("exact", "classification"),
+        ("prefix", "category_"),
+        ("prefix", "urgency"),
+        ("prefix", "localization_"),
+        ("exact", "ecg_interval"),
+        ("exact", "interpretation_complex"),
+        ("prefix", "random_finding"),
+    ]
+
+    def pick_matches(match_type: str, value: str) -> None:
+        for prompt in sorted_prompts:
+            category = prompt[1]
+            if category in used_categories:
+                continue
+            if match_type == "exact":
+                if category != value:
+                    continue
+            else:
+                if not category.startswith(value):
+                    continue
+            selected.append(prompt)
+            used_categories.add(category)
+            if len(selected) >= max_prompts:
+                return
+
+    for match_type, value in priority_rules:
+        if len(selected) >= max_prompts:
+            break
+        pick_matches(match_type, value)
+
+    if len(selected) < max_prompts:
+        for prompt in sorted_prompts:
+            if prompt[1] in used_categories:
+                continue
+            selected.append(prompt)
+            used_categories.add(prompt[1])
+            if len(selected) >= max_prompts:
+                break
+
+    return selected[:max_prompts]
+
+
 def _prompt_worker(row_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Generate prompts for a single ECG row inside a worker."""
 
@@ -566,10 +645,7 @@ def _prompt_worker(row_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     row_series = pd.Series(row_dict)
     prompts = PROMPT_MAKER_WORKER.generate_prompts_for_ecg(row_series)
-
-    if PROMPT_MAX_PER_ECG and len(prompts) > PROMPT_MAX_PER_ECG:
-        num_to_sample = random.randint(1, PROMPT_MAX_PER_ECG)
-        prompts = random.sample(prompts, num_to_sample)
+    prompts = _prioritize_prompts(prompts, PROMPT_MAX_PER_ECG)
 
     results: List[Dict[str, Any]] = []
     for prompt_text, prompt_category, prompt_weight in prompts:
@@ -596,9 +672,7 @@ def _generate_prompts_serial(
         prompts = prompt_maker.generate_prompts_for_ecg(row)
         ecgs_processed += 1
 
-        if max_prompts_per_ecg and len(prompts) > max_prompts_per_ecg:
-            num_to_sample = random.randint(1, max_prompts_per_ecg)
-            prompts = random.sample(prompts, num_to_sample)
+        prompts = _prioritize_prompts(prompts, max_prompts_per_ecg)
 
         row_dict = row.to_dict()
         for prompt_text, prompt_category, prompt_weight in prompts:
@@ -736,10 +810,15 @@ def generate_siglip_alignment_dataset(
     max_hardneg_per_group: int | None = 3,
     train_ecg_limit: Optional[int] = None,
     val_ecg_limit: Optional[int] = None,
+    val_balanced_limit: Optional[int] = None,
+    val_balanced_min_per_label: int = 50,
     test_ecg_limit: Optional[int] = None,
     max_normal_percentage: float = 0.05,
+    max_par_ailleurs_percentage: Optional[float] = 0.05,
+    max_validation_ecgs: Optional[int] = 10000,
     max_positive_per_label: Optional[int] = None,
     labels_path: Optional[str] = None,
+    diagnosis_column: Optional[str] = None,
 ):
     """Create SigLIP-ready text bank and ECG-text alignment with exclusivity-aware weights."""
 
@@ -752,6 +831,14 @@ def generate_siglip_alignment_dataset(
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    normalized_diag = (diagnosis_column or "").strip() if diagnosis_column is not None else ""
+    if normalized_diag.lower() == "none":
+        normalized_diag = ""
+    requested_diagnosis_column = normalized_diag or None
+    include_diagnosis_requested = requested_diagnosis_column is not None
+    diagnosis_column = requested_diagnosis_column
+    include_diagnosis = include_diagnosis_requested
 
     try:
         import pyarrow.parquet as pq
@@ -766,10 +853,49 @@ def generate_siglip_alignment_dataset(
     else:
         all_schema_cols = metadata_cols
 
-    if 'waveform_path_psa' not in all_schema_cols:
+    diag_candidates: list[Optional[str]] = []
+    if include_diagnosis_requested and requested_diagnosis_column:
+        diag_candidates.append(requested_diagnosis_column)
+        if requested_diagnosis_column != "diagnosis":
+            diag_candidates.append("diagnosis")
+    else:
+        diag_candidates.extend(["translated_diagnosis", "diagnosis"])
+
+    diag_candidates = [candidate for candidate in diag_candidates if candidate]
+    resolved_diagnosis_column: Optional[str] = None
+    for candidate in diag_candidates:
+        if candidate in all_schema_cols:
+            resolved_diagnosis_column = candidate
+            break
+
+    if resolved_diagnosis_column is None:
+        if include_diagnosis_requested and requested_diagnosis_column:
+            print(
+                f"Requested diagnosis column '{requested_diagnosis_column}' not found; "
+                "diagnosis text will be omitted from SigLIP mapping.",
+                flush=True,
+            )
+        include_diagnosis = False
+        diagnosis_column = None
+    else:
+        diagnosis_column = resolved_diagnosis_column
+        include_diagnosis = True
+        if include_diagnosis_requested and requested_diagnosis_column and resolved_diagnosis_column != requested_diagnosis_column:
+            print(
+                f"Diagnosis column '{requested_diagnosis_column}' not found; falling back to '{resolved_diagnosis_column}'.",
+                flush=True,
+            )
+        elif not include_diagnosis_requested:
+            print(
+                f"Using diagnosis column '{resolved_diagnosis_column}' for SigLIP mapping.",
+                flush=True,
+            )
+
+    has_waveform_path = 'waveform_path_psa' in all_schema_cols
+    if not has_waveform_path and 'npy_path' not in all_schema_cols:
         raise ValueError(
-            "Expected 'waveform_path_psa' column in provided parquet files; "
-            "ensure it exists in either metadata or labels parquet"
+            "Expected either 'waveform_path_psa' or 'npy_path' column in provided parquet files; "
+            "ensure at least one exists in metadata or labels parquet"
         )
 
     from utils.constants import DEEPECG_CATEGORIES, DEEPECG_PATHOLOGICAL_LIMIT
@@ -859,16 +985,27 @@ def generate_siglip_alignment_dataset(
         df_full = pd.read_parquet(parquet_path)
 
     available_cols = set(df_full.columns)
-    if 'waveform_path_psa' not in available_cols:
-        raise ValueError("Expected 'waveform_path_psa' column in input parquet")
+    if include_diagnosis and diagnosis_column not in available_cols:
+        print(
+            f"Diagnosis column '{diagnosis_column}' not found in merged dataframe; "
+            "diagnosis text will be omitted from SigLIP mapping.",
+            flush=True,
+        )
+        include_diagnosis = False
+        diagnosis_column = None
+    if 'waveform_path_psa' not in available_cols and 'npy_path' not in available_cols:
+        raise ValueError("Expected either 'waveform_path_psa' or 'npy_path' column in input parquet")
 
     needed_cols: Set[str] = {
-        'waveform_path_psa',
         'npy_path',
         'waveform_name',
         'Split',
         'split',
     }
+    if 'waveform_path_psa' in available_cols:
+        needed_cols.add('waveform_path_psa')
+    if include_diagnosis and diagnosis_column:
+        needed_cols.add(diagnosis_column)
     for source in label_sources.values():
         if source.diag_col:
             needed_cols.add(source.diag_col)
@@ -881,7 +1018,18 @@ def generate_siglip_alignment_dataset(
         raise ValueError("Merged dataframe is empty after selecting required columns")
 
     if 'waveform_path_psa' not in df.columns:
-        raise ValueError("Missing 'waveform_path_psa' column after column selection")
+        if 'npy_path' not in df.columns:
+            raise ValueError("Missing required ECG path column ('waveform_path_psa' or 'npy_path') after column selection")
+        df['waveform_path_psa'] = df['npy_path'].astype(str)
+
+    if include_diagnosis and diagnosis_column not in df.columns:
+        print(
+            f"Diagnosis column '{diagnosis_column}' missing after column selection; "
+            "diagnosis text will be omitted from SigLIP mapping.",
+            flush=True,
+        )
+        include_diagnosis = False
+        diagnosis_column = None
 
     if 'waveform_name' not in df.columns:
         df['waveform_name'] = df['waveform_path_psa'].astype(str).apply(lambda p: os.path.basename(p))
@@ -902,6 +1050,12 @@ def generate_siglip_alignment_dataset(
 
     df['ecg_id'] = df['waveform_path_psa'].astype(str)
     df = df.dropna(subset=['ecg_id']).drop_duplicates(subset='ecg_id')
+
+    diagnosis_lookup: dict[str, Any] = {}
+    if include_diagnosis and diagnosis_column is not None:
+        diagnosis_lookup = df.set_index('ecg_id')[diagnosis_column].to_dict()
+    else:
+        include_diagnosis = False
 
     present_cols: List[str] = []
     diag_cols_map: dict[str, str] = {}
@@ -931,13 +1085,16 @@ def generate_siglip_alignment_dataset(
     if val_ecg_limit is None:
         val_ecg_limit = 10000
 
+    val_limit_for_sampling = val_ecg_limit
+    if val_balanced_limit is not None:
+        val_limit_for_sampling = None
 
     split_limits = {
         'train': train_ecg_limit,
         'training': train_ecg_limit,
-        'validation': val_ecg_limit,
-        'val': val_ecg_limit,
-        'dev': val_ecg_limit,
+        'validation': val_limit_for_sampling,
+        'val': val_limit_for_sampling,
+        'dev': val_limit_for_sampling,
         'test': test_ecg_limit,
     }
 
@@ -950,6 +1107,72 @@ def generate_siglip_alignment_dataset(
                 print(f"   SigLIP sampling: keeping {limit:,} ECGs for split '{split_name}' (of {len(df[df['split'] == split_name]):,})")
             sampled_frames.append(group_df)
         df = pd.concat(sampled_frames, ignore_index=True)
+
+    if (
+        max_par_ailleurs_percentage is not None
+        and include_diagnosis
+        and diagnosis_column is not None
+        and diagnosis_column in df.columns
+    ):
+        max_par_ailleurs_percentage = float(max_par_ailleurs_percentage)
+        if not 0.0 <= max_par_ailleurs_percentage <= 1.0:
+            raise ValueError("max_par_ailleurs_percentage must be between 0 and 1 for SigLIP dataset")
+        phrase = "ecg normal par ailleurs"
+        diag_series = df[diagnosis_column].fillna("").astype(str).str.lower()
+        par_mask = diag_series.str.contains(phrase)
+        if par_mask.any():
+            filtered_frames = []
+            for split_name, group_df in df.groupby('split', sort=False):
+                if group_df.empty:
+                    filtered_frames.append(group_df)
+                    continue
+                group_mask = par_mask.loc[group_df.index]
+                total = len(group_df)
+                max_allowed = int(total * max_par_ailleurs_percentage)
+                positives = group_df[group_mask]
+                if positives.empty or len(positives) <= max_allowed:
+                    filtered_frames.append(group_df)
+                    continue
+                keep_count = max_allowed
+                if keep_count <= 0:
+                    keep_indices = []
+                else:
+                    keep_indices = positives.sample(
+                        n=keep_count,
+                        random_state=random_state,
+                    ).index.tolist()
+                non_phrase_indices = group_df[~group_mask].index.tolist()
+                selected_indices = non_phrase_indices + keep_indices
+                filtered = group_df.loc[selected_indices]
+                filtered_frames.append(filtered)
+                print(
+                    f"   Reduced '{phrase}' entries for split '{split_name}' from {len(positives)} to {len(keep_indices)} "
+                    f"({max_par_ailleurs_percentage:.2%} cap)."
+                )
+            df = pd.concat(filtered_frames, ignore_index=True)
+
+    if max_validation_ecgs is not None and max_validation_ecgs > 0:
+        val_split_names = {'validation', 'val', 'dev'}
+        val_mask = df['split'].astype(str).str.lower().isin(val_split_names)
+        current_val_ecgs = int(val_mask.sum())
+        if current_val_ecgs > max_validation_ecgs:
+            val_df = df[val_mask]
+            if len(val_df) > max_validation_ecgs:
+                limit_rng = np.random.default_rng(random_state + 1)
+                val_indices = val_df.index.to_numpy()
+                selected_indices = limit_rng.choice(val_indices, size=max_validation_ecgs, replace=False)
+                selected_indices = sorted(int(idx) for idx in selected_indices.tolist())
+                kept_val_df = val_df.loc[selected_indices]
+            else:
+                kept_val_df = val_df
+            if len(kept_val_df) < len(val_df):
+                print(
+                    f"   Validation ECGs reduced from {len(val_df):,} to {len(kept_val_df):,} "
+                    f"(limit {max_validation_ecgs:,})."
+                )
+            df = pd.concat([df[~val_mask], kept_val_df], ignore_index=True)
+            if include_diagnosis and diagnosis_column is not None:
+                diagnosis_lookup = df.set_index('ecg_id')[diagnosis_column].to_dict()
 
     for rhythm_label in ("Sinusal", "Regular", "Monomorph"):
         zero_label_columns(df, rhythm_label)
@@ -982,6 +1205,109 @@ def generate_siglip_alignment_dataset(
             non_normals = group_df[group_df['ecg_type'] != 'normal']
             balanced_frames.append(pd.concat([normals, non_normals], ignore_index=True))
         df = pd.concat(balanced_frames, ignore_index=True)
+
+    if val_balanced_limit is not None:
+        val_balanced_limit = int(val_balanced_limit)
+        if val_balanced_limit <= 0:
+            print(f"   Validation balancing skipped because limit ({val_balanced_limit}) is not positive.")
+        else:
+            val_split_names = {'validation', 'val', 'dev'}
+            val_mask = df['split'].astype(str).str.lower().isin(val_split_names)
+            if not val_mask.any():
+                print("   Validation balancing skipped because no validation rows were found.")
+            else:
+                val_df = df[val_mask].copy()
+                num_labels = len(unique_labels)
+                if val_balanced_limit < num_labels:
+                    print(
+                        f"   Validation balancing skipped because limit ({val_balanced_limit}) "
+                        f"is smaller than number of labels ({num_labels})."
+                    )
+                else:
+                    label_matrix = (val_df[unique_labels].fillna(0) >= 1)
+                    available_counts = label_matrix.sum(axis=0).astype(int)
+                    if int(available_counts.sum()) == 0:
+                        print("   Validation balancing skipped because no positive labels were found.")
+                    else:
+                        rng = np.random.default_rng(random_state)
+
+                        base_target = val_balanced_limit // num_labels
+                        desired_target = max(base_target, 1)
+                        if val_balanced_limit >= val_balanced_min_per_label * num_labels:
+                            desired_target = max(desired_target, int(val_balanced_min_per_label))
+
+                        target_counts: dict[str, int] = {}
+                        for label in unique_labels:
+                            target_counts[label] = int(min(desired_target, available_counts.get(label, 0)))
+
+                        selected_indices: set[Any] = set()
+                        label_counts: dict[str, int] = {label: 0 for label in unique_labels}
+                        row_positive_cache: dict[Any, list[str]] = {}
+
+                        for label in unique_labels:
+                            target = target_counts[label]
+                            if target <= 0:
+                                continue
+                            positives_series = label_matrix[label]
+                            positive_indices = positives_series[positives_series].index.to_numpy()
+                            if positive_indices.size == 0:
+                                continue
+                            positive_indices = positive_indices[rng.permutation(positive_indices.size)]
+                            for idx in positive_indices:
+                                if label_counts[label] >= target:
+                                    break
+                                if idx in selected_indices:
+                                    continue
+                                selected_indices.add(idx)
+                                positives = row_positive_cache.get(idx)
+                                if positives is None:
+                                    mask_row = label_matrix.loc[idx]
+                                    positives = [lab for lab, flag in mask_row.items() if flag]
+                                    row_positive_cache[idx] = positives
+                                for lab in positives:
+                                    label_counts[lab] += 1
+
+                        if not selected_indices:
+                            print("   Validation balancing skipped because no ECGs met the selection criteria.")
+                        else:
+                            if len(selected_indices) > val_balanced_limit:
+                                trimmed = rng.choice(
+                                    list(selected_indices),
+                                    size=val_balanced_limit,
+                                    replace=False,
+                                )
+                                selected_indices = set(trimmed.tolist())
+
+                            selected_in_order = [idx for idx in val_df.index if idx in selected_indices]
+                            balanced_val_df = val_df.loc[selected_in_order]
+                            balanced_label_counts = (label_matrix.loc[selected_in_order].sum(axis=0)).astype(int)
+
+                            total_selected = len(balanced_val_df)
+                            min_count = int(balanced_label_counts.min()) if not balanced_label_counts.empty else 0
+                            max_count = int(balanced_label_counts.max()) if not balanced_label_counts.empty else 0
+
+                            print(
+                                f"   Validation balancing selected {total_selected:,} of {len(val_df):,} ECGs "
+                                f"(target per label {desired_target}, min count {min_count}, max count {max_count})."
+                            )
+
+                            short_labels = [
+                                label
+                                for label in unique_labels
+                                if target_counts[label] > 0
+                                and balanced_label_counts.get(label, 0) < target_counts[label]
+                            ]
+                            if short_labels:
+                                preview = ", ".join(sorted(short_labels)[:10])
+                                more = "" if len(short_labels) <= 10 else f", ... (+{len(short_labels) - 10})"
+                                print(
+                                    f"     Labels below target due to availability limits: {preview}{more}"
+                                )
+
+                            df = pd.concat(
+                                [df[~val_mask], balanced_val_df],
+                                ignore_index=True,
+                            )
 
     print(f"Loaded {len(df):,} ECG rows with {len(present_cols)} label columns")
 
@@ -1035,6 +1361,7 @@ def generate_siglip_alignment_dataset(
     df_iter = df[iter_cols]
     for values in df_iter.itertuples(index=False, name=None):
         ecg_id = values[col_pos['ecg_id']]
+        diagnosis_value = diagnosis_lookup.get(ecg_id) if include_diagnosis else None
         diag_dict: dict[str, float] = {}
         bert_dict: dict[str, float] = {}
         row_has_valid_conf = False
@@ -1060,7 +1387,7 @@ def generate_siglip_alignment_dataset(
             positive = False
             if has_diag and diag_val >= 1:
                 positive = True
-            if has_bert and bert_val >= bert_threshold:
+            if has_bert and bert_val > bert_threshold:
                 positive = True
 
             label_positive[label] = positive
@@ -1102,9 +1429,11 @@ def generate_siglip_alignment_dataset(
 
             negative = False
             if not pd.isna(diag_val):
-                negative = diag_val == 0
+                negative = diag_val <= 0
             elif not pd.isna(bert_val):
-                negative = bert_val < bert_threshold
+                negative = bert_val <= bert_threshold
+            if label_positive.get(label, False):
+                negative = False
 
             if not negative:
                 continue
@@ -1146,53 +1475,58 @@ def generate_siglip_alignment_dataset(
 
         for lab in pos_labels:
             base = slug(lab)
-            map_rows.append(
-                dict(
+            pos_entry = dict(
+                ecg_id=ecg_id,
+                text_id=f"LBL_{base}",
+                label=1,
+                weight=float(w_pos),
+                split=split_value,
+            )
+            if include_diagnosis:
+                pos_entry['diagnosis'] = diagnosis_value
+            map_rows.append(pos_entry)
+            if include_qa:
+                qa_pos_entry = dict(
                     ecg_id=ecg_id,
-                    text_id=f"LBL_{base}",
+                    text_id=f"QA_{base}_yes",
                     label=1,
                     weight=float(w_pos),
                     split=split_value,
                 )
-            )
-            if include_qa:
-                map_rows.append(
-                    dict(
-                        ecg_id=ecg_id,
-                        text_id=f"QA_{base}_yes",
-                        label=1,
-                        weight=float(w_pos),
-                        split=split_value,
-                    )
-                )
+                if include_diagnosis:
+                    qa_pos_entry['diagnosis'] = diagnosis_value
+                map_rows.append(qa_pos_entry)
 
         for lab in hardneg_labels:
             if is_excluded_label(lab):
                 continue
             base = slug(lab)
-            map_rows.append(
-                dict(
+            neg_entry = dict(
+                ecg_id=ecg_id,
+                text_id=f"LBL_{base}",
+                label=0,
+                weight=float(w_hardneg),
+                split=split_value,
+            )
+            if include_diagnosis:
+                neg_entry['diagnosis'] = diagnosis_value
+            map_rows.append(neg_entry)
+            if include_qa:
+                qa_neg_entry = dict(
                     ecg_id=ecg_id,
-                    text_id=f"LBL_{base}",
+                    text_id=f"QA_{base}_yes",
                     label=0,
                     weight=float(w_hardneg),
                     split=split_value,
                 )
-            )
-            if include_qa:
-                map_rows.append(
-                    dict(
-                        ecg_id=ecg_id,
-                        text_id=f"QA_{base}_yes",
-                        label=0,
-                        weight=float(w_hardneg),
-                        split=split_value,
-                    )
-                )
+                if include_diagnosis:
+                    qa_neg_entry['diagnosis'] = diagnosis_value
+                map_rows.append(qa_neg_entry)
     mapping = pd.DataFrame(map_rows)
     if not mapping.empty:
         mapping['label'] = mapping['label'].astype(int)
         mapping['weight'] = mapping['weight'].astype(float)
+
         mapping = mapping.sort_values(['ecg_id', 'text_id', 'weight'], ascending=[True, True, False])
         mapping = mapping.drop_duplicates(subset=['ecg_id', 'text_id'], keep='first')
 
@@ -1238,9 +1572,12 @@ def generate_siglip_alignment_dataset(
 
                 if is_excluded_label(label):
                     continue
+                is_positive = False
                 if not pd.isna(diag_val) and diag_val >= 1:
-                    pos_labels.append(label)
-                elif pd.isna(diag_val) and not pd.isna(bert_val) and bert_val >= bert_threshold:
+                    is_positive = True
+                if not pd.isna(bert_val) and bert_val > bert_threshold:
+                    is_positive = True
+                if is_positive:
                     pos_labels.append(label)
 
             for lab in pos_labels:
@@ -1252,12 +1589,14 @@ def generate_siglip_alignment_dataset(
                 for member in members_for_group:
                     if member == lab:
                         continue
+                    if member in pos_labels:
+                        continue
                     diag_val = diag_dict.get(member)
                     bert_val = bert_dict.get(member)
                     if not pd.isna(diag_val):
-                        negative = diag_val == 0
+                        negative = diag_val <= 0
                     else:
-                        negative = not pd.isna(bert_val) and bert_val < bert_threshold
+                        negative = not pd.isna(bert_val) and bert_val <= bert_threshold
                     if negative:
                         hard_members.append(member)
                 if hard_members:
@@ -1336,12 +1675,19 @@ def process_dataset(
     print(f"   Input: {input_path}")
     df = pd.read_parquet(input_path)
     print(f"   Loaded {len(df)} records")
-    
+
+    # Filter by Split column if dataset_type is 'mhi'
+    if dataset_type == 'mhi' and 'Split' in df.columns:
+        split_value = 'train' if dataset_name == 'train' else 'test'
+        print(f"   Filtering by Split='{split_value}'...")
+        df = df[df['Split'] == split_value].copy()
+        print(f"   After filtering: {len(df)} records")
+
     # 2. Drop existing question column if it exists
     if 'question' in df.columns:
         print("   Dropping existing 'question' column...")
         df = df.drop(columns=['question'])
-    
+
     print(f"   Columns: {list(df.columns)[:10]}...")
     
     # 3. Load and merge demographic data based on dataset type
@@ -1381,26 +1727,46 @@ def process_dataset(
         
         # Process MHI portion if requested
         if mhi_samples and mhi_samples > 0:
-            print(f"\n   Loading MHI demographic data (1.7M rows, this may take a moment)...")
-            mhi_path = '/media/data1/muse_ge/ECG_ad20241231_cat_labels_v1.4.complete.ROXs42Bb.parquet'
-            mhi_df = pd.read_parquet(mhi_path)
-            mhi_df = mhi_df.dropna(subset=['waveform_path_psa'])
+            print(f"\n   Loading MHI data (1.7M rows, this may take a moment)...")
+            # Load metadata and GT/BERT labels separately, then merge
+            metadata_path = '/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet'
+            labels_path = '/media/data1/muse_ge/ECG_ad20241231_gt_labels_v1.6.parquet'
+
+            print(f"     Loading metadata from v1.6...")
+            metadata_df = pd.read_parquet(metadata_path)
+            print(f"     Loading GT/BERT labels from v1.6...")
+            labels_df = pd.read_parquet(labels_path)
+
+            # Left join so every ECG row from metadata table keeps its place
+            print(f"     Merging metadata ({metadata_df.shape[1]} cols) with labels ({labels_df.shape[1]} cols) on npy_path...")
+            mhi_df = metadata_df.merge(labels_df, on='npy_path', how='left')
+            print(f"     Merged shape: {mhi_df.shape}")
+
+            # v1.6 uses npy_path, not waveform_path_psa
+            mhi_df = mhi_df.dropna(subset=['npy_path'])
             # Extract npy_id from npy_path for merging
             
             mhi_df['npy_id'] = mhi_df['npy_path'].str.extract(r'/([^/]+)\.npy$')[0]
             df['npy_id'] = df['waveform_name'].str.replace('.npy', '') if 'waveform_name' in df.columns else df.index.astype(str)
-            
+
             # Map MHI columns to standard names
             mhi_df['gender'] = mhi_df['RestingECG_PatientDemographics_Gender'].map({'MALE': 'M', 'FEMALE': 'F'})
             mhi_df['age_at_ecg'] = pd.to_numeric(mhi_df['RestingECG_PatientDemographics_PatientAge'], errors='coerce')
             mhi_df['rr_interval'] = pd.to_numeric(mhi_df['RestingECG_QRSTimesTypes_GlobalRR'], errors='coerce')
+
+            # v1.6 has PatientID, not new_PatientID
+            if 'PatientID' in mhi_df.columns and 'new_PatientID' not in mhi_df.columns:
+                mhi_df['new_PatientID'] = mhi_df['PatientID']
+
             # Add VentricularRate column for MHI heart rate
-            mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'] = pd.to_numeric(
-                mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'], errors='coerce'
-            )
+            if 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in mhi_df.columns:
+                mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'] = pd.to_numeric(
+                    mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'], errors='coerce'
+                )
             
             # Select columns to merge (including interval measurements and echonext)
-            merge_cols = ['npy_id', 'new_PatientID', 'gender', 'age_at_ecg', 'rr_interval',
+            # Only include columns that actually exist in v1.6
+            desired_merge_cols = ['npy_id', 'new_PatientID', 'gender', 'age_at_ecg', 'rr_interval',
                           'RestingECG_OriginalRestingECGMeasurements_VentricularRate',
                           'RestingECG_OriginalRestingECGMeasurements_PRInterval',
                           'RestingECG_OriginalRestingECGMeasurements_QRSDuration',
@@ -1413,20 +1779,16 @@ def process_dataset(
                           'acs_pci_regions',  # Add ACS culprit artery column
                           'afib_label_2y',  # Add AFib 2-year risk prediction
                           'afib_label_5y',  # Add AFib 5-year risk prediction
-                          'Afib',  # Current AFib status
-                          'Afib_bert_model']
-            
-            # Also copy over all the ECG diagnosis columns (they should have same names)
-            from utils.constants import DEEPECG_CATEGORIES
-            all_diagnosis_cols = []
-            for category, diagnoses in DEEPECG_CATEGORIES.items():
-                all_diagnosis_cols.extend(diagnoses)
-            
-            # Add diagnosis columns that exist in MHI and not already in df
-            for col in all_diagnosis_cols:
-                if col in mhi_df.columns and col not in df.columns:
-                    merge_cols.append(col)
-            
+                          'GT_Afib',  # Current AFib status (ground truth)
+                          'BERT_Afib',  # AFib BERT model prediction
+                          'translated_diagnosis',  # English diagnosis text
+                          'diagnosis']  # Original diagnosis text (fallback)
+
+            # Filter to only columns that exist in mhi_df
+            merge_cols = [col for col in desired_merge_cols if col in mhi_df.columns]
+
+            print(f"     Merging {len(merge_cols)} columns from MHI v1.6")
+
             # Remove duplicates from merge_cols
             merge_cols = list(dict.fromkeys(merge_cols))
             
@@ -1438,6 +1800,21 @@ def process_dataset(
                 suffixes=('', '_mhi')
             )
             df_mhi_merged['dataset_source'] = 'mhi'
+
+            # Ensure 'report' field uses translated_diagnosis (English) for MHI records
+            if 'translated_diagnosis' in df_mhi_merged.columns:
+                # Update report with translated_diagnosis where available
+                has_translated = df_mhi_merged['translated_diagnosis'].notna()
+                if has_translated.any():
+                    df_mhi_merged.loc[has_translated, 'report'] = df_mhi_merged.loc[has_translated, 'translated_diagnosis']
+                    print(f"     Updated {has_translated.sum()} MHI reports with translated_diagnosis")
+            elif 'diagnosis' in df_mhi_merged.columns:
+                # Fallback to diagnosis if translated_diagnosis not available
+                has_diagnosis = df_mhi_merged['diagnosis'].notna() & df_mhi_merged['report'].isna()
+                if has_diagnosis.any():
+                    df_mhi_merged.loc[has_diagnosis, 'report'] = df_mhi_merged.loc[has_diagnosis, 'diagnosis']
+                    print(f"     WARNING: Using non-translated diagnosis for {has_diagnosis.sum()} MHI reports")
+
             df_mhi_merged = df_mhi_merged.drop(columns=['npy_id'], errors='ignore')
             
             print(f"     Found {len(df_mhi_merged)} MHI records")
@@ -1480,47 +1857,43 @@ def process_dataset(
         df_merged['dataset_source'] = 'mimic-iv'
         
     elif dataset_type == 'mhi':
-        print(f"\n2. Loading MHI demographic data (1.7M rows, this may take a moment)...")
-        mhi_path = '/media/data1/muse_ge/ECG_ad20241231_cat_labels_v1.4.complete.ROXs42Bb.parquet'
-        
-        # Load MHI data with relevant columns including interval measurements and echonext
-        mhi_cols = ['npy_path', 'new_PatientID', 
-                   'RestingECG_PatientDemographics_Gender', 
-                   'RestingECG_PatientDemographics_PatientAge',
-                   'RestingECG_QRSTimesTypes_GlobalRR',
-                   'RestingECG_OriginalRestingECGMeasurements_VentricularRate',
-                   'RestingECG_OriginalRestingECGMeasurements_PRInterval',
-                   'RestingECG_OriginalRestingECGMeasurements_QRSDuration',
-                   'RestingECG_OriginalRestingECGMeasurements_QTInterval',
-                   'RestingECG_OriginalRestingECGMeasurements_QTCorrected',
-                   'RestingECG_OriginalRestingECGMeasurements_QTcFrederica',
-                   'echonext_shd',  # Add structural heart disease column
-                   'deepecho_Visually_Estimated_EF',  # Add LVEF column
-                   'acs_condition_severity',  # Add ACS severity column
-                   'acs_pci_regions',  # Add ACS culprit artery column
-                   'afib_label_2y',  # Add AFib 2-year risk prediction
-                   'afib_label_5y',  # Add AFib 5-year risk prediction
-                   'Afib',  # Current AFib status
-                   'Afib_bert_model']  # AFib BERT model prediction
-        
-        # Also include all the diagnostic columns that exist in MHI
-        mhi_df = pd.read_parquet(mhi_path)
+        print(f"\n2. Loading MHI data (1.7M rows, this may take a moment)...")
+        # Load metadata and GT/BERT labels separately, then merge
+        metadata_path = '/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet'
+        labels_path = '/media/data1/muse_ge/ECG_ad20241231_gt_labels_v1.6.parquet'
+
+        print(f"     Loading metadata from v1.6...")
+        metadata_df = pd.read_parquet(metadata_path)
+        print(f"     Loading GT/BERT labels from v1.6...")
+        labels_df = pd.read_parquet(labels_path)
+
+        # Left join so every ECG row from metadata table keeps its place
+        print(f"     Merging metadata ({metadata_df.shape[1]} cols) with labels ({labels_df.shape[1]} cols) on npy_path...")
+        mhi_df = metadata_df.merge(labels_df, on='npy_path', how='left')
+        print(f"     Merged shape: {mhi_df.shape}")
         
         # Extract npy_id from npy_path for merging
         mhi_df['npy_id'] = mhi_df['npy_path'].str.extract(r'/([^/]+)\.npy$')[0]
         df['npy_id'] = df['waveform_name'].str.replace('.npy', '') if 'waveform_name' in df.columns else df.index.astype(str)
-        
+
         # Map MHI columns to standard names
         mhi_df['gender'] = mhi_df['RestingECG_PatientDemographics_Gender'].map({'MALE': 'M', 'FEMALE': 'F'})
         mhi_df['age_at_ecg'] = pd.to_numeric(mhi_df['RestingECG_PatientDemographics_PatientAge'], errors='coerce')
         mhi_df['rr_interval'] = pd.to_numeric(mhi_df['RestingECG_QRSTimesTypes_GlobalRR'], errors='coerce')
+
+        # v1.6 has PatientID, not new_PatientID
+        if 'PatientID' in mhi_df.columns and 'new_PatientID' not in mhi_df.columns:
+            mhi_df['new_PatientID'] = mhi_df['PatientID']
+
         # Add VentricularRate column for MHI heart rate
-        mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'] = pd.to_numeric(
-            mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'], errors='coerce'
-        )
+        if 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in mhi_df.columns:
+            mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'] = pd.to_numeric(
+                mhi_df['RestingECG_OriginalRestingECGMeasurements_VentricularRate'], errors='coerce'
+            )
         
         # Select columns to merge (including interval measurements and echonext)
-        merge_cols = ['npy_id', 'new_PatientID', 'gender', 'age_at_ecg', 'rr_interval',
+        # Only include columns that actually exist in v1.6
+        desired_merge_cols = ['npy_id', 'new_PatientID', 'gender', 'age_at_ecg', 'rr_interval',
                       'RestingECG_OriginalRestingECGMeasurements_VentricularRate',
                       'RestingECG_OriginalRestingECGMeasurements_PRInterval',
                       'RestingECG_OriginalRestingECGMeasurements_QRSDuration',
@@ -1533,20 +1906,16 @@ def process_dataset(
                       'acs_pci_regions',  # Add ACS culprit artery column
                       'afib_label_2y',  # Add AFib 2-year risk prediction
                       'afib_label_5y',  # Add AFib 5-year risk prediction
-                      'Afib',  # Current AFib status
-                      'Afib_bert_model']  # AFib BERT model prediction
-        
-        # Also copy over all the ECG diagnosis columns (they should have same names)
-        from utils.constants import DEEPECG_CATEGORIES
-        all_diagnosis_cols = []
-        for category, diagnoses in DEEPECG_CATEGORIES.items():
-            all_diagnosis_cols.extend(diagnoses)
-        
-        # Add diagnosis columns that exist in MHI and not already in df
-        for col in all_diagnosis_cols:
-            if col in mhi_df.columns and col not in df.columns:
-                merge_cols.append(col)
-        
+                      'GT_Afib',  # Current AFib status (ground truth)
+                      'BERT_Afib',  # AFib BERT model prediction
+                      'translated_diagnosis',  # English diagnosis text
+                      'diagnosis']  # Original diagnosis text (fallback)
+
+        # Filter to only columns that exist in mhi_df
+        merge_cols = [col for col in desired_merge_cols if col in mhi_df.columns]
+
+        print(f"   Merging {len(merge_cols)} columns from MHI v1.6")
+
         # Remove duplicates from merge_cols
         merge_cols = list(dict.fromkeys(merge_cols))
         
@@ -1566,11 +1935,25 @@ def process_dataset(
             unmatched = merge_stats['left_only']
             pct_unmatched = 100 * unmatched / len(df_merged)
             print(f"   WARNING: {unmatched} records ({pct_unmatched:.1f}%) not found in MHI data")
-            
+
             # If this is test dataset and >30% unmatched, reassign to train
             if dataset_name == 'test' and pct_unmatched > 30:
                 print(f"   NOTE: {pct_unmatched:.1f}% > 30% unmatched in test set, these will be reassigned to train")
-        
+
+        # Ensure 'report' field uses translated_diagnosis (English) for MHI records
+        if 'translated_diagnosis' in df_merged.columns:
+            # Update report with translated_diagnosis where available
+            has_translated = df_merged['translated_diagnosis'].notna()
+            if has_translated.any():
+                df_merged.loc[has_translated, 'report'] = df_merged.loc[has_translated, 'translated_diagnosis']
+                print(f"   Updated {has_translated.sum()} MHI reports with translated_diagnosis")
+        elif 'diagnosis' in df_merged.columns:
+            # Fallback to diagnosis if translated_diagnosis not available
+            has_diagnosis = df_merged['diagnosis'].notna() & df_merged['report'].isna()
+            if has_diagnosis.any():
+                df_merged.loc[has_diagnosis, 'report'] = df_merged.loc[has_diagnosis, 'diagnosis']
+                print(f"   WARNING: Using non-translated diagnosis for {has_diagnosis.sum()} MHI reports")
+
         # Clean up
         df_merged = df_merged.drop(columns=['npy_id', '_merge'], errors='ignore')
         df_merged['dataset_source'] = 'mhi'
@@ -1651,7 +2034,7 @@ def process_dataset(
             if target_samples > 0:
                 # Calculate approximate ECGs needed
                 if max_prompts_per_ecg:
-                    avg_prompts_per_ecg = (1 + max_prompts_per_ecg) / 2
+                    avg_prompts_per_ecg = max_prompts_per_ecg
                     target_ecgs = max(int(target_samples / avg_prompts_per_ecg), 1)
                 else:
                     target_ecgs = max(int(target_samples / 6), 1)
@@ -1768,7 +2151,7 @@ def process_dataset(
     # Adjust expected prompts per ECG based on max_prompts_per_ecg
     elif sample_size:
         if max_prompts_per_ecg:
-            avg_prompts_per_ecg = (1 + max_prompts_per_ecg) / 2
+            avg_prompts_per_ecg = max_prompts_per_ecg
             target_ecgs = max(int(sample_size / avg_prompts_per_ecg), 1)
             print(f"\n3. Selecting ECGs to generate exactly {sample_size:,} questions...")
             print(
@@ -2030,6 +2413,20 @@ def process_dataset(
     if 'rr_interval' in df_with_answers.columns:
         df_with_answers['rr_interval'] = pd.to_numeric(df_with_answers['rr_interval'], errors='coerce')
     
+    # Final safety-net: deduplicate on ECG path + prompt to prevent residual duplicates
+    dedup_subset = ['waveform_path_psa', 'prompt']
+    missing_dedup_cols = [c for c in dedup_subset if c not in df_with_answers.columns]
+    if not missing_dedup_cols:
+        before_rows = len(df_with_answers)
+        df_with_answers = df_with_answers.drop_duplicates(subset=dedup_subset, keep='first').reset_index(drop=True)
+        after_rows = len(df_with_answers)
+        removed = before_rows - after_rows
+        if removed > 0:
+            print(f"   Deduplicated on {dedup_subset}: removed {removed:,} rows ({before_rows:,} -> {after_rows:,})")
+    else:
+        # If expected columns missing, proceed without dedup but log a warning
+        print(f"   WARNING: Skipping final dedup; missing columns: {missing_dedup_cols}")
+    
     # Save parquet
     df_with_answers[columns_to_keep].to_parquet(output_path, index=False)
     
@@ -2163,19 +2560,20 @@ def main(
     elif dataset_type == 'mimic-iv':
         test_input = '/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet'
         test_output = f'/volume/ECG_tokenizer/output/mimic_test_qa_{test_samples//1000}k.parquet'
-        
+
         train_input = '/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_psa_train_updated.parquet'
         train_output = f'/volume/ECG_tokenizer/output/mimic_train_qa_{train_samples//1000}k.parquet'
     
     elif dataset_type == 'mhi':
-        # For MHI, use same files but merge with MHI demographic data
-        test_input = '/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet'
+        # For MHI, use v1.6 parquet with Split column filtering
+        mhi_base_path = '/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet'
+        test_input = mhi_base_path  # Will be filtered by Split='test' in process_dataset
         test_output = f'/volume/ECG_tokenizer/output/mhi_test_qa_{test_samples//1000}k.parquet'
-        
-        train_input = '/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_psa_train_updated.parquet'
+
+        train_input = mhi_base_path  # Will be filtered by Split='train' in process_dataset
         train_output = f'/volume/ECG_tokenizer/output/mhi_train_qa_{train_samples//1000}k.parquet'
-        
-        print("\nNote: Using same input files but with MHI demographic data merged")
+
+        print("\nNote: Using MHI v1.6 parquet with Split column filtering")
     
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
@@ -2308,8 +2706,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_prompts_per_ecg",
         type=int,
-        default=1,
-        help="Maximum prompts per ECG (randomly samples 1 to N prompts per ECG). Default: 1 for one prompt per ECG"
+        default=5,
+        help="Maximum prompts per ECG (prioritised selection). Default: 5 prompts per ECG when available."
     )
     parser.add_argument(
         "--max_normal_percentage",

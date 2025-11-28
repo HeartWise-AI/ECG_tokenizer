@@ -10,6 +10,7 @@ dependencies = [
     "fastparquet>=2024.11.0",
     "iterative-stratification>=0.1.9",
     "matplotlib>=3.9.2",
+    "nltk>=3.9.1",
     "pandas>=2.2.3",
     "peft>=0.7.0",
     "pyarrow>=19.0.0",

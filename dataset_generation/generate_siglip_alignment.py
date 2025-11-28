@@ -21,19 +21,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--parquet",
         type=str,
-        default="/media/data1/muse_ge/ECG_ad20241231_cat_labels_v1.4.complete.ROXs42Bb.parquet",
+        default="/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet",
         help="Path to the wide MHI parquet (used as metadata when --labels-path is not provided)",
     )
     parser.add_argument(
         "--metadata-path",
         type=str,
-        default=None,
+        default="/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet",
         help="Metadata parquet path (overrides --parquet when provided)",
     )
     parser.add_argument(
         "--labels-path",
         type=str,
-        default=None,
+        default="/media/data1/muse_ge/ECG_ad20241231_gt_labels_v1.6.parquet",
         help="Separate labels parquet to merge with metadata (ground-truth and BERT scores)",
     )
     parser.add_argument(
@@ -55,6 +55,21 @@ def parse_args() -> argparse.Namespace:
         help="Maximum validation split ECGs to retain when sampling",
     )
     parser.add_argument(
+        "--val-balanced-limit",
+        type=int,
+        default=None,
+        help=(
+            "If provided, balance the validation split across DEEPECG labels with an equal per-label target "
+            "up to this total size"
+        ),
+    )
+    parser.add_argument(
+        "--val-balanced-min-per-label",
+        type=int,
+        default=50,
+        help="Minimum desired number of validation ECGs per DEEPECG label when balancing",
+    )
+    parser.add_argument(
         "--test-ecgs",
         type=int,
         default=None,
@@ -67,10 +82,22 @@ def parse_args() -> argparse.Namespace:
         help="Maximum fraction of normal ECGs to retain per split",
     )
     parser.add_argument(
+        "--max-par-ailleurs-percentage",
+        type=float,
+        default=0.05,
+        help="Maximum fraction of ECGs per split whose diagnosis contains 'ECG normal par ailleurs'",
+    )
+    parser.add_argument(
         "--max-positive-per-label",
         type=int,
         default=None,
         help="Cap on positive samples per text label (None keeps all)",
+    )
+    parser.add_argument(
+        "--max-val-ecgs",
+        type=int,
+        default=10000,
+        help="Maximum number of unique ECGs to keep in the validation split",
     )
     parser.add_argument(
         "--sample-checks",
@@ -126,6 +153,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable generation of QA text variants (defaults to include)",
     )
+    parser.add_argument(
+        "--diagnosis-column",
+        type=str,
+        default="translated_diagnosis",
+        help=(
+            "Column in the metadata/labels parquet that contains the free-text diagnosis/report. "
+            "When the requested column is unavailable the script falls back to 'diagnosis'. "
+            "Use an empty string or 'none' to skip adding diagnosis text to the mapping."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -136,6 +173,13 @@ def main() -> None:
     from dataset_generation.generate_train_test_datasets import generate_siglip_alignment_dataset
 
     metadata_path = args.metadata_path or args.parquet
+
+    diagnosis_column: str | None
+    if args.diagnosis_column is None:
+        diagnosis_column = None
+    else:
+        diag_value = args.diagnosis_column.strip()
+        diagnosis_column = None if diag_value == "" or diag_value.lower() == "none" else diag_value
 
     text_bank_path, mapping_path = generate_siglip_alignment_dataset(
         parquet_path=metadata_path,
@@ -150,10 +194,15 @@ def main() -> None:
         max_hardneg_per_group=args.max_hardneg_per_group,
         train_ecg_limit=args.train_ecgs,
         val_ecg_limit=args.val_ecgs,
+        val_balanced_limit=args.val_balanced_limit,
+        val_balanced_min_per_label=args.val_balanced_min_per_label,
         test_ecg_limit=args.test_ecgs,
         max_normal_percentage=args.max_normal_percentage,
+        max_par_ailleurs_percentage=args.max_par_ailleurs_percentage,
+        max_validation_ecgs=args.max_val_ecgs,
         max_positive_per_label=args.max_positive_per_label,
         labels_path=args.labels_path,
+        diagnosis_column=diagnosis_column,
     )
 
     print("\nArtifacts saved:")

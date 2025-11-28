@@ -12,9 +12,13 @@ import json
 import pandas as pd
 import numpy as np
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Set
 from dataset_column_mappings import DatasetColumnMapper
-from utils.constants import DEEPECG_CATEGORIES, DEEPECG_DIAGNOSIS_TRANSLATION
+from utils.constants import (
+    DEEPECG_CATEGORIES,
+    DEEPECG_DIAGNOSIS_TRANSLATION,
+    DEEPECG_PATHOLOGICAL_LIMIT,
+)
 
 # Compile regex patterns at module level for better performance
 LEAD_NAME_PATTERN = re.compile(r'(V\d+|aV[RLF]|I{1,3})(?=[Vv]|aV|I{1,3})')
@@ -76,6 +80,11 @@ class ECGAnswerGenerator:
             'PERICARDITIS',
             'OTHER'
         ]
+
+        # Precompute pathological/limit label sets for classification answers
+        limit_config = DEEPECG_PATHOLOGICAL_LIMIT.get('deepecg', {})
+        self.pathological_labels = set(limit_config.get('pathological', []))
+        self.limit_labels = set(limit_config.get('limit', []))
     
     def get_active_findings(self, row: pd.Series) -> Dict[str, List[str]]:
         """
@@ -164,10 +173,10 @@ class ECGAnswerGenerator:
         """
         heart_rate = self.calculate_heart_rate(row)
         
-        # Check if REPORT column exists and has content using column mapper
-        report_col = self.column_mapper.get_column('report')
-        if report_col and report_col in row.index and pd.notna(row[report_col]) and str(row[report_col]).strip():
-            report = str(row[report_col]).strip()
+        # Prefer dataset-provided free-text report over category enumeration
+        report = self.column_mapper.get_value(row, 'report', default=None)
+        if report is not None and str(report).strip():
+            report = str(report).strip()
             
             # Add heart rate if available (but not if it's 0/artifacts)
             if heart_rate and heart_rate > 0:
@@ -874,10 +883,45 @@ class ECGAnswerGenerator:
             else:
                 # General category question
                 if mapped_category and mapped_category in active_findings:
-                    findings = [self.format_finding_name(f) for f in active_findings[mapped_category]]
+                    findings_raw = list(active_findings[mapped_category])
+
+                    # If the question is specifically about atria, filter to atrial-only findings
+                    is_atrial_question = any(t in prompt_text for t in ['atrial', 'atrium'])
+                    if mapped_category == 'CHAMBER ENLARGEMENT' and is_atrial_question:
+                        atrial_only = []
+                        for f in findings_raw:
+                            fl = str(f).lower()
+                            if ('atrial' in fl) or ('bi-atrial' in fl) or ('biatrial' in fl) or (fl in ['lae', 'rae']):
+                                atrial_only.append(self.format_finding_name(f))
+                        if atrial_only:
+                            return f"Yes - {'; '.join(atrial_only)}"
+                        else:
+                            # Tailor negative phrasing to the question
+                            if asking_for_abnormalities:
+                                return "No - no atrial abnormality"
+                            else:
+                                return "No - no atrial enlargement"
+
+                    findings = [self.format_finding_name(f) for f in findings_raw]
                     
                     # If asking about abnormalities, filter out normal findings
                     if asking_for_abnormalities:
+                        # Special atrial-only narrowing when question text targets atria
+                        is_atrial_question = any(t in prompt_text for t in ['atrial', 'atrium'])
+                        if mapped_category == 'CHAMBER ENLARGEMENT' and is_atrial_question:
+                            atrial_abnormal = []
+                            for f in active_findings[mapped_category]:
+                                fl = str(f).lower()
+                                if ('atrial' in fl) or ('bi-atrial' in fl) or ('biatrial' in fl) or (fl in ['lae', 'rae']):
+                                    formatted = self.format_finding_name(f)
+                                    # exclude any that might be normal wording (safety)
+                                    if not any(normal.lower() in formatted.lower() for normal in normal_findings):
+                                        atrial_abnormal.append(formatted)
+                            if atrial_abnormal:
+                                return f"Yes - {'; '.join(atrial_abnormal)}"
+                            else:
+                                return "No - no atrial abnormality"
+
                         # Filter based on the original column names, not formatted names
                         abnormal_findings = []
                         for finding in active_findings[mapped_category]:
@@ -907,6 +951,19 @@ class ECGAnswerGenerator:
                                 return "No - no ectopic beats present"
                         else:
                             # Not specifically asking about abnormalities or ectopic beats
+                            # If question targets atria, restrict to atrial-only findings
+                            is_atrial_question = any(t in prompt_text for t in ['atrial', 'atrium'])
+                            if mapped_category == 'CHAMBER ENLARGEMENT' and is_atrial_question:
+                                atrial_only = []
+                                for f in active_findings[mapped_category]:
+                                    fl = str(f).lower()
+                                    if ('atrial' in fl) or ('bi-atrial' in fl) or ('biatrial' in fl) or (fl in ['lae', 'rae']):
+                                        atrial_only.append(self.format_finding_name(f))
+                                if atrial_only:
+                                    return f"Yes - {'; '.join(atrial_only)}"
+                                else:
+                                    return "No - no atrial enlargement"
+
                             # Add heart rate to first rhythm finding only (if not artifacts)
                             if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                                 findings_with_hr = []
@@ -922,6 +979,13 @@ class ECGAnswerGenerator:
                                 response = f"Yes - {'; '.join(findings)}"
                             return response
                 else:
+                    # Tailor negative response for atrial-focused questions even when no findings in category
+                    is_atrial_question = any(t in prompt_text for t in ['atrial', 'atrium'])
+                    if mapped_category == 'CHAMBER ENLARGEMENT' and is_atrial_question:
+                        if asking_for_abnormalities:
+                            return "No - no atrial abnormality"
+                        else:
+                            return "No - no atrial enlargement"
                     response = self._get_negative_response(mapped_category)
                     # Add heart rate for rhythm questions even when normal (if not artifacts)
                     if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
@@ -983,6 +1047,32 @@ class ECGAnswerGenerator:
         else:
             return "No - no abnormalities in this category"
     
+    def _extract_pathological_descriptions(
+        self,
+        active_findings: Dict[str, List[str]]
+    ) -> Tuple[List[str], List[str]]:
+        """Return formatted lists of pathological and limit findings present."""
+        pathological: List[str] = []
+        limit: List[str] = []
+        seen_pathological: Set[str] = set()
+        seen_limit: Set[str] = set()
+
+        for findings in active_findings.values():
+            for finding in findings:
+                if finding in self.pathological_labels and finding not in seen_pathological:
+                    pathological.append(self.format_finding_name(finding))
+                    seen_pathological.add(finding)
+                elif finding in self.limit_labels and finding not in seen_limit:
+                    limit.append(self.format_finding_name(finding))
+                    seen_limit.add(finding)
+
+        return pathological, limit
+
+    @staticmethod
+    def _combine_with_details(base: str, details: str) -> str:
+        """Append detail text to base classification string when available."""
+        return f"{base}; {details}" if details else base
+    
     def generate_classification_answer(self, row: pd.Series) -> str:
         """
         Generate classification answer (normal/borderline/pathological).
@@ -992,6 +1082,7 @@ class ECGAnswerGenerator:
         prompt_text = row.get('prompt', '').lower()
         ecg_type = row.get('ecg_type', 'unknown')
         active_findings = self.get_active_findings(row)
+        pathological_descriptions, limit_descriptions = self._extract_pathological_descriptions(active_findings)
         
         # If ecg_type is unknown, determine from active findings
         if ecg_type == 'unknown' or pd.isna(ecg_type):
@@ -1045,11 +1136,16 @@ class ECGAnswerGenerator:
             'is this', 'is there', 'are there', 'does', 'should'
         ])
         
+        # Special phrasing for binary classification prompts
+        is_binary_classify = ('normal or abnormal' in prompt_text) or ('classify this ecg' in prompt_text and 'normal' in prompt_text and 'abnormal' in prompt_text)
+
         if ecg_type == 'normal':
             if is_urgent_question:
                 return "No - routine follow-up; normal ECG"
             elif is_normal_question:
                 return "Yes - ECG is within normal limits"
+            elif is_binary_classify:
+                return "Normal - No significant abnormalities detected"
             elif is_abnormal_question:
                 if 'wrong' in prompt_text or 'concerning' in prompt_text:
                     return "No - ECG is normal"
@@ -1060,18 +1156,23 @@ class ECGAnswerGenerator:
         
         elif ecg_type == 'borderline':
             # List the borderline findings
-            findings = []
-            for category, items in active_findings.items():
-                findings.extend(items[:2])
-            
             finding_str = ""
-            if findings:
-                finding_str = ", ".join([self.format_finding_name(f) for f in findings[:3]])
+            if limit_descriptions:
+                finding_str = ", ".join(limit_descriptions[:3])
+            else:
+                findings = []
+                for category, items in active_findings.items():
+                    findings.extend(items[:2])
+                if findings:
+                    finding_str = ", ".join([self.format_finding_name(f) for f in findings[:3]])
             
             if is_urgent_question:
                 return "No - routine follow-up recommended; borderline findings only"
             elif is_normal_question:
                 return f"No - Borderline ECG; Minor findings: {finding_str}" if finding_str else "No - Borderline ECG"
+            elif is_binary_classify:
+                # Treat borderline as abnormal for binary classification wording
+                return f"Abnormal - Minor findings: {finding_str}" if finding_str else "Abnormal - Borderline ECG"
             elif is_abnormal_question:
                 if 'wrong' in prompt_text:
                     return f"Yes - Borderline abnormalities: {finding_str}" if finding_str else "Yes - Borderline changes present"
@@ -1097,6 +1198,13 @@ class ECGAnswerGenerator:
             finding_str = ""
             if critical_findings:
                 finding_str = ", ".join([self.format_finding_name(f) for f in critical_findings[:3]])
+
+            pathological_str = "; ".join(pathological_descriptions[:5])
+            abnormal_details = ""
+            if pathological_str:
+                abnormal_details = f"Pathological findings: {pathological_str}"
+            elif finding_str:
+                abnormal_details = f"Significant findings: {finding_str}"
             
             # Check for truly urgent conditions
             urgent_conditions = [
@@ -1114,20 +1222,29 @@ class ECGAnswerGenerator:
                     break
             
             if is_urgent_question:
+                # If the question asks about urgent action and there are pathological findings,
+                # answer "Yes" to reflect abnormal/pathological status, reserving a stronger
+                # "urgent intervention needed" only for truly emergent conditions.
                 if is_truly_urgent:
-                    return f"Yes - urgent intervention needed; {finding_str}" if finding_str else "Yes - urgent intervention needed"
+                    return self._combine_with_details("Yes - urgent intervention needed", abnormal_details or finding_str)
                 else:
-                    return f"No - prompt follow-up recommended; {finding_str}" if finding_str else "No - prompt follow-up recommended"
+                    return self._combine_with_details("Yes - there are pathological findings", abnormal_details or finding_str)
             elif is_normal_question or 'within normal limits' in prompt_text:
-                return f"No - Abnormal ECG; Significant findings: {finding_str}" if finding_str else "No - Abnormal ECG"
+                return self._combine_with_details("No - Abnormal ECG", abnormal_details)
+            elif is_binary_classify:
+                # Binary classification phrasing without yes/no
+                if abnormal_details or finding_str:
+                    return f"Abnormal - {(abnormal_details or finding_str)}"
+                else:
+                    return "Abnormal - ECG shows significant abnormalities"
             elif 'wrong' in prompt_text:
-                return f"Yes - Abnormal ECG; Significant findings: {finding_str}" if finding_str else "Yes - Abnormal ECG"
+                return self._combine_with_details("Yes - Abnormal ECG", abnormal_details)
             elif 'concerning' in prompt_text or 'require follow-up' in prompt_text:
-                return f"Yes - ECG shows significant abnormalities: {finding_str}" if finding_str else "Yes - Abnormal ECG requiring follow-up"
+                return self._combine_with_details("Yes - ECG shows significant abnormalities", abnormal_details)
             elif is_abnormal_question:
-                return f"Yes - Abnormal ECG; Significant findings: {finding_str}" if finding_str else "Yes - Abnormal ECG"
+                return self._combine_with_details("Yes - Abnormal ECG", abnormal_details)
             else:
-                return f"Abnormal ECG; Significant findings: {finding_str}" if finding_str else "Abnormal ECG; Multiple abnormalities"
+                return self._combine_with_details("Abnormal ECG", abnormal_details or finding_str or "")
         
         # This should never be reached since we now always determine classification
         # But adding safety fallback that returns pathological with any findings present
@@ -1519,10 +1636,22 @@ class ECGAnswerGenerator:
         # Initialize the JSON structure - only include what's present
         json_output = {}
         
+        # Only allow these top-level keys (omit OTHER by design)
+        allowed_keys = {
+            'RHYTHM',
+            'CONDUCTION',
+            'CHAMBER_ENLARGEMENT',
+            'INFARCT_ISCHEMIA',
+            'PERICARDITIS',
+        }
+        
         # Go through each category and condition
         for category, conditions in self.categories_dict.items():
             # Map category names to JSON keys
             json_category = category.replace(", ", "_").replace(" ", "_").upper()
+            # Skip any category not in the explicit schema (e.g., OTHER)
+            if json_category not in allowed_keys:
+                continue
             
             present_findings = []
             
@@ -2146,15 +2275,16 @@ class ECGAnswerGenerator:
         
         # Check if it's an acute occlusion and report its type
         if acs_condition in ACS_ACUTE_CONDITIONS:
+            # Determine occlusion completeness for messaging
             if acs_condition == 'Acute Complete Coronary Occlusion':
-                occlusion_phrase = 'acute complete coronary occlusion'
+                occlusion_type_text = 'complete occlusion'
             elif acs_condition == 'Acute Incomplete Coronary Occlusion':
-                occlusion_phrase = 'acute incomplete coronary occlusion'
+                occlusion_type_text = 'incomplete occlusion'
             else:
-                occlusion_phrase = 'acute coronary occlusion'
+                occlusion_type_text = None
 
-            # Include culprit hint if PCI regions are available
-            culprit_hint = ''
+            # Build culprit phrase if PCI regions are available
+            culprit_phrase = None
             if 'acs_pci_regions' in row.index and pd.notna(row.get('acs_pci_regions')):
                 import ast
                 regions_raw = row.get('acs_pci_regions')
@@ -2169,11 +2299,18 @@ class ECGAnswerGenerator:
                         from utils.constants import ACS_ARTERY_MAPPING
                         primary_region = region_list[0] if isinstance(region_list, list) else str(region_list)
                         mapped_region = ACS_ARTERY_MAPPING.get(primary_region, primary_region)
-                        culprit_hint = f" Most likely culprit artery: {mapped_region}."
+                        if occlusion_type_text:
+                            culprit_phrase = f"culprit is the {mapped_region} with {occlusion_type_text}"
+                        else:
+                            culprit_phrase = f"culprit is the {mapped_region}"
                 except (ValueError, SyntaxError, TypeError):
                     pass
 
-            return f"Yes - {occlusion_phrase}.{culprit_hint}".strip()
+            # Compose final affirmative answer including culprit when available
+            if culprit_phrase:
+                return f"Yes - there is acute coronary occlusion; {culprit_phrase}"
+            else:
+                return "Yes - there is acute coronary occlusion; culprit artery is not documented"
 
         # Not an acute occlusion
         if acs_condition == 'No Coronary Disease':
@@ -2320,12 +2457,23 @@ class ECGAnswerGenerator:
     def generate_answer(self, row: pd.Series) -> str:
         """
         Main function to generate appropriate answer based on prompt type.
-        ALWAYS mentions acute MI/STEMI first if present in report.
+        Prepends acute MI/STEMI only for interpretation prompts or
+        when the question explicitly asks about acute MI/STEMI.
         """
+        # If the row already provides a generated_answer (e.g., prompt maker
+        # injected a dataset-specific ground truth for a canonical prompt),
+        # respect it and return as-is.
+        prefilled = row.get('generated_answer')
+        try:
+            if prefilled is not None and str(prefilled).strip() != "":
+                return str(prefilled).strip()
+        except Exception:
+            pass
+
         prompt_category = row.get('prompt_category', '')
         prompt_type = row.get('prompt_type', '')
         
-        # Check for acute MI/STEMI FIRST - this takes precedence over everything
+        # Check for acute MI/STEMI in report
         acute_mi_prefix = self.check_for_acute_mi_prefix(row)
         
         # Route to appropriate generator based on prompt category
@@ -2396,35 +2544,23 @@ class ECGAnswerGenerator:
             # Default to interpretation
             base_answer = self.generate_interpretation_answer(row)
         
-        # Handle acute MI prefix if present (but not for JSON)
+        # Only include the acute MI prefix for interpretation prompts
+        # or when the question explicitly asks about acute MI/STEMI.
         if acute_mi_prefix and prompt_category != 'json_interpretation':
-            # Don't add prefix if it's an interpretation that starts with the report text
-            if not base_answer.startswith('*** CONSIDER ACUTE'):
-                # Also check if answer doesn't already have our prefix
-                if not base_answer.startswith('*** ACUTE STEMI'):
-                    # For certain question types, simplify the answer when STEMI is present
-                    prompt_text = row.get('prompt', '').lower()
-                    
-                    # Urgency questions - just confirm it's urgent
-                    if 'urgency' in prompt_category or 'urgent' in prompt_text or 'emergency' in prompt_text:
-                        return acute_mi_prefix + "Yes, immediate intervention required"
-                    
-                    # ST elevation questions - just confirm yes
-                    elif 'st elevation' in prompt_text:
-                        return acute_mi_prefix + "Yes"
-                    
-                    # Q wave questions
-                    elif 'q wave' in prompt_text:
-                        # Check if Q waves are actually present
-                        if 'Yes' in base_answer:
-                            return acute_mi_prefix + "Yes"
-                        else:
-                            return acute_mi_prefix + "No"
-                    
-                    # For other questions, add the full answer
-                    else:
-                        return acute_mi_prefix + base_answer
-        
+            prompt_text = str(row.get('prompt', '')).lower()
+            is_interpretation = ('interpretation' in prompt_category)
+            asks_acute_mi = any(
+                kw in prompt_text for kw in [
+                    'acute mi',
+                    'acute myocardial infarction',
+                    'stemi'
+                ]
+            )
+            if is_interpretation or asks_acute_mi:
+                # Avoid duplicating prefix if already present
+                if not base_answer.startswith('*** CONSIDER ACUTE') and not base_answer.startswith('*** ACUTE STEMI'):
+                    return acute_mi_prefix + base_answer
+
         return base_answer
     
     def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:

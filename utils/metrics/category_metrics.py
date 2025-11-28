@@ -11,10 +11,8 @@ from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 import numpy as np
 
-# Metrics imports
-from torchmetrics.text.rouge import ROUGEScore
-from torchmetrics.text.bleu import BLEUScore
-from evaluate import load
+# Unified metrics util
+from utils.metrics.aggregate_text_metrics import aggregate_text_metrics
 
 
 class CategoryMetricsCalculator:
@@ -47,25 +45,8 @@ class CategoryMetricsCalculator:
         self.rouge_variants = rouge_variants
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Initialize metrics
+        # No stateful torchmetrics; use aggregate_text_metrics per category/overall
         self.metrics = {}
-        
-        if "rouge" in metric_names:
-            self.metrics["rouge"] = ROUGEScore(
-                rouge_keys=tuple(rouge_variants),  # Convert to tuple
-                normalizer="nltk",
-                tokenizer="nltk"
-            ).to(self.device)
-        
-        if "bleu" in metric_names:
-            self.metrics["bleu"] = BLEUScore(
-                n_gram=4,
-                smooth=True
-            ).to(self.device)
-        
-        if "meteor" in metric_names:
-            # METEOR uses HuggingFace evaluate library
-            self.meteor_metric = load("meteor")
         
         # Storage for category-wise predictions and references
         self.category_data = defaultdict(lambda: {"predictions": [], "references": []})
@@ -112,27 +93,12 @@ class CategoryMetricsCalculator:
             predictions = data["predictions"]
             references = data["references"]
             
-            # Compute ROUGE metrics
-            if "rouge" in self.metrics:
-                rouge_scores = self.metrics["rouge"](predictions, references)
-                for variant in self.rouge_variants:
-                    if variant in rouge_scores:
-                        category_results[variant] = rouge_scores[variant].item()
-            
-            # Compute BLEU metric
-            if "bleu" in self.metrics:
-                # BLEU expects references as list of lists (multiple references per prediction)
-                bleu_references = [[ref] for ref in references]
-                bleu_score = self.metrics["bleu"](predictions, bleu_references)
-                category_results["bleu"] = bleu_score.item()
-            
-            # Compute METEOR metric
-            if "meteor" in self.metric_names and hasattr(self, 'meteor_metric'):
-                meteor_scores = []
-                for pred, ref in zip(predictions, references):
-                    score = self.meteor_metric.compute(predictions=[pred], references=[ref])
-                    meteor_scores.append(score["meteor"])
-                category_results["meteor"] = np.mean(meteor_scores)
+            # Compute metrics via unified util
+            agg = aggregate_text_metrics(predictions, references)
+            # Only include keys relevant to our configured variants
+            for k, v in agg.items():
+                if k.startswith("rouge") or k.startswith("bleu") or k == "meteor":
+                    category_results[k] = float(v)
             
             results[category] = category_results
         
@@ -158,26 +124,10 @@ class CategoryMetricsCalculator:
         
         overall_results = {}
         
-        # Compute ROUGE metrics
-        if "rouge" in self.metrics:
-            rouge_scores = self.metrics["rouge"](all_predictions, all_references)
-            for variant in self.rouge_variants:
-                if variant in rouge_scores:
-                    overall_results[variant] = rouge_scores[variant].item()
-        
-        # Compute BLEU metric
-        if "bleu" in self.metrics:
-            bleu_references = [[ref] for ref in all_references]
-            bleu_score = self.metrics["bleu"](all_predictions, bleu_references)
-            overall_results["bleu"] = bleu_score.item()
-        
-        # Compute METEOR metric
-        if "meteor" in self.metric_names and hasattr(self, 'meteor_metric'):
-            meteor_scores = []
-            for pred, ref in zip(all_predictions, all_references):
-                score = self.meteor_metric.compute(predictions=[pred], references=[ref])
-                meteor_scores.append(score["meteor"])
-            overall_results["meteor"] = np.mean(meteor_scores)
+        # Compute metrics via unified util
+        agg = aggregate_text_metrics(all_predictions, all_references)
+        for k, v in agg.items():
+            overall_results[k] = float(v)
         
         return overall_results
     
@@ -209,11 +159,7 @@ class CategoryMetricsCalculator:
         """Reset all stored data for new evaluation."""
         self.category_data.clear()
         
-        # Reset torch metrics
-        if "rouge" in self.metrics:
-            self.metrics["rouge"].reset()
-        if "bleu" in self.metrics:
-            self.metrics["bleu"].reset()
+        # No stateful torchmetrics to reset
     
     def format_results_for_logging(self, 
                                    category_results: Dict[str, Dict[str, float]], 

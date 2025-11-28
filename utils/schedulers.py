@@ -156,14 +156,34 @@ def get_scheduler(
         )
 
     elif scheduler_name == 'cosine_with_warmup':
-        # Linear warmup followed by cosine decay
+        # Linear warmup followed by cosine decay. If num_hard_restarts_cycles > 1,
+        # use hard restarts; otherwise use smooth cosine (default 0.5 cycle).
         num_warmup_steps = int(t_total * num_warmup_percent)
-        print(f"[cosine_with_warmup] t_total={t_total}, num_warmup_steps={num_warmup_steps}")
-        return get_cosine_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=num_warmup_steps,
-            num_training_steps=t_total
-        )
+        cycles = 0.5 if num_hard_restarts_cycles is None else float(num_hard_restarts_cycles)
+
+        if cycles > 1.0:
+            print(
+                f"[cosine_with_warmup] t_total={t_total}, num_warmup_steps={num_warmup_steps}, "
+                f"num_cycles={cycles} (HARD restarts)"
+            )
+            return get_cosine_with_hard_restarts_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=t_total,
+                num_cycles=cycles
+            )
+        else:
+            # Smooth cosine without hard restarts; 0.5 by default for decay-to-zero
+            print(
+                f"[cosine_with_warmup] t_total={t_total}, num_warmup_steps={num_warmup_steps}, "
+                f"num_cycles={cycles} (smooth)"
+            )
+            return get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=t_total,
+                num_cycles=cycles
+            )
 
     elif scheduler_name == 'cosine_with_hard_restarts_with_warmup':
         # Linear warmup followed by cosine annealing with hard restarts
