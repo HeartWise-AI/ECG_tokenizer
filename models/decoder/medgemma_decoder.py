@@ -677,11 +677,36 @@ class MedGemmaDecoder(nn.Module):
             "top_p": 1.0,
             "max_new_tokens": 64,
             "min_new_tokens": 0,
-            "repetition_penalty": 1.02,
+            "repetition_penalty": 1.1,
+            "no_repeat_ngram_size": 5,
         }
         if default_generation_kwargs:
             base_defaults.update(default_generation_kwargs)
-        self._eot_token_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+        
+        # Determine end-of-turn token ID (MedGemma uses <end_of_turn>, LLaMA uses <|eot_id|>)
+        self._eot_token_id = None
+        self._eos_token_ids: list[int] = []
+        
+        # Always include the tokenizer's EOS
+        if self.eos_token_id is not None:
+            self._eos_token_ids.append(int(self.eos_token_id))
+        
+        # Try MedGemma's <end_of_turn> first
+        end_of_turn_id = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
+        if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
+            self._eot_token_id = end_of_turn_id
+            if end_of_turn_id not in self._eos_token_ids:
+                self._eos_token_ids.append(end_of_turn_id)
+        
+        # Fallback to LLaMA's <|eot_id|>
+        if self._eot_token_id is None:
+            eot_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            if isinstance(eot_id, int) and eot_id > 0:
+                self._eot_token_id = eot_id
+                if eot_id not in self._eos_token_ids:
+                    self._eos_token_ids.append(eot_id)
+
+                    
         if not self.prefix_tuning and self.ecg_token_start_id is not None:
             self.bad_ecg_token_ids: Optional[list[list[int]]] = [[tid] for tid in range(
                 self.ecg_token_start_id,
@@ -1807,6 +1832,10 @@ class MedGemmaDecoder(nn.Module):
         eos_ok: set[int] = set()
         if getattr(self, "eos_token_id", None) is not None:
             eos_ok.add(int(self.eos_token_id))
+        # Include all EOS tokens (MedGemma's <end_of_turn> + LLaMA's <|eot_id|>)
+        for eos_id in getattr(self, "_eos_token_ids", []):
+            if eos_id is not None:
+                eos_ok.add(int(eos_id))
         if getattr(self, "_eot_token_id", None) is not None and self._eot_token_id is not None:
             eos_ok.add(int(self._eot_token_id))
         allowed = set(self._binary_allowed_token_ids)
@@ -1966,8 +1995,9 @@ class MedGemmaDecoder(nn.Module):
         generate_args = self._sanitize_generate_args(generate_args)
 
         eos_token_id = generate_args.pop("eos_token_id", None)
-        if eos_token_id is None and self._eot_token_id is not None:
-            eos_token_id = self._eot_token_id
+        if eos_token_id is None:
+            # Use the list of EOS tokens (includes <end_of_turn> for MedGemma)
+            eos_token_id = self._eos_token_ids if self._eos_token_ids else self._eot_token_id
 
         # Extract custom routing guards and remove unsupported kwargs
         force_json_flag = bool(generate_args.pop("force_json", False))
@@ -2121,8 +2151,9 @@ class MedGemmaDecoder(nn.Module):
         generate_args = self._sanitize_generate_args(generate_args)
 
         eos_token_id = generate_args.pop("eos_token_id", None)
-        if eos_token_id is None and self._eot_token_id is not None:
-            eos_token_id = self._eot_token_id
+        if eos_token_id is None:
+            # Use the list of EOS tokens (includes <end_of_turn> for MedGemma)
+            eos_token_id = self._eos_token_ids if self._eos_token_ids else self._eot_token_id
 
         # Extract custom routing guards and remove unsupported kwargs
         force_json_flag = bool(generate_args.pop("force_json", False))

@@ -398,9 +398,17 @@ def generate_answer(checkpoint: str, waveform_path: str, question: str, device_s
     model.to(target_device)
 
     generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
-    generation_kwargs.setdefault("max_new_tokens", 256)
-    generation_kwargs.setdefault("eos_token_id", tokenizer.eos_token_id)
+    generation_kwargs.setdefault("max_new_tokens", 96)  # Match training config
     generation_kwargs.setdefault("pad_token_id", tokenizer.pad_token_id)
+    generation_kwargs.setdefault("no_repeat_ngram_size", 5)  # Prevent repetition
+    generation_kwargs.setdefault("repetition_penalty", 1.1)
+    
+    # MedGemma should stop at <end_of_turn> (106) or <eos> (1)
+    eos_ids = [tokenizer.eos_token_id]
+    end_of_turn_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+    if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
+        eos_ids.append(end_of_turn_id)
+    generation_kwargs.setdefault("eos_token_id", eos_ids)
 
     prompt_ids, prompt_mask, prompt_text = _build_prompt_tensors(
         question,

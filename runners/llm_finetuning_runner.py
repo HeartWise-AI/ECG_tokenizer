@@ -1736,6 +1736,7 @@ class LLMFinetuningRunner(BaseRunner):
 
         Handles broken variants of the end-of-turn token (e.g. "<|eot_", "|eot_id|>")
         that sometimes appear when the tokenizer doesn't mark them as special.
+        Also handles MedGemma's <end_of_turn> and <start_of_turn> tokens.
         Also normalizes whitespace and excessive/leading semicolons.
         """
         if not text:
@@ -1743,19 +1744,23 @@ class LLMFinetuningRunner(BaseRunner):
 
         cleaned = str(text)
 
-        # 1) Robustly trim at end-of-turn artifacts (handle broken variants)
+        # 1) Robustly trim at end-of-turn artifacts (handle broken variants and MedGemma)
         try:
-            # Match either proper tokens or broken fragments like "|eot_ids|=..."
-            eot_match = re.search(r"<\|\s*eot[^>]*>?|\|\s*eot[^\s]*", cleaned, flags=re.IGNORECASE)
+            # Match MedGemma's <end_of_turn> or LLaMA's <|eot_id|> and variants
+            eot_match = re.search(
+                r"<end_of_turn>|<\|\s*eot[^>]*>?|\|\s*eot[^\s]*|<start_of_turn>model|<start_of_turn>user",
+                cleaned,
+                flags=re.IGNORECASE
+            )
             if eot_match is not None:
                 cleaned = cleaned[: eot_match.start()]
         except Exception:
             # Fallback: common delimiters
-            for delimiter in ("<|eot_id|>", "|eot_id|>"):
+            for delimiter in ("<end_of_turn>", "<|eot_id|>", "|eot_id|>", "<start_of_turn>"):
                 if delimiter in cleaned:
                     cleaned = cleaned.split(delimiter, 1)[0]
 
-        # 2) Strip remaining special header markers
+        # 2) Strip remaining special header markers (LLaMA and MedGemma)
         special_tokens = (
             "<|start_header_id|>",
             "<|end_header_id|>",
@@ -1764,6 +1769,11 @@ class LLMFinetuningRunner(BaseRunner):
             "<|system|>",
             "<|start_of_turn|>",
             "<|end_of_turn|>",
+            "<start_of_turn>",
+            "<end_of_turn>",
+            "<start_of_image>",
+            "<end_of_image>",
+            "model",  # MedGemma turn marker
         )
         for token in special_tokens:
             cleaned = cleaned.replace(token, "")
