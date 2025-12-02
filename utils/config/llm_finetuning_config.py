@@ -155,6 +155,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
 
     # Checkpoint management
     resume_checkpoint_path: Optional[str] = None
+    resume_global_step: Optional[int] = None  # Global step to resume from (for mid-epoch resume)
+    resume_best_val_loss: Optional[float] = None  # Best validation loss to resume from
     
     # ECG plotting configuration for validation
     plot_validation_ecgs: bool = False

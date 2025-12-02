@@ -45,6 +45,7 @@ def decode_assistant_only_text(
     input_ids: Optional[torch.Tensor] = None,
     prompt_input_ids: Optional[torch.Tensor] = None,
     num_ecg_tokens: int = 0,
+    generated_only_new_tokens: bool = True,
 ) -> Tuple[str, str]:
     """Decode assistant-only text for predictions and references.
 
@@ -52,18 +53,20 @@ def decode_assistant_only_text(
     Drops prompt tokens (where labels are -100) from both the generated output and
     the reference so that metrics focus on the assistant response.
     
-    IMPORTANT: When ECG tokens are injected after <start_of_image>, the generated
-    sequence is longer than the original prompt by num_ecg_tokens. This function
-    accounts for this by using prompt_input_ids length + num_ecg_tokens as the
-    offset to find where the generated answer starts.
+    IMPORTANT: When generation uses `inputs_embeds` (as MedGemma does), HuggingFace's
+    generate() returns ONLY the newly generated tokens, NOT the prompt. Set
+    `generated_only_new_tokens=True` (default) in this case to skip prompt trimming.
     
     Args:
         tokenizer: Tokenizer instance
-        generated: Generated token ids (includes prompt with ECG + new generated tokens)
+        generated: Generated token ids (may be new tokens only OR full sequence with prompt)
         labels: Label token ids with -100 for prompt tokens (aligned with input_ids, NOT generated)
         input_ids: Original input token ids (question + answer, optional)
         prompt_input_ids: Question-only input ids used for generation (optional but recommended)
         num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0).
+        generated_only_new_tokens: If True (default), assume generated contains only new tokens
+            (as when using inputs_embeds). If False, assume generated contains prompt + new tokens
+            (as when using input_ids for generation).
     
     Returns:
         Tuple of (prediction_text, reference_text) with normalized whitespace
@@ -74,31 +77,33 @@ def decode_assistant_only_text(
     # Reference: drop -100s (prompt tokens) - this is correct regardless of ECG injection
     ref_ids = label_tensor[label_tensor != -100].tolist()
 
-    # Prediction: find where the generated answer starts
+    # Prediction: get the generated token ids
     gen_ids = generated_tensor.tolist()
     
-    # Best case: we know the prompt length used for generation + ECG tokens
-    if prompt_input_ids is not None:
-        prompt_len = int(prompt_input_ids.shape[-1]) + int(num_ecg_tokens)
-        if len(gen_ids) >= prompt_len:
-            gen_ids = gen_ids[prompt_len:]
-    elif input_ids is not None:
-        # Fallback: use input_ids but this may be wrong if it's question+answer
-        # We need to find where the answer starts in labels and use that offset
-        label_list = label_tensor.tolist()
-        first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
-        # Adjust for ECG tokens that were injected
-        adjusted_idx = first_answer_idx + int(num_ecg_tokens)
-        if len(gen_ids) >= adjusted_idx:
-            gen_ids = gen_ids[adjusted_idx:]
-    else:
-        # Last resort: use labels to find first non--100
-        label_list = label_tensor.tolist()
-        first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
-        # Adjust for ECG tokens
-        adjusted_idx = first_answer_idx + int(num_ecg_tokens)
-        if len(gen_ids) >= adjusted_idx:
-            gen_ids = gen_ids[adjusted_idx:]
+    # When using inputs_embeds for generation (MedGemma, most modern VLMs),
+    # HF generate() returns ONLY the newly generated tokens, NOT the prompt.
+    # In this case, we should NOT trim anything - just decode as-is.
+    #
+    # When using input_ids for generation (legacy path),
+    # HF generate() returns prompt + new tokens, so we need to trim the prompt.
+    
+    if not generated_only_new_tokens:
+        # Legacy path: generated contains prompt + new tokens, need to trim
+        expected_prompt_len = 0
+        if prompt_input_ids is not None:
+            expected_prompt_len = int(prompt_input_ids.shape[-1]) + int(num_ecg_tokens)
+        elif input_ids is not None:
+            label_list = label_tensor.tolist()
+            first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
+            expected_prompt_len = first_answer_idx + int(num_ecg_tokens)
+        else:
+            label_list = label_tensor.tolist()
+            first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
+            expected_prompt_len = first_answer_idx + int(num_ecg_tokens)
+        
+        if expected_prompt_len > 0 and len(gen_ids) > expected_prompt_len:
+            gen_ids = gen_ids[expected_prompt_len:]
+    # else: generated_only_new_tokens=True, use gen_ids as-is (no trimming needed)
 
     # Decode and normalize text (strip + collapse whitespace)
     pred = " ".join(tokenizer.decode(gen_ids, skip_special_tokens=True).strip().split())
@@ -116,7 +121,9 @@ class RougeMetric:
         generated_ids: torch.Tensor, 
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
-        input_ids: Optional[torch.Tensor] = None
+        input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0
     ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes the average ROUGE-1 and ROUGE-L F1 scores over a batch.
@@ -126,6 +133,8 @@ class RougeMetric:
             labels: Tensor of reference token ids
             tokenizer: Tokenizer instance
             input_ids: Original input token ids (optional)
+            prompt_input_ids: Question-only input ids used for generation (optional)
+            num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0)
 
         Returns:
             Dictionary with keys "rouge1" and "rougeL" representing their respective F1 scores,
@@ -141,7 +150,8 @@ class RougeMetric:
         
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             predictions.append(pred)
             references.append(ref)
         
@@ -177,7 +187,9 @@ class SacreBleuMetric:
         generated_ids: torch.Tensor,
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
-        input_ids: Optional[torch.Tensor] = None
+        input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0
     ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes BLEU scores using SacreBLEU for stability and reproducibility.
@@ -187,6 +199,8 @@ class SacreBleuMetric:
             labels: Tensor of reference token ids
             tokenizer: Tokenizer instance
             input_ids: Original input token ids (optional)
+            prompt_input_ids: Question-only input ids used for generation (optional)
+            num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0)
 
         Returns:
             Dictionary with keys "bleu1" and "bleu4" scores, plus "predictions" and "references".
@@ -202,7 +216,8 @@ class SacreBleuMetric:
         
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             if pred.strip() and ref.strip():  # Only include non-empty pairs
                 predictions.append(pred)
                 references.append(ref)
@@ -240,7 +255,9 @@ class MeteorMetric:
         generated_ids: torch.Tensor,
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
-        input_ids: Optional[torch.Tensor] = None
+        input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0
     ) -> Dict[str, Union[float, List[str]]]:
         """
         Computes the average METEOR score over a batch.
@@ -250,6 +267,8 @@ class MeteorMetric:
             labels: Tensor of reference token ids
             tokenizer: Tokenizer instance
             input_ids: Original input token ids (optional)
+            prompt_input_ids: Question-only input ids used for generation (optional)
+            num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0)
 
         Returns:
             Dictionary with key "meteor" mapping to the average METEOR score,
@@ -270,7 +289,8 @@ class MeteorMetric:
         
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             predictions.append(pred)
             references.append(ref)
         
@@ -301,6 +321,8 @@ class BertScoreMetric:
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
         input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0,
         lang: str = "en",
         model_type: Optional[str] = None,
         rescale_with_baseline: bool = True,
@@ -315,6 +337,8 @@ class BertScoreMetric:
             labels: Tensor of reference token ids
             tokenizer: Tokenizer instance
             input_ids: Original input token ids (optional)
+            prompt_input_ids: Question-only input ids used for generation (optional)
+            num_ecg_tokens: Number of ECG tokens injected into the sequence (default 0)
             lang: Language code
             model_type: BERTScore model to use (defaults to pinned DeBERTa)
             rescale_with_baseline: Whether to rescale with baseline
@@ -344,7 +368,8 @@ class BertScoreMetric:
         
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             predictions.append(pred)
             references.append(ref)
         
@@ -387,7 +412,9 @@ class JsonParseRateMetric:
         generated_ids: torch.Tensor,
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
-        input_ids: Optional[torch.Tensor] = None
+        input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0
     ) -> Dict[str, Union[float, List[str]]]:
         parsed = 0
         total = 0
@@ -395,7 +422,8 @@ class JsonParseRateMetric:
         references: List[str] = []
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred, ref = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             predictions.append(pred)
             references.append(ref)
             total += 1
@@ -535,7 +563,9 @@ class StructuredSlotF1Metric:
         generated_ids: torch.Tensor,
         labels: torch.Tensor,
         tokenizer: PreTrainedTokenizerBase,
-        input_ids: Optional[torch.Tensor] = None
+        input_ids: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,
+        num_ecg_tokens: int = 0
     ) -> Dict[str, Union[float, List[str]]]:
         tr_map = StructuredSlotF1Metric._build_translation_map()
         tp = 0
@@ -546,7 +576,8 @@ class StructuredSlotF1Metric:
 
         for i, (gen, lab) in enumerate(zip(generated_ids, labels)):
             ii = input_ids[i] if input_ids is not None else None
-            pred_text, ref_text = decode_assistant_only_text(tokenizer, gen, lab, ii)
+            pi = prompt_input_ids[i] if prompt_input_ids is not None else None
+            pred_text, ref_text = decode_assistant_only_text(tokenizer, gen, lab, ii, pi, num_ecg_tokens, generated_only_new_tokens=True)
             predictions_out.append(pred_text)
             references_out.append(ref_text)
             pred_obj = StructuredSlotF1Metric._try_load_json(pred_text)

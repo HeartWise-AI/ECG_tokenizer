@@ -140,12 +140,30 @@ class LLMFinetuningRunner(BaseRunner):
         self._base_debug_config: dict[str, Any] = dict(base_debug_config)
 
         # Global step tracking and snapshot bookkeeping
-        self.global_step: int = 0
+        # Support resuming from a specific global step (for mid-epoch resume)
+        resume_step = getattr(self.config, 'resume_global_step', None)
+        self.global_step: int = int(resume_step) if resume_step is not None else 0
+        # If resuming, set last validation snapshot step to prevent immediate validation
+        # The next validation will occur at the next interval multiple after resume_step
+        if resume_step is not None and resume_step > 0:
+            interval = getattr(self.config, 'validation_step_interval', 500) or 500
+            # Set to resume_step so validation won't trigger until next interval
+            self._last_validation_snapshot_step: int = int(resume_step)
+            if self.config.is_ref_device:
+                print(f"[Resume] Starting from global_step={self.global_step}, next validation at step {((self.global_step // interval) + 1) * interval}")
+        else:
+            self._last_validation_snapshot_step: int = -1  # Track last step where validation snapshot ran
+        self._last_train_snapshot_step: int = -1  # Track last step where train snapshot ran
         self._train_metric_remaining: int = 0
         self._train_metric_accumulator: dict[str, float] = {}
         self._train_metric_batches_collected: int = 0
-        self.best_val_loss: float = float("inf")
+        # Support resuming best_val_loss from checkpoint
+        resume_best_val_loss = getattr(self.config, 'resume_best_val_loss', None)
+        self.best_val_loss: float = float(resume_best_val_loss) if resume_best_val_loss is not None else float("inf")
         self._last_snapshot_checkpoint: Optional[str] = None
+        
+        # Pre-download NLTK resources at init to avoid repeated downloads during metrics
+        self._ensure_nltk_resources()
 
         # Initialize CF evaluator if enabled
         self.cf_evaluator = None
@@ -212,6 +230,39 @@ class LLMFinetuningRunner(BaseRunner):
                     print("   - Continuing with existing optimizer configuration")
                     print("   - Monitoring for improved performance")
                     print("="*80 + "\n")
+
+    def _build_generation_kwargs(self, tokenizer=None) -> dict:
+        """
+        Build generation kwargs matching the inference script (generate_ecg_answer.py).
+        
+        This ensures validation generations use the exact same parameters as standalone inference.
+        """
+        generation_kwargs = dict(getattr(self.config, "default_generation_kwargs", {}) or {})
+        generation_kwargs.setdefault("max_new_tokens", 96)
+        generation_kwargs.setdefault("no_repeat_ngram_size", 5)
+        generation_kwargs.setdefault("repetition_penalty", 1.1)
+        
+        # Get tokenizer for EOS token IDs
+        if tokenizer is None:
+            try:
+                tokenizer = self.validation_dataloader.dataset.tokenizer  # type: ignore
+            except Exception:
+                tokenizer = None
+        
+        if tokenizer is not None:
+            generation_kwargs.setdefault("pad_token_id", tokenizer.pad_token_id)
+            # MedGemma should stop at <end_of_turn> (106) or <eos> (1)
+            eos_ids = [tokenizer.eos_token_id]
+            try:
+                end_of_turn_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+                if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
+                    eos_ids.append(end_of_turn_id)
+            except Exception:
+                pass
+            generation_kwargs.setdefault("eos_token_id", eos_ids)
+        
+        return generation_kwargs
+
     
     def _apply_phase_settings(self, phase_name: str, phase_config: dict | None):
         """Apply freezing, LoRA, and learning-rate tweaks for the active phase."""
@@ -299,6 +350,28 @@ class LLMFinetuningRunner(BaseRunner):
         if hasattr(model, 'module'):
             model = model.module
         return getattr(model, 'decoder', None)
+    
+    @staticmethod
+    def _ensure_nltk_resources() -> None:
+        """Pre-download NLTK resources to avoid repeated downloads during metrics computation."""
+        try:
+            import nltk
+            import os
+            import sys
+            # Suppress download messages
+            with open(os.devnull, 'w') as devnull:
+                old_stdout, old_stderr = sys.stdout, sys.stderr
+                try:
+                    sys.stdout, sys.stderr = devnull, devnull
+                    for pkg in ["wordnet", "punkt", "punkt_tab", "omw-1.4"]:
+                        try:
+                            nltk.download(pkg, quiet=True)
+                        except Exception:
+                            pass
+                finally:
+                    sys.stdout, sys.stderr = old_stdout, old_stderr
+        except ImportError:
+            pass  # NLTK not installed, skip
 
     def _infer_prefix_offset(self, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> int:
         """
@@ -791,6 +864,7 @@ class LLMFinetuningRunner(BaseRunner):
                 dataloader,
                 max_batches=max_batches
             )
+            # Write validation generations JSON using inference-style generation
             write_val_generations = bool(getattr(self.config, "write_val_generations", True))
             json_path = None
             if write_val_generations:
@@ -1093,10 +1167,11 @@ class LLMFinetuningRunner(BaseRunner):
                         prompt_input_ids=prompt_input_ids_tensor,
                         prompt_attention_mask=prompt_attention_mask_tensor
                     )
-                self._handle_validation_snapshot(
-                    epoch=epoch,
-                    snapshot_running=snapshot
-                )
+                    # Run validation snapshot check only on optimizer steps
+                    self._handle_validation_snapshot(
+                        epoch=epoch,
+                        snapshot_running=snapshot
+                    )
             
             data_iter.set_postfix(postfix_dict)
             
@@ -1108,7 +1183,8 @@ class LLMFinetuningRunner(BaseRunner):
                         outputs=outputs,
                         labels=labels,
                         epoch=epoch,
-                        batch_idx=batch_idx
+                        batch_idx=batch_idx,
+                        batch=batch
                     )
 
             batches_processed += 1
@@ -1582,13 +1658,17 @@ class LLMFinetuningRunner(BaseRunner):
                 except Exception:
                     task_hint = None
 
+                # Build generation kwargs matching inference script
+                generation_kwargs = self._build_generation_kwargs()
+                generation_kwargs["task_hint"] = task_hint
+                generation_kwargs["category_hint"] = batch.get('prompt_category') if isinstance(batch, dict) else None
+                
                 generated_ids = model_for_generation.generate_report_with_question(
                     ecg_signal,
                     prompt_input_ids=prompt_input_ids,
                     prompt_attention_mask=prompt_attention_mask,
                     max_token_length=self.config.max_token_length,
-                    task_hint=task_hint,
-                    category_hint=batch.get('prompt_category') if isinstance(batch, dict) else None,
+                    **generation_kwargs,
                 )
 
             outputs = {
@@ -1627,15 +1707,37 @@ class LLMFinetuningRunner(BaseRunner):
         epoch: int,
         snapshot_running: bool
     ) -> None:
-        """Run validation snapshots mid-epoch when configured."""
+        """Run validation snapshots mid-epoch when configured.
+        
+        Only called on optimizer steps (when did_step=True). Uses multiple guards
+        to ensure validation only runs at the configured interval.
+        """
         if snapshot_running:
             return
 
         interval = getattr(self.config, "validation_step_interval", None)
         if interval is None or interval <= 0:
             return
-        if self.global_step == 0 or self.global_step % interval != 0:
+        
+        # Cast to int to avoid any floating point issues
+        interval = int(interval)
+        current_step = int(self.global_step)
+        
+        # Only run at exact multiples of interval (not step 0)
+        if current_step == 0 or current_step % interval != 0:
             return
+        
+        # CRITICAL: Prevent running if we haven't advanced at least `interval` steps
+        # since the last validation. This guards against any edge cases where
+        # validation might be triggered on consecutive steps.
+        last_step = int(self._last_validation_snapshot_step)
+        if last_step >= 0 and (current_step - last_step) < interval:
+            if self.config.is_ref_device:
+                print(f"[Validation] Skipping step {current_step}: only {current_step - last_step} steps since last validation at {last_step}")
+            return
+        
+        # Mark this step as processed BEFORE running to prevent re-entry
+        self._last_validation_snapshot_step = current_step
 
         snapshot_batches_cfg = getattr(self.config, "validation_snapshot_batches", 0)
         if snapshot_batches_cfg and snapshot_batches_cfg > 0:
@@ -1651,6 +1753,7 @@ class LLMFinetuningRunner(BaseRunner):
             snapshot=True
         )
 
+        checkpoint_path = None
         if self.config.is_ref_device:
             loss_key = f"{RunMode.VALIDATE}/loss"
             val_loss_raw = metrics.get(loss_key)
@@ -1666,6 +1769,12 @@ class LLMFinetuningRunner(BaseRunner):
                     is_best=is_best,
                     step=self.global_step
                 )
+                # Get checkpoint path for inference-style validation
+                checkpoint_path = os.path.join(
+                    self.config.output_dir,
+                    f'checkpoint_step_{self.global_step}.pt'
+                )
+
 
         if self.config.is_ref_device:
             log_payload: dict[str, float] = {}
@@ -1689,46 +1798,76 @@ class LLMFinetuningRunner(BaseRunner):
             device_ids=self.config.device
         )
     
-    def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
-        """Return only the assistant portion of the generated text."""
+    def _decode_generation(
+        self,
+        tokenizer,
+        generated_ids: torch.Tensor,
+        label_ids: torch.Tensor,
+        batch: Optional[dict] = None,
+        sample_idx: int = 0,
+    ) -> Tuple[str, str]:
+        """
+        Unified decoding function for all paths (validation, inference, metrics, JSON).
+        
+        Returns (prediction_text, reference_text) with proper ECG token offset handling.
+        
+        Args:
+            tokenizer: The tokenizer instance
+            generated_ids: Generated token ids for a single sample (1D tensor)
+            label_ids: Label token ids for a single sample (1D tensor)
+            batch: Optional batch dictionary containing prompt_input_ids
+            sample_idx: Index of the sample in the batch (for extracting prompt_input_ids)
+        
+        Returns:
+            Tuple of (sanitized_prediction, sanitized_reference)
+        """
         if generated_ids is None or generated_ids.numel() == 0:
-            return ""
-
-        # Flatten tensors for easier processing
-        generated_flat = generated_ids.view(-1)
-        label_flat = label_ids.view(-1)
+            return "", ""
         
-        # Find where the actual answer starts in label_ids (first non -100 token)
-        mask = label_flat != -100
-        valid_positions = torch.nonzero(mask, as_tuple=False).flatten()
+        gen_tensor = generated_ids.detach().cpu() if generated_ids.is_cuda else generated_ids.detach()
+        label_tensor = label_ids.detach().cpu() if label_ids.is_cuda else label_ids.detach()
         
-        if valid_positions.numel() == 0:
-            # No valid labels - decode the entire generated sequence
-            return tokenizer.decode(generated_flat.tolist(), skip_special_tokens=True)
+        # Get prompt_input_ids for this sample if available
+        prompt_ids_row = None
+        if batch is not None:
+            try:
+                prompt_ids = batch.get('prompt_input_ids', None)
+                if prompt_ids is not None:
+                    if isinstance(prompt_ids, torch.Tensor):
+                        prompt_ids_row = prompt_ids[sample_idx].detach().cpu()
+                    elif isinstance(prompt_ids, (list, tuple)) and sample_idx < len(prompt_ids):
+                        prompt_ids_row = torch.as_tensor(prompt_ids[sample_idx])
+            except Exception:
+                prompt_ids_row = None
         
-        # The prompt length is the position of the first valid label
-        prompt_len = int(valid_positions[0])
+        # MedGemma and similar models use inputs_embeds for generation, which means
+        # HF generate() returns ONLY new tokens (not the prompt). So we should NOT trim.
+        # Set generated_only_new_tokens=True to skip prompt trimming.
         
-        # Account for prefix offset (ECG tokens) if present
-        prefix_offset = self._infer_prefix_offset(generated_ids, label_ids)
+        # Use the unified decode_assistant_only_text function
+        raw_prediction, raw_reference = decode_assistant_only_text(
+            tokenizer,
+            gen_tensor,
+            label_tensor,
+            input_ids=None,
+            prompt_input_ids=None,  # Not needed when generated_only_new_tokens=True
+            num_ecg_tokens=0,  # Not needed when generated_only_new_tokens=True
+            generated_only_new_tokens=True,  # MedGemma uses inputs_embeds, so no prompt in output
+        )
         
-        # Calculate the actual start position in generated_ids
-        # generated_ids structure: [prefix_tokens (if any)] + [prompt_tokens] + [generated_answer]
-        # We need to skip: prefix_offset + prompt_len
-        start_idx = prefix_offset + prompt_len
+        # Sanitize both outputs
+        prediction = self._sanitize_chat_text(raw_prediction)
+        reference = self._sanitize_chat_text(raw_reference)
         
-        # If the model returned continuation-only tokens (no prompt ids in the sequence),
-        # fall back to decoding the entire generated sequence rather than returning empty.
-        if start_idx >= generated_flat.size(0):
-            assistant_tokens = generated_flat
-        else:
-            # Extract tokens from start_idx to the end
-            assistant_tokens = generated_flat[start_idx:]
-
-        if assistant_tokens.numel() == 0:
-            return ""
-
-        return tokenizer.decode(assistant_tokens.tolist(), skip_special_tokens=True)
+        return prediction, reference
+    
+    def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
+        """
+        DEPRECATED: Use _decode_generation instead for proper ECG token handling.
+        Kept for backwards compatibility but now delegates to _decode_generation.
+        """
+        prediction, _ = self._decode_generation(tokenizer, generated_ids, label_ids)
+        return prediction
 
     @staticmethod
     def _sanitize_chat_text(text: str, max_length: int = 512) -> str:
@@ -1835,21 +1974,44 @@ class LLMFinetuningRunner(BaseRunner):
         batch: dict[str, Any],
         index: int
     ) -> str:
-        prompt_candidates: list[Any] = []
-        for key in ('rendered_prompt', 'prompt_text', 'prompt', 'question'):
+        """
+        Extract the human-readable question/prompt text from a batch.
+        
+        Priority order:
+        1. prompt_text - The actual question text (preferred)
+        2. prompt / question - Alternative column names for question
+        3. rendered_prompt - Full chat template (fallback, less clean)
+        4. prompt_input_ids - Decode from token IDs (last resort)
+        """
+        # Check prompt_text first - this is the actual question
+        for key in ('prompt_text', 'prompt', 'question'):
             value = batch.get(key)
             if isinstance(value, (list, tuple)) and index < len(value):
-                prompt_candidates.append(value[index])
+                candidate = value[index]
+                if candidate is not None:
+                    cleaned = str(candidate).strip()
+                    if cleaned:
+                        return cleaned
             elif value is not None and not isinstance(value, (list, tuple)) and index == 0:
-                prompt_candidates.append(value)
+                cleaned = str(value).strip()
+                if cleaned:
+                    return cleaned
 
-        for candidate in prompt_candidates:
-            if candidate is None:
-                continue
+        # Fallback to rendered_prompt (contains full chat template)
+        rendered = batch.get('rendered_prompt')
+        if isinstance(rendered, (list, tuple)) and index < len(rendered):
+            candidate = rendered[index]
+        elif rendered is not None and not isinstance(rendered, (list, tuple)) and index == 0:
+            candidate = rendered
+        else:
+            candidate = None
+        
+        if candidate is not None:
             cleaned = self._sanitize_chat_text(str(candidate))
             if cleaned:
                 return cleaned
 
+        # Last resort: decode from prompt_input_ids
         if 'prompt_input_ids' in batch:
             prompt_ids = batch['prompt_input_ids'][index]
             prompt_mask = None
@@ -1890,9 +2052,13 @@ class LLMFinetuningRunner(BaseRunner):
         predicted_text = ""
         try:
             if first_label is not None:
-                # Use prefix-aware extraction to avoid empty generations
-                predicted_text = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, first_generated, first_label)
+                # Use unified decoding function for consistent results
+                predicted_text, _ = self._decode_generation(
+                    tokenizer,
+                    first_generated,
+                    first_label,
+                    batch=batch,
+                    sample_idx=0
                 )
             else:
                 predicted_text = self._sanitize_chat_text(
@@ -1990,8 +2156,15 @@ class LLMFinetuningRunner(BaseRunner):
         except Exception as exc:
             print(f"debug_prompt_dump failed: {exc}")
 
-    def _log_sample_generation(self, outputs: dict, labels: torch.Tensor, epoch: int, batch_idx: int):
-        """Log sample generations for debugging."""
+    def _log_sample_generation(
+        self,
+        outputs: dict,
+        labels: torch.Tensor,
+        epoch: int,
+        batch_idx: int,
+        batch: Optional[dict] = None
+    ):
+        """Log sample generations for debugging using unified decoding."""
         try:
             model = self.model.module if hasattr(self.model, 'module') else self.model
             tokenizer = model.decoder.tokenizer
@@ -2000,12 +2173,14 @@ class LLMFinetuningRunner(BaseRunner):
             label_ids = labels[0]
 
             if generated_ids is not None:
-                # Prefer prefix-aware extraction for logging
-                generated_text = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
+                # Use unified decoding function for consistent results
+                generated_text, label_text = self._decode_generation(
+                    tokenizer,
+                    generated_ids.cpu(),
+                    label_ids.cpu(),
+                    batch=batch,
+                    sample_idx=0
                 )
-                _, raw_ref = decode_assistant_only_text(tokenizer, generated_ids.cpu(), label_ids.cpu())
-                label_text = self._sanitize_chat_text(raw_ref)
 
                 print("\n" + "="*60)
                 print(f"Sample Generation (Epoch {epoch}, Batch {batch_idx})")
@@ -2428,12 +2603,16 @@ class LLMFinetuningRunner(BaseRunner):
             if not skip_generation:
                 model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
                 model_for_generation.eval()
+                # Build generation kwargs matching inference script
+                generation_kwargs = self._build_generation_kwargs()
+                generation_kwargs["task_hint"] = task_hint
+                
                 generated_ids = model_for_generation.generate_report_with_question(
                     ecg_signal,
                     prompt_input_ids=prompt_input_ids,
                     prompt_attention_mask=prompt_attention_mask,
                     max_token_length=self.config.max_token_length,
-                    task_hint=task_hint,
+                    **generation_kwargs,
                 )
 
             # Get learning rate metrics
@@ -2504,13 +2683,17 @@ class LLMFinetuningRunner(BaseRunner):
 
             model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
             model_for_generation.eval()
+            # Build generation kwargs matching inference script
+            generation_kwargs = self._build_generation_kwargs()
+            generation_kwargs["task_hint"] = task_hint
+            generation_kwargs["category_hint"] = category_hint
+            
             generated_ids = model_for_generation.generate_report_with_question(
                 ecg_signal,
                 prompt_input_ids=prompt_input_ids,
                 prompt_attention_mask=prompt_attention_mask,
                 max_token_length=self.config.max_token_length,
-                task_hint=task_hint,
-                category_hint=category_hint,
+                **generation_kwargs,
             )
 
             return {
@@ -2577,10 +2760,13 @@ class LLMFinetuningRunner(BaseRunner):
                 lab = labels[idx]
                 filename = batch_waveform_names[idx]
 
-                decoded_prediction, decoded_reference = decode_assistant_only_text(
+                # Use unified decoding function for consistent results
+                decoded_prediction, decoded_reference = self._decode_generation(
                     tokenizer,
                     gen,
-                    lab
+                    lab,
+                    batch=batch,
+                    sample_idx=idx
                 )
                 predicted_reports.append(decoded_prediction)
                 reference_reports.append(decoded_reference)
@@ -2789,18 +2975,15 @@ class LLMFinetuningRunner(BaseRunner):
             for i in range(generated_ids.size(0)):
                 gen_tensor = generated_ids[i].cpu()
                 label_tensor = labels[i].cpu()
-
-                # Use prefix-aware extraction for predictions used in logs/category metrics
-                prediction = self._sanitize_chat_text(
-                    self._extract_assistant_text(tokenizer, gen_tensor, label_tensor)
-                )
-                # Reference from labels
-                _, raw_reference = decode_assistant_only_text(
+                
+                # Use unified decoding function for consistent results
+                prediction, reference = self._decode_generation(
                     tokenizer,
                     gen_tensor,
-                    label_tensor
+                    label_tensor,
+                    batch=batch,
+                    sample_idx=i
                 )
-                reference = self._sanitize_chat_text(raw_reference)
 
                 category = ""
                 if 'prompt_category' in batch and i < len(batch['prompt_category']):
@@ -2848,14 +3031,25 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Prefer prompt-only ids to help metrics trim prompts when available
             input_ids = None
+            prompt_input_ids = None
             if batch is not None and 'prompt_input_ids' in batch:
-                input_ids = batch['prompt_input_ids'].to(self.config.device)
+                prompt_input_ids = batch['prompt_input_ids'].to(self.config.device)
+            if batch is not None and 'input_ids' in batch:
+                input_ids = batch['input_ids'].to(self.config.device)
+            
+            # Get num_ecg_tokens for proper decoding offset
+            # Q-Former uses num_query_tokens, projection bridge uses num_ecg_tokens
+            num_ecg_tokens = int(getattr(self.config, 'num_query_tokens', 0))
+            if num_ecg_tokens == 0:
+                num_ecg_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
             
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 gen_ids,
                 labels_for_metrics,
                 tokenizer,  # type: ignore
-                input_ids=input_ids
+                input_ids=input_ids,
+                prompt_input_ids=prompt_input_ids,
+                num_ecg_tokens=num_ecg_tokens
             )
             # Add prompts to metrics if available
             if batch_prompts:
@@ -3026,61 +3220,20 @@ class LLMFinetuningRunner(BaseRunner):
             if not isinstance(waveform_names, (list, tuple)):
                 waveform_names = [waveform_names] * generated_ids.size(0)
 
-            # Get num_ecg_tokens for proper decoding offset
-            # Q-Former uses num_query_tokens, projection bridge uses num_ecg_tokens
-            num_ecg_tokens = int(getattr(self.config, 'num_query_tokens', 0))
-            if num_ecg_tokens == 0:
-                num_ecg_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
-
             batch_data: dict[str, dict[str, Any]] = {}
 
             for i in range(generated_ids.size(0)):
                 gen_tensor = generated_ids[i].detach().cpu()
                 label_tensor = labels[i].detach().cpu()
 
-                # Get prompt_input_ids for proper offset calculation
-                prompt_ids_row = None
-                try:
-                    prompt_ids = batch.get('prompt_input_ids', None)
-                    if prompt_ids is not None:
-                        if isinstance(prompt_ids, torch.Tensor):
-                            prompt_ids_row = prompt_ids[i].detach().cpu()
-                        else:
-                            prompt_ids_row = torch.as_tensor(prompt_ids[i])
-                except Exception:
-                    prompt_ids_row = None
-
-                # Use the same robust helper as metric computation so it works
-                # for both input_ids+embeds and embeds-only generation paths.
-                try:
-                    inp_ids = batch.get('input_ids', None)
-                    if inp_ids is not None:
-                        if isinstance(inp_ids, torch.Tensor):
-                            inp_row = inp_ids[i].detach().cpu()
-                        else:
-                            inp_row = torch.as_tensor(inp_ids[i])
-                    else:
-                        inp_row = None
-                except Exception:
-                    inp_row = None
-
-                generation, _ = decode_assistant_only_text(
+                # Use unified decoding function for consistent results across all paths
+                generation, ground_truth = self._decode_generation(
                     tokenizer,
                     gen_tensor,
                     label_tensor,
-                    input_ids=inp_row,
-                    prompt_input_ids=prompt_ids_row,
-                    num_ecg_tokens=num_ecg_tokens,
+                    batch=batch,
+                    sample_idx=i
                 )
-                generation = self._sanitize_chat_text(generation)
-                # Reference decoded from label ids (drops -100 prompt tokens)
-                _, raw_reference = decode_assistant_only_text(
-                    tokenizer,
-                    gen_tensor,
-                    label_tensor,
-                    num_ecg_tokens=0,  # Reference doesn't need ECG offset
-                )
-                ground_truth = self._sanitize_chat_text(raw_reference)
 
                 question = self._extract_prompt_text(tokenizer, batch, i)
                 if not question:

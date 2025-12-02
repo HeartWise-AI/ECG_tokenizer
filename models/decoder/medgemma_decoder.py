@@ -796,12 +796,24 @@ class MedGemmaDecoder(nn.Module):
     # Task-aware decoding routing
     # ------------------------------------------------------------------
     def _infer_task(self, prompt_text: str) -> str:
+        """Infer task type from prompt, extracting only the user question part."""
         t = (prompt_text or "").lower()
-        if "json" in t or "return json" in t or "structured" in t or "{\"" in t:
+
+        # Extract the actual question, ignoring system prompt
+        if "question:" in t:
+            question_part = t.split("question:")[-1].strip()
+        elif "user" in t:
+            parts = t.split("user")
+            question_part = parts[-1].strip() if parts else t
+        else:
+            question_part = t
+
+        # Check task indicators in the question only
+        if "json" in question_part or "return json" in question_part or "{\"" in question_part:
             return "json"
-        if "yes/no" in t or "binary" in t or "pathological?" in t or "shd?" in t or "yes or no" in t:
+        if "yes/no" in question_part or "binary" in question_part or "pathological?" in question_part or "shd?" in question_part or "yes or no" in question_part:
             return "binary"
-        if "lvef" in t or "ejection fraction" in t or "bpm" in t or "heart rate" in t or "numeric" in t:
+        if "lvef" in question_part or "ejection fraction" in question_part:
             return "scalar"
         return "free"
 
@@ -2019,6 +2031,96 @@ class MedGemmaDecoder(nn.Module):
 
         return generated
 
+    def _prepare_inputs_for_generation(
+        self,
+        prompt_input_ids: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+        quantized_features: Optional[torch.Tensor],
+        quantized_codes: Optional[torch.Tensor],
+        *,
+        detach_soft_prompts: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        """
+        Build inputs_embeds + attention_mask for a batch, injecting ECG once.
+
+        Returns:
+            inputs_embeds: [B, L, D]
+            attention_mask: [B, L]
+            prefix_len: number of ECG tokens prepended (0 when using <start_of_image>).
+        """
+        embed_layer = self.llm_model.get_input_embeddings()
+        device = embed_layer.weight.device
+        model_dtype = embed_layer.weight.dtype
+
+        prompt_input_ids = prompt_input_ids.to(device)
+        prompt_attention_mask = prompt_attention_mask.to(device)
+
+        # Compute ECG embeddings for the whole batch
+        ecg_embeddings, _ = self._compute_ecg_embeddings(
+            quantized_features,
+            quantized_codes,
+            prompt_input_ids=prompt_input_ids,
+            prompt_attention_mask=prompt_attention_mask,
+            detach_soft_prompts=detach_soft_prompts,
+        )
+        if ecg_embeddings.dim() == 2:
+            ecg_embeddings = ecg_embeddings.unsqueeze(1)
+        ecg_embeddings = ecg_embeddings.to(model_dtype)
+
+        # Try MedGemma-style injection after <start_of_image>
+        merged = self._inject_ecg_after_image_token(
+            input_ids=prompt_input_ids,
+            attention_mask=prompt_attention_mask,
+            labels=None,
+            ecg_embeddings=ecg_embeddings,
+            embed_layer=embed_layer,
+        )
+
+        if merged is not None:
+            inputs_embeds, attention_mask, _, _ = merged
+            prefix_len = 0
+        else:
+            # Fallback: prepend ECG embeddings as a soft prefix
+            prompt_embeddings = embed_layer(prompt_input_ids)
+            if prompt_embeddings.dtype != model_dtype:
+                prompt_embeddings = prompt_embeddings.to(model_dtype)
+
+            inputs_embeds = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
+
+            batch_size, ecg_len, _ = ecg_embeddings.shape
+            prefix_len = ecg_len
+            prefix_mask = torch.ones(
+                batch_size,
+                ecg_len,
+                dtype=prompt_attention_mask.dtype,
+                device=device,
+            )
+            attention_mask = torch.cat([prefix_mask, prompt_attention_mask], dim=1)
+
+        return inputs_embeds, attention_mask, prefix_len
+
+    def _build_generation_args_for_task(
+        self,
+        base_args: Dict[str, Any],
+        task: str,
+    ) -> Tuple[Dict[str, Any], bool, int, Union[int, Sequence[int], None]]:
+        """
+        Overlay task-specific decoding profile on top of base_args and
+        return sanitized args plus routing flags.
+        """
+        args = dict(base_args)
+        args.update(self._decoding_profile(task))
+        args = self._sanitize_generate_args(args)
+
+        eos_token_id = args.pop("eos_token_id", None)
+        if eos_token_id is None:
+            eos_token_id = self._eos_token_ids if self._eos_token_ids else self._eot_token_id
+
+        force_json_flag = bool(args.pop("force_json", False))
+        min_tokens_guard = int(args.pop("min_tokens_guard", 12))
+
+        return args, force_json_flag, min_tokens_guard, eos_token_id
+
     def generate_report_with_question(
         self,
         quantized_features: Optional[torch.Tensor] = None,
@@ -2065,56 +2167,14 @@ class MedGemmaDecoder(nn.Module):
                 rows_mask, batch_first=True, padding_value=0
             )
 
+        # CRITICAL: Save raw prompt IDs BEFORE any injection to prevent double-injection bug
+        raw_prompt_ids = prompt_input_ids.clone()
+        raw_prompt_mask = prompt_attention_mask.clone()
+
+        batch_size = prompt_input_ids.size(0)
         model_dtype = embed_layer.weight.dtype
 
-        prompt_embeddings = embed_layer(prompt_input_ids)
-        if prompt_embeddings.dtype != model_dtype:
-            prompt_embeddings = prompt_embeddings.to(model_dtype)
-        ecg_embeddings, _ = self._compute_ecg_embeddings(
-            quantized_features,
-            quantized_codes,
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-            detach_soft_prompts=True,
-        )
-        if ecg_embeddings.dim() == 2:
-            ecg_embeddings = ecg_embeddings.unsqueeze(1)
-
-        if ecg_embeddings.dtype != model_dtype:
-            ecg_embeddings = ecg_embeddings.to(model_dtype)
-
-        merged = self._inject_ecg_after_image_token(
-            input_ids=prompt_input_ids,
-            attention_mask=prompt_attention_mask,
-            labels=None,
-            ecg_embeddings=ecg_embeddings,
-            embed_layer=embed_layer,
-        )
-        if merged is not None:
-            inputs_embeds, attention_mask, prompt_input_ids, _ = merged
-            prefix_len = 0
-        else:
-            inputs_embeds = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
-            prefix_len = ecg_embeddings.size(1)
-            prefix_mask = torch.ones(prompt_embeddings.size(0), prefix_len, device=device, dtype=torch.long)
-            attention_mask = torch.cat([prefix_mask, prompt_attention_mask], dim=1)
-
-        batch_size = prompt_embeddings.size(0)
-        if not self.prefix_tuning and self.ecg_token_start_id is not None and prefix_len > 0:
-            prefix_token_ids = torch.arange(
-                self.ecg_token_start_id,
-                self.ecg_token_start_id + prefix_len,
-                dtype=torch.long,
-                device=device,
-            ).unsqueeze(0).expand(batch_size, -1)
-        else:
-            prefix_token_ids = None
-
-        if prefix_token_ids is not None:
-            input_ids = torch.cat([prefix_token_ids, prompt_input_ids], dim=1)
-        else:
-            input_ids = prompt_input_ids
-
+        # Build base generation args
         generate_args = dict(self.default_generation_params)
         generate_args.update(generate_kwargs)
         generate_args.pop("input_ids", None)
@@ -2126,54 +2186,155 @@ class MedGemmaDecoder(nn.Module):
         )
         generate_args.setdefault("min_new_tokens", 0)
 
-        # Task-aware routing using the provided prompt and optional category hint
-        try:
-            prompt_text = self.tokenizer.decode(prompt_input_ids[0].tolist(), skip_special_tokens=True) if prompt_input_ids is not None else ""
-        except Exception:
-            prompt_text = ""
+        # Infer task for EACH sample using raw (uninjected) prompt IDs
         task_hint = generate_args.pop("task_hint", None)
-        if category_hint is not None:
-            if isinstance(category_hint, (list, tuple)) and category_hint:
-                c0 = str(category_hint[0]).lower()
-            else:
-                c0 = str(category_hint).lower()
-            task_hint = (
-                "json" if "json" in c0 else
-                "binary" if any(k in c0 for k in ["yes_no", "yesno", "binary", "classification"]) else
-                "scalar" if any(k in c0 for k in ["lvef", "heart rate", "bpm", "numeric"]) else
-                task_hint
+        tasks = []
+        for b in range(batch_size):
+            try:
+                prompt_text = self.tokenizer.decode(raw_prompt_ids[b].tolist(), skip_special_tokens=True)
+            except Exception:
+                prompt_text = ""
+
+            # Apply category hint if provided
+            sample_task_hint = task_hint
+            if category_hint is not None:
+                if isinstance(category_hint, (list, tuple)) and len(category_hint) > b:
+                    c0 = str(category_hint[b]).lower()
+                elif isinstance(category_hint, (list, tuple)) and category_hint:
+                    c0 = str(category_hint[0]).lower()
+                else:
+                    c0 = str(category_hint).lower()
+                sample_task_hint = (
+                    "json" if "json" in c0 else
+                    "binary" if any(k in c0 for k in ["yes_no", "yesno", "binary", "classification"]) else
+                    "scalar" if any(k in c0 for k in ["lvef", "heart rate", "bpm", "numeric"]) else
+                    sample_task_hint
+                )
+
+            task = sample_task_hint or self._infer_task(prompt_text)
+            tasks.append(task)
+
+        # Compute prompt lengths for grouping
+        prompt_lengths = [int(raw_prompt_mask[b].sum().item()) for b in range(batch_size)]
+
+        # Group samples by (task, prompt_length) for efficient batched processing
+        # This allows TRUE batched generation for groups with same task + same prompt length
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for b in range(batch_size):
+            key = (tasks[b], prompt_lengths[b])
+            groups[key].append(b)
+
+        # If only one group, use fast path
+        if len(groups) == 1:
+            # All samples have same task AND same prompt length - TRUE batched generation
+            task = tasks[0]
+
+            inputs_embeds, attention_mask, prefix_len = self._prepare_inputs_for_generation(
+                raw_prompt_ids,
+                raw_prompt_mask,
+                quantized_features,
+                quantized_codes,
+                detach_soft_prompts=True,
             )
-        task = task_hint or self._infer_task(prompt_text)
-        route = self._decoding_profile(task)
-        for k, v in route.items():
-            generate_args.setdefault(k, v)
 
-        generate_args = self._sanitize_generate_args(generate_args)
+            batch_args, force_json_flag, min_tokens_guard, eos_token_id = \
+                self._build_generation_args_for_task(generate_args, task)
 
-        eos_token_id = generate_args.pop("eos_token_id", None)
-        if eos_token_id is None:
-            # Use the list of EOS tokens (includes <end_of_turn> for MedGemma)
-            eos_token_id = self._eos_token_ids if self._eos_token_ids else self._eot_token_id
+            generated = self.llm_model.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                logits_processor=self._default_logits_processors(
+                    force_json=force_json_flag,
+                    min_tokens=min_tokens_guard,
+                ),
+                eos_token_id=eos_token_id,
+                **batch_args,
+            )
 
-        # Extract custom routing guards and remove unsupported kwargs
-        force_json_flag = bool(generate_args.pop("force_json", False))
-        min_tokens_guard = int(generate_args.pop("min_tokens_guard", 12))
+            if self.prefix_tuning and prefix_len > 0:
+                generated = self._strip_prefix_tokens(generated, prefix_len)
 
-        generated = self.llm_model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            logits_processor=self._default_logits_processors(
-                force_json=force_json_flag,
-                min_tokens=min_tokens_guard,
-            ),
-            eos_token_id=eos_token_id,
-            **generate_args,
-        )
+            return generated
 
-        if self.prefix_tuning:
-            generated = self._strip_prefix_tokens(generated, prefix_len)
+        else:
+            # Multiple groups: process each group as a batch, then reassemble
+            generated_by_idx = {}
 
-        return generated
+            for (task, prompt_len), indices in groups.items():
+                group_size = len(indices)
+
+                # Gather UNPADDED data for this group
+                group_ids_list = []
+                group_masks_list = []
+                group_features_list = []
+                group_codes_list = []
+
+                for b in indices:
+                    # Extract unpadded prompt
+                    sample_mask = raw_prompt_mask[b]
+                    valid_len = int(sample_mask.sum().item())
+                    group_ids_list.append(raw_prompt_ids[b, :valid_len])
+                    group_masks_list.append(sample_mask[:valid_len])
+
+                    # Extract ECG data
+                    if quantized_features is not None:
+                        group_features_list.append(quantized_features[b])
+                    if quantized_codes is not None:
+                        group_codes_list.append(quantized_codes[b])
+
+                # Stack into batch (no padding needed - all same length!)
+                group_ids = torch.stack(group_ids_list, dim=0)
+                group_masks = torch.stack(group_masks_list, dim=0)
+                group_features = torch.stack(group_features_list, dim=0) if group_features_list else None
+                group_codes = torch.stack(group_codes_list, dim=0) if group_codes_list else None
+
+                # Process this group as a TRUE batch
+                inputs_embeds, attention_mask, prefix_len = self._prepare_inputs_for_generation(
+                    group_ids,
+                    group_masks,
+                    group_features,
+                    group_codes,
+                    detach_soft_prompts=True,
+                )
+
+                group_args, force_json_flag, min_tokens_guard, eos_token_id = \
+                    self._build_generation_args_for_task(generate_args, task)
+
+                gen = self.llm_model.generate(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    logits_processor=self._default_logits_processors(
+                        force_json=force_json_flag,
+                        min_tokens=min_tokens_guard,
+                    ),
+                    eos_token_id=eos_token_id,
+                    **group_args,
+                )
+
+                if self.prefix_tuning and prefix_len > 0:
+                    gen = self._strip_prefix_tokens(gen, prefix_len)
+
+                # Store results by original index
+                for i, b in enumerate(indices):
+                    generated_by_idx[b] = gen[i:i+1]
+
+            # Reassemble in original order and pad
+            all_generated = [generated_by_idx[b] for b in range(batch_size)]
+            max_length = max(g.size(1) for g in all_generated)
+            padded_generated = []
+            for g in all_generated:
+                if g.size(1) < max_length:
+                    padding = torch.full(
+                        (g.size(0), max_length - g.size(1)),
+                        self.pad_token_id,
+                        dtype=g.dtype,
+                        device=g.device
+                    )
+                    g = torch.cat([g, padding], dim=1)
+                padded_generated.append(g)
+
+            return torch.cat(padded_generated, dim=0)
 
 
 __all__ = ["MedGemmaDecoder"]

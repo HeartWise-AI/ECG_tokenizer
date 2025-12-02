@@ -463,7 +463,17 @@ class LLMFinetuningProject(BaseProject):
         # Get the scaler
         scaler = _create_grad_scaler()
 
-        start_epoch = resume_epoch + 1 if resume_checkpoint_path else 1
+        # For mid-epoch resume (resume_global_step is set), stay in the same epoch
+        # For full-epoch resume (no resume_global_step), advance to next epoch
+        resume_global_step = getattr(self.config, 'resume_global_step', None)
+        if resume_checkpoint_path and resume_global_step is not None:
+            # Mid-epoch resume: continue from the same epoch
+            start_epoch = max(1, resume_epoch)
+        elif resume_checkpoint_path:
+            # Full-epoch resume: start from next epoch
+            start_epoch = resume_epoch + 1
+        else:
+            start_epoch = 1
 
         optimizer_state: Optional[dict[str, Any]] = None
         if resume_checkpoint_path:
