@@ -1636,13 +1636,14 @@ class ECGAnswerGenerator:
         # Initialize the JSON structure - only include what's present
         json_output = {}
         
-        # Only allow these top-level keys (omit OTHER by design)
+        # Allow all category keys including OTHER for full visibility
         allowed_keys = {
             'RHYTHM',
             'CONDUCTION',
             'CHAMBER_ENLARGEMENT',
             'INFARCT_ISCHEMIA',
             'PERICARDITIS',
+            'OTHER',
         }
         
         # Go through each category and condition
@@ -1667,9 +1668,8 @@ class ECGAnswerGenerator:
                     if col in row.index:
                         try:
                             if pd.notna(row[col]) and float(row[col]) >= 1:
-                                # Use cleaner condition name
-                                clean_name = condition.replace(' (', '_').replace(')', '').replace(' - ', '_').replace(', ', '_')
-                                present_findings.append(clean_name)
+                                # Keep original condition name for readability
+                                present_findings.append(condition)
                                 break
                         except (ValueError, TypeError):
                             continue

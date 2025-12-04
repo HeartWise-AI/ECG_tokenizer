@@ -162,6 +162,12 @@ def generate_answer(
     prompt_ids = encoding.input_ids.to(device)
     prompt_mask = encoding.attention_mask.to(device)
     
+    # Build EOS token list - MedGemma should stop at <end_of_turn> (106) or <eos> (1)
+    eos_ids = [tokenizer.eos_token_id]
+    end_of_turn_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+    if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
+        eos_ids.append(end_of_turn_id)
+    
     with torch.no_grad():
         generated_ids = model.generate_report(
             x=ecg_tensor,
@@ -171,6 +177,8 @@ def generate_answer(
             max_new_tokens=max_new_tokens,
             no_repeat_ngram_size=5,
             repetition_penalty=1.1,
+            eos_token_id=eos_ids,
+            pad_token_id=tokenizer.pad_token_id,
         )
     
     generation = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
@@ -225,6 +233,12 @@ def main():
     parser.add_argument("--question_column", type=str, default="prompt", help="Column with questions")
     parser.add_argument("--answer_column", type=str, default="generated_answer", help="Column with ground truth")
     parser.add_argument("--device", type=int, default=0, help="GPU device ID")
+    parser.add_argument("--output_prefix", type=str, default="all_qa_generations", 
+                        help="Prefix for output files (default: all_qa_generations)")
+    parser.add_argument("--save_interval", type=int, default=1000,
+                        help="Save checkpoint every N samples (default: 1000)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from existing checkpoint if available")
     args = parser.parse_args()
     
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
@@ -243,15 +257,38 @@ def main():
         val_df = val_df.head(args.max_samples)
         print(f"Limited to {len(val_df)} samples")
     
-    # Generate answers
-    print("\nGenerating answers...")
+    # Check for existing checkpoint to resume from
+    checkpoint_csv = os.path.join(args.output_dir, f"{args.output_prefix}_checkpoint.csv")
+    start_idx = 0
     results = []
+    
+    if args.resume and os.path.exists(checkpoint_csv):
+        print(f"\nResuming from checkpoint: {checkpoint_csv}")
+        existing_df = pd.read_csv(checkpoint_csv)
+        results = existing_df.to_dict('records')
+        start_idx = len(results)
+        print(f"Loaded {start_idx} existing results, continuing from sample {start_idx}")
+    
+    # Generate answers
+    print(f"\nGenerating answers (saving every {args.save_interval} samples)...")
     errors = 0
     
     # Cache loaded waveforms to avoid reloading
     waveform_cache = {}
     
-    for idx, row in tqdm(val_df.iterrows(), total=len(val_df), desc="Generating"):
+    # Helper function to save checkpoint
+    def save_checkpoint(results_list, is_final=False):
+        if not results_list:
+            return
+        temp_df = pd.DataFrame(results_list)
+        if is_final:
+            csv_path = os.path.join(args.output_dir, f"{args.output_prefix}.csv")
+        else:
+            csv_path = checkpoint_csv
+        temp_df.to_csv(csv_path, index=False)
+        print(f"\n{'Final' if is_final else 'Checkpoint'} saved: {csv_path} ({len(results_list)} samples)")
+    
+    for idx, row in tqdm(val_df.iloc[start_idx:].iterrows(), total=len(val_df)-start_idx, desc="Generating", initial=start_idx):
         waveform_name = row['waveform_name']
         waveform_path = row[args.waveform_column]
         question = row[args.question_column]
@@ -291,6 +328,10 @@ def main():
                 'prompt_category': prompt_category,
             })
             
+            # Save checkpoint periodically
+            if len(results) % args.save_interval == 0:
+                save_checkpoint(results)
+            
         except Exception as e:
             errors += 1
             if errors <= 10:
@@ -299,12 +340,19 @@ def main():
     
     print(f"\nGenerated {len(results)} answers, {errors} errors")
     
+    # Save final results
+    save_checkpoint(results, is_final=True)
+    
+    # Clean up checkpoint file if it exists
+    if os.path.exists(checkpoint_csv):
+        os.remove(checkpoint_csv)
+        print(f"Removed checkpoint file: {checkpoint_csv}")
+    
     # Create DataFrame
     results_df = pd.DataFrame(results)
     
-    # Save as CSV
-    csv_path = os.path.join(args.output_dir, "all_qa_generations.csv")
-    results_df.to_csv(csv_path, index=False)
+    # Final CSV path is already saved by save_checkpoint with is_final=True
+    csv_path = os.path.join(args.output_dir, f"{args.output_prefix}.csv")
     print(f"Saved CSV to {csv_path}")
     
     # Save as JSON (grouped by waveform for compatibility)
@@ -319,7 +367,7 @@ def main():
                 'Category': row['prompt_category'],
             })
     
-    json_path = os.path.join(args.output_dir, "all_qa_generations.json")
+    json_path = os.path.join(args.output_dir, f"{args.output_prefix}.json")
     with open(json_path, 'w') as f:
         json.dump(json_data, f, indent=2)
     print(f"Saved JSON to {json_path}")

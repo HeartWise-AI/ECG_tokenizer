@@ -173,13 +173,13 @@ class ECGPromptMaker:
         }
         
         # JSON interpretation prompts
-        # Make schema explicit so the model knows expected keys
+        # Make schema explicit so the model knows expected keys (including OTHER for full visibility)
         self.json_prompts = [
-            "Output JSON ONLY with keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification. Values must be lists of present findings (omit missing categories).",
-            "Provide structured JSON output for this ECG analysis using keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
-            "Return ECG findings as JSON with keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
-            "Generate JSON representation of ECG abnormalities. Keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification.",
-            "Output ECG interpretation in JSON format only (keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, heart_rate_bpm, ecg_classification)."
+            "Output JSON ONLY with keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification. Values must be lists of present findings (omit missing categories).",
+            "Provide structured JSON output for this ECG analysis using keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
+            "Return ECG findings as JSON with keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
+            "Generate JSON representation of ECG abnormalities. Keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
+            "Output ECG interpretation in JSON format only (keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification)."
         ]
         
         # ECG interval prompts (heart rate and intervals combined)
