@@ -1605,9 +1605,9 @@ class LLMFinetuningRunner(BaseRunner):
                 averaged_metrics["train_snapshot/global_step"] = float(self.global_step)
                 averaged_metrics["train_snapshot/epoch"] = float(epoch)
                 if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
-                    # Log only current train snapshot metrics
+                    # Log only current train snapshot metrics (commit=False to avoid step collisions)
                     payload = dict(averaged_metrics)
-                    self.wandb_wrapper.log(payload, step=int(self.global_step), commit=True)
+                    self.wandb_wrapper.log(payload, step=int(self.global_step))
             DistributedUtils.sync_process_group(
                 world_size=self.config.world_size,
                 device_ids=self.config.device
@@ -1784,8 +1784,8 @@ class LLMFinetuningRunner(BaseRunner):
             if snapshot_batches is not None:
                 log_payload["val_snapshot/batches_requested"] = float(snapshot_batches)
             if self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized():
-                # Anchor validation snapshot logs to current global step
-                self.wandb_wrapper.log(log_payload, step=int(self.global_step), commit=True)
+                # Anchor validation snapshot logs to current global step (commit=False to avoid step collisions)
+                self.wandb_wrapper.log(log_payload, step=int(self.global_step))
 
         DistributedUtils.sync_process_group(
             world_size=self.config.world_size,

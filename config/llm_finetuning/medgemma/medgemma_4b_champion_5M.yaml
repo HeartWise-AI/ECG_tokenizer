@@ -204,8 +204,8 @@ gradient_accumulation_steps: 16
 dataloader_pin_memory: true
 max_sequence_length: 768
 # Mid-epoch validation & train snapshots
-validation_step_interval: 1000
-validation_snapshot_batches: 100
+validation_step_interval: 50
+validation_snapshot_batches: 20
 validation_snapshot_prefix: "step"
 validation_subset_size: 2000
 validation_balance_prompt_categories: true

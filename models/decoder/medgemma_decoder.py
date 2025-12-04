@@ -58,6 +58,8 @@ def _load_medgemma_model(
                 dtype=torch_dtype,
                 torch_dtype=torch_dtype,
                 trust_remote_code=True,
+                attn_implementation="flash_attention_2",
+                use_cache=True,
             )
         except Exception as exc:  # pragma: no cover - depends on HF availability
             last_error = exc
