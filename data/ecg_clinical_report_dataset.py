@@ -474,6 +474,7 @@ class ECGClinicalReportDataset(Dataset):
                     'prompt_text': prompt_text,  # Add original prompt for metrics display
                     'rendered_prompt': prompt_template_text,
                     'task_type': 'cf' if is_cf_record else 'instruct',
+                    'answer_text': answer_text,  # Raw ground truth for metrics
                 }
                 
                 # Add category information for per-category metrics
@@ -583,6 +584,7 @@ class ECGClinicalReportDataset(Dataset):
                     'prompt_text': prompt_q,
                     'rendered_prompt': prompt_template_text,
                     'task_type': 'instruct',
+                    'answer_text': answer_text,  # Raw ground truth for metrics
                 }
 
                 if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):

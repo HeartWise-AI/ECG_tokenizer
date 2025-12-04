@@ -25,12 +25,10 @@ from tqdm import tqdm
 import re
 from typing import Optional
 
-# Set environment variables for single-GPU inference
 os.environ.setdefault("LOCAL_RANK", "0")
 os.environ.setdefault("RANK", "0")
 os.environ.setdefault("WORLD_SIZE", "1")
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from transformers import AutoTokenizer
@@ -44,13 +42,11 @@ def load_model(checkpoint_path: str, device: torch.device):
     checkpoint_data = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     config = checkpoint_data["config"]
     
-    # Setup tokenizer
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
     
-    # Build model
     decoder_mode = config.decoder_mode if isinstance(config.decoder_mode, DecoderMode) else DecoderMode(config.decoder_mode)
     num_visual_tokens = getattr(config, "num_query_tokens", getattr(config, "num_visual_tokens", None))
     
@@ -81,7 +77,6 @@ def load_model(checkpoint_path: str, device: torch.device):
         default_generation_kwargs=getattr(config, "default_generation_kwargs", None),
     )
     
-    # Load weights
     state_dict = checkpoint_data["model_state_dict"]
     
     def _is_lora_key(k):
@@ -91,7 +86,6 @@ def load_model(checkpoint_path: str, device: torch.device):
     lora_sd = {k: v for k, v in state_dict.items() if _is_lora_key(k)}
     model.load_state_dict(base_sd, strict=False)
     
-    # Handle LoRA weights
     if lora_sd:
         from peft import get_peft_model, set_peft_model_state_dict, LoraConfig
         
@@ -162,7 +156,6 @@ def generate_answer(
     prompt_ids = encoding.input_ids.to(device)
     prompt_mask = encoding.attention_mask.to(device)
     
-    # Build EOS token list - MedGemma should stop at <end_of_turn> (106) or <eos> (1)
     eos_ids = [tokenizer.eos_token_id]
     end_of_turn_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
     if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
@@ -183,7 +176,6 @@ def generate_answer(
     
     generation = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
     
-    # Clean up chat markers
     for pattern in [r'<end_of_turn>', r'<start_of_turn>', r'<\|eot_id\|>', r'model\s*$', r'^model\s*']:
         generation = re.sub(pattern, '', generation)
     
@@ -195,17 +187,14 @@ def load_ecg_waveform(waveform_path: str, target_length: int = 2500) -> Optional
     try:
         waveform = np.load(waveform_path)
         
-        # Handle 3D arrays
         if waveform.ndim == 3:
             waveform = waveform.squeeze(-1)
         
-        # Ensure shape is (time, leads)
         if waveform.shape[-1] == 12:
             pass  # Already correct
         elif waveform.shape[0] == 12:
             waveform = waveform.T
         
-        # Pad/crop to target length
         current_length = waveform.shape[0]
         if current_length >= target_length:
             start = (current_length - target_length) // 2
@@ -269,14 +258,10 @@ def main():
         start_idx = len(results)
         print(f"Loaded {start_idx} existing results, continuing from sample {start_idx}")
     
-    # Generate answers
     print(f"\nGenerating answers (saving every {args.save_interval} samples)...")
     errors = 0
-    
-    # Cache loaded waveforms to avoid reloading
     waveform_cache = {}
     
-    # Helper function to save checkpoint
     def save_checkpoint(results_list, is_final=False):
         if not results_list:
             return
@@ -296,17 +281,13 @@ def main():
         prompt_category = row.get('prompt_category', 'unknown')
         
         try:
-            # Load waveform (with caching)
             if waveform_path not in waveform_cache:
                 waveform = load_ecg_waveform(waveform_path)
                 if waveform is None:
                     errors += 1
                     continue
                 waveform_cache[waveform_path] = waveform
-                
-                # Limit cache size
                 if len(waveform_cache) > 1000:
-                    # Remove oldest entries
                     keys_to_remove = list(waveform_cache.keys())[:500]
                     for k in keys_to_remove:
                         del waveform_cache[k]

@@ -232,11 +232,7 @@ class LLMFinetuningRunner(BaseRunner):
                     print("="*80 + "\n")
 
     def _build_generation_kwargs(self, tokenizer=None) -> dict:
-        """
-        Build generation kwargs matching the inference script (generate_ecg_answer.py).
-        
-        This ensures validation generations use the exact same parameters as standalone inference.
-        """
+        """Build generation kwargs for validation generations."""
         generation_kwargs = dict(getattr(self.config, "default_generation_kwargs", {}) or {})
         generation_kwargs.setdefault("max_new_tokens", 96)
         generation_kwargs.setdefault("no_repeat_ngram_size", 5)
@@ -1035,10 +1031,8 @@ class LLMFinetuningRunner(BaseRunner):
                             self._val_eot_counter.append(float(has_eot.float().mean().item()))
                         else:
                             self._val_eot_counter.append(0.0)
-                        # Track generated length
                         self._val_len_counter.append(float(gen_ids.size(-1)))
                 except Exception:
-                    # Telemetry is best-effort; never fail validation
                     pass
                 # Process and append to JSON immediately across all devices (write occurs on ref device)
                 if write_val_generations and json_path is not None and outputs.get('generated_ids') is not None:
@@ -1808,57 +1802,56 @@ class LLMFinetuningRunner(BaseRunner):
     ) -> Tuple[str, str]:
         """
         Unified decoding function for all paths (validation, inference, metrics, JSON).
-        
+
         Returns (prediction_text, reference_text) with proper ECG token offset handling.
-        
+
+        IMPORTANT: Uses raw 'answer_text' from batch when available for reference,
+        matching the inference script behavior. This ensures metrics are computed
+        on the original ground truth text, not tokenized/truncated labels.
+
         Args:
             tokenizer: The tokenizer instance
             generated_ids: Generated token ids for a single sample (1D tensor)
             label_ids: Label token ids for a single sample (1D tensor)
-            batch: Optional batch dictionary containing prompt_input_ids
+            batch: Optional batch dictionary containing prompt_input_ids and answer_text
             sample_idx: Index of the sample in the batch (for extracting prompt_input_ids)
-        
+
         Returns:
             Tuple of (sanitized_prediction, sanitized_reference)
         """
         if generated_ids is None or generated_ids.numel() == 0:
             return "", ""
-        
+
         gen_tensor = generated_ids.detach().cpu() if generated_ids.is_cuda else generated_ids.detach()
-        label_tensor = label_ids.detach().cpu() if label_ids.is_cuda else label_ids.detach()
-        
-        # Get prompt_input_ids for this sample if available
-        prompt_ids_row = None
+
+        # Decode prediction: MedGemma uses inputs_embeds, so generated contains only new tokens
+        gen_ids = gen_tensor.tolist()
+        raw_prediction = " ".join(tokenizer.decode(gen_ids, skip_special_tokens=True).strip().split())
+
+        # Get reference: PREFER raw answer_text from batch (matches inference script)
+        # This avoids tokenization/truncation artifacts in ground truth
+        raw_reference = ""
         if batch is not None:
             try:
-                prompt_ids = batch.get('prompt_input_ids', None)
-                if prompt_ids is not None:
-                    if isinstance(prompt_ids, torch.Tensor):
-                        prompt_ids_row = prompt_ids[sample_idx].detach().cpu()
-                    elif isinstance(prompt_ids, (list, tuple)) and sample_idx < len(prompt_ids):
-                        prompt_ids_row = torch.as_tensor(prompt_ids[sample_idx])
+                answer_texts = batch.get('answer_text', None)
+                if answer_texts is not None:
+                    if isinstance(answer_texts, (list, tuple)) and sample_idx < len(answer_texts):
+                        raw_reference = str(answer_texts[sample_idx]).strip()
+                    elif isinstance(answer_texts, str):
+                        raw_reference = answer_texts.strip()
             except Exception:
-                prompt_ids_row = None
-        
-        # MedGemma and similar models use inputs_embeds for generation, which means
-        # HF generate() returns ONLY new tokens (not the prompt). So we should NOT trim.
-        # Set generated_only_new_tokens=True to skip prompt trimming.
-        
-        # Use the unified decode_assistant_only_text function
-        raw_prediction, raw_reference = decode_assistant_only_text(
-            tokenizer,
-            gen_tensor,
-            label_tensor,
-            input_ids=None,
-            prompt_input_ids=None,  # Not needed when generated_only_new_tokens=True
-            num_ecg_tokens=0,  # Not needed when generated_only_new_tokens=True
-            generated_only_new_tokens=True,  # MedGemma uses inputs_embeds, so no prompt in output
-        )
-        
+                pass
+
+        # Fallback to decoding labels if answer_text not available
+        if not raw_reference:
+            label_tensor = label_ids.detach().cpu() if label_ids.is_cuda else label_ids.detach()
+            ref_ids = label_tensor[label_tensor != -100].tolist()
+            raw_reference = " ".join(tokenizer.decode(ref_ids, skip_special_tokens=True).strip().split())
+
         # Sanitize both outputs
         prediction = self._sanitize_chat_text(raw_prediction)
         reference = self._sanitize_chat_text(raw_reference)
-        
+
         return prediction, reference
     
     def _extract_assistant_text(self, tokenizer, generated_ids: torch.Tensor, label_ids: torch.Tensor) -> str:
@@ -3349,6 +3342,9 @@ class LLMFinetuningRunner(BaseRunner):
             scored_ecgs: list[dict[str, Any]] = []
             missing_lookup: list[str] = []
             for ecg_name, ecg_info in val_data.items():
+                # Skip non-dict entries (e.g., '__sample_preview__' which is a list)
+                if not isinstance(ecg_info, dict):
+                    continue
                 score, metric_name = compute_ecg_score(ecg_info)
                 ecg_path, dataset_label = resolve_ecg_source(
                     ecg_name,
