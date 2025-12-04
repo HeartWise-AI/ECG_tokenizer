@@ -155,6 +155,9 @@ class MedGemmaDecoder(nn.Module):
         self.pattern_loss_weight = float(unused_kwargs.pop("pattern_loss_weight", 0.3))
         if self.pattern_loss_weight < 0:
             self.pattern_loss_weight = 0.0
+        # MedGemma's HF generate() misbehaves for batch>1 when using inputs_embeds; default to micro-batch=1
+        # for the generation step (encoding stays batched). Can be overridden via config kwarg.
+        self.generation_microbatch_size = int(unused_kwargs.pop("generation_microbatch_size", 1))
         self.pattern_classifier: Optional[nn.Module] = None
         self.pattern_loss_fn: Optional[nn.Module] = None
         pattern_pos_weight_cfg = unused_kwargs.pop("pattern_bce_pos_weight", None)
@@ -2121,6 +2124,60 @@ class MedGemmaDecoder(nn.Module):
 
         return args, force_json_flag, min_tokens_guard, eos_token_id
 
+    def _generate_with_microbatch(
+        self,
+        inputs_embeds: torch.Tensor,
+        attention_mask: torch.Tensor,
+        batch_args: Dict[str, Any],
+        force_json_flag: bool,
+        min_tokens_guard: int,
+        eos_token_id: Union[int, Sequence[int], None],
+        prefix_len: int,
+    ) -> torch.Tensor:
+        """
+        Run generation in small micro-batches to avoid MedGemma's buggy batched generate() with inputs_embeds.
+        Defaults to micro-batch size 1 for correctness; encoder/bridge work remains batched.
+        """
+        micro = max(1, int(getattr(self, "generation_microbatch_size", 1)))
+        outputs: list[torch.Tensor] = []
+        bsz = inputs_embeds.size(0)
+        for start in range(0, bsz, micro):
+            end = min(start + micro, bsz)
+            gen = self.llm_model.generate(
+                inputs_embeds=inputs_embeds[start:end],
+                attention_mask=attention_mask[start:end],
+                logits_processor=self._default_logits_processors(
+                    force_json=force_json_flag,
+                    min_tokens=min_tokens_guard,
+                ),
+                eos_token_id=eos_token_id,
+                **batch_args,
+            )
+            if self.prefix_tuning and prefix_len > 0:
+                gen = self._strip_prefix_tokens(gen, prefix_len)
+            outputs.append(gen)
+
+        if len(outputs) == 1:
+            return outputs[0]
+
+        # Pad outputs to same length before concatenating (different samples may finish at different times)
+        max_len = max(out.size(1) for out in outputs)
+        pad_token_id = int(batch_args.get("pad_token_id", 0))
+
+        padded_outputs = []
+        for out in outputs:
+            if out.size(1) < max_len:
+                padding = torch.full(
+                    (out.size(0), max_len - out.size(1)),
+                    pad_token_id,
+                    dtype=out.dtype,
+                    device=out.device
+                )
+                out = torch.cat([out, padding], dim=1)
+            padded_outputs.append(out)
+
+        return torch.cat(padded_outputs, dim=0)
+
     def generate_report_with_question(
         self,
         quantized_features: Optional[torch.Tensor] = None,
@@ -2241,19 +2298,15 @@ class MedGemmaDecoder(nn.Module):
             batch_args, force_json_flag, min_tokens_guard, eos_token_id = \
                 self._build_generation_args_for_task(generate_args, task)
 
-            generated = self.llm_model.generate(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                logits_processor=self._default_logits_processors(
-                    force_json=force_json_flag,
-                    min_tokens=min_tokens_guard,
-                ),
-                eos_token_id=eos_token_id,
-                **batch_args,
+            generated = self._generate_with_microbatch(
+                inputs_embeds,
+                attention_mask,
+                batch_args,
+                force_json_flag,
+                min_tokens_guard,
+                eos_token_id,
+                prefix_len,
             )
-
-            if self.prefix_tuning and prefix_len > 0:
-                generated = self._strip_prefix_tokens(generated, prefix_len)
 
             return generated
 
@@ -2301,19 +2354,15 @@ class MedGemmaDecoder(nn.Module):
                 group_args, force_json_flag, min_tokens_guard, eos_token_id = \
                     self._build_generation_args_for_task(generate_args, task)
 
-                gen = self.llm_model.generate(
-                    inputs_embeds=inputs_embeds,
-                    attention_mask=attention_mask,
-                    logits_processor=self._default_logits_processors(
-                        force_json=force_json_flag,
-                        min_tokens=min_tokens_guard,
-                    ),
-                    eos_token_id=eos_token_id,
-                    **group_args,
+                gen = self._generate_with_microbatch(
+                    inputs_embeds,
+                    attention_mask,
+                    group_args,
+                    force_json_flag,
+                    min_tokens_guard,
+                    eos_token_id,
+                    prefix_len,
                 )
-
-                if self.prefix_tuning and prefix_len > 0:
-                    gen = self._strip_prefix_tokens(gen, prefix_len)
 
                 # Store results by original index
                 for i, b in enumerate(indices):
