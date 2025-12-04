@@ -22,12 +22,11 @@ training_phases:
 debug_config:
   log_gradient_norms: true
   show_sample_outputs: false
-  log_frequency: 200
+  log_frequency: 50
 base_checkpoint_path: "checkpoints"
 pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
 # Resume from mid-epoch checkpoint (set to empty string or remove to start fresh)
-resume_checkpoint_path: "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_MedGemma/d8389lsr_20251129-073725/checkpoint_step_5500.pt"
-resume_global_step: 5500
+resume_checkpoint_path: null
 wandb_project: "ECG_tokenizer_MedGemma"
 wandb_entity: "mhi_ai"
 use_wandb: true
@@ -76,7 +75,7 @@ use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
 # Codebook selection (match Stage-1 j4bb0w33)
-num_codebooks_kept: 8 # j4bb0w33 checkpoint has 8 embed_tables (codebooks)
+num_codebooks_kept: 8
 codebook_offset: -1
 num_quantizers: 8
 ecg_codebook_size: 512
@@ -93,9 +92,6 @@ lora_target_modules:
   - v_proj
   - o_proj
 lora_bias: "none"
-# Projection bridge positional encoding (applies when using ECGProjectionBridge)
-bridge_use_sinusoidal_pos_emb: true
-bridge_pos_embedding_max_len: 4096
 # Dataset paths (5M train / 25k validation)
 train_dataset_path: "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k.parquet"
 validation_dataset_path: "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"

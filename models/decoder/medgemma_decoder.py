@@ -840,7 +840,7 @@ class MedGemmaDecoder(nn.Module):
             }
         if task == "scalar":
             return {
-                "max_new_tokens": 8,
+                "max_new_tokens": 24,
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "min_tokens_guard": 2,
