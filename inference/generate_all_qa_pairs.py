@@ -141,7 +141,7 @@ def generate_answer(
     ecg_tensor: torch.Tensor,
     question: str,
     device: torch.device,
-    max_new_tokens: int = 96
+    config,
 ) -> str:
     """Generate answer for a single (ECG, question) pair."""
     system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
@@ -161,17 +161,22 @@ def generate_answer(
     if isinstance(end_of_turn_id, int) and end_of_turn_id > 0:
         eos_ids.append(end_of_turn_id)
     
+    generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
+    generation_kwargs.setdefault("max_new_tokens", 96)
+    generation_kwargs.setdefault("do_sample", False)
+    generation_kwargs.setdefault("temperature", 0.0)
+    generation_kwargs.setdefault("no_repeat_ngram_size", 5)
+    generation_kwargs.setdefault("repetition_penalty", 1.1)
+    generation_kwargs["eos_token_id"] = eos_ids
+    generation_kwargs["pad_token_id"] = tokenizer.pad_token_id
+    
     with torch.no_grad():
         generated_ids = model.generate_report(
             x=ecg_tensor,
             prompt_input_ids=prompt_ids,
             prompt_attention_mask=prompt_mask,
-            max_token_length=640,
-            max_new_tokens=max_new_tokens,
-            no_repeat_ngram_size=5,
-            repetition_penalty=1.1,
-            eos_token_id=eos_ids,
-            pad_token_id=tokenizer.pad_token_id,
+            max_token_length=int(getattr(config, "max_token_length", 640)),
+            **generation_kwargs,
         )
     
     generation = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
@@ -292,7 +297,7 @@ def main():
                 waveform = waveform_cache[waveform_path]
             
             ecg_tensor = torch.from_numpy(waveform.astype(np.float32)).T.unsqueeze(0).to(device)
-            generation = generate_answer(model, tokenizer, ecg_tensor, question, device)
+            generation = generate_answer(model, tokenizer, ecg_tensor, question, device, config)
             
             results.append({
                 'waveform_name': waveform_name,

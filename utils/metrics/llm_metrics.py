@@ -96,10 +96,6 @@ def decode_assistant_only_text(
             label_list = label_tensor.tolist()
             first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
             expected_prompt_len = first_answer_idx + int(num_ecg_tokens)
-    else:
-            label_list = label_tensor.tolist()
-            first_answer_idx = next((i for i, t in enumerate(label_list) if t != -100), 0)
-            expected_prompt_len = first_answer_idx + int(num_ecg_tokens)
         
         if expected_prompt_len > 0 and len(gen_ids) > expected_prompt_len:
             gen_ids = gen_ids[expected_prompt_len:]
