@@ -2,14 +2,14 @@ import unittest
 import torch
 from unittest.mock import patch, MagicMock
 
-from models.gpt2_tokenizer_decoder import GPT2Decoder
+from models.decoder import GPT2Decoder
 from utils.registry import ModelRegistry
-from utils.enums import AdapterName
+from utils.enums import BridgeName
 
 class TestGPT2WithEmbedding(unittest.TestCase):
     
-    @patch('models.gpt2_tokenizer_decoder.GPT2LMHeadModel')
-    @patch('models.gpt2_tokenizer_decoder.ModelRegistry')
+    @patch('models.decoder.gpt2_decoder.GPT2LMHeadModel')
+    @patch('models.decoder.gpt2_decoder.ModelRegistry')
     def setUp(self, mock_registry, mock_gpt2):
         # Mock the GPT2 model and embedding adapter
         self.mock_gpt2_instance = MagicMock()
@@ -26,14 +26,14 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         self.model = GPT2Decoder(
             huggingface_model_name='gpt2',
             llm_input_embedding_size=768,
-            ecg_embedding_size=(8, 128, 82),
-            adapter_name=AdapterName.GPT2_EMBEDDING_ADAPTER,
+            quantized_feature_shape=(8, 128, 160),
+            bridge_name=BridgeName.GPT2_EMBEDDING_BRIDGE,
             adapter_dropout=0.2
         )
         
         # Set up common test variables
         self.batch_size = 4
-        self.ecg_embeddings = torch.randn(self.batch_size, 8, 128, 82)
+        self.quantized_features = torch.randn(self.batch_size, 8, 128, 160)
         self.input_ids = torch.randint(0, 50256, (self.batch_size, 10))
         self.attention_mask = torch.ones(self.batch_size, 10)
         self.labels = torch.randint(0, 50256, (self.batch_size, 10))
@@ -47,8 +47,8 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         self.assertIsInstance(self.model, GPT2Decoder)
         self.assertEqual(self.model.huggingface_model_name, 'gpt2')
         self.assertEqual(self.model.llm_input_embedding_size, 768)
-        self.assertEqual(self.model.quantized_feature_shape, (8, 128, 82))
-        self.assertEqual(self.model.adapter_name, AdapterName.GPT2_EMBEDDING_ADAPTER)
+        self.assertEqual(self.model.quantized_feature_shape, (8, 128, 160))
+        self.assertEqual(self.model.bridge_name, BridgeName.GPT2_EMBEDDING_BRIDGE)
         self.assertEqual(self.model.adapter_dropout, 0.2)
         
     def test_forward(self):
@@ -60,14 +60,14 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         
         # Run forward pass
         outputs = self.model(
-            ecg_embeddings=self.ecg_embeddings,
+            quantized_features=self.quantized_features,
             input_ids=self.input_ids,
             attention_mask=self.attention_mask,
             labels=self.labels
         )
         
         # Assertions
-        self.mock_adapter.assert_called_once_with(self.ecg_embeddings)
+        self.mock_adapter.assert_called_once_with(self.quantized_features)
         self.assertIsNotNone(outputs)
         self.mock_gpt2_instance.assert_called_once()
         
@@ -79,7 +79,7 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         
         # Run forward without attention mask
         outputs = self.model(
-            ecg_embeddings=self.ecg_embeddings,
+            quantized_features=self.quantized_features,
             input_ids=self.input_ids,
             labels=self.labels
         )
@@ -96,12 +96,12 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         
         # Run generate_report
         generated = self.model.generate_report(
-            ecg_embeddings=self.ecg_embeddings,
+            quantized_features=self.quantized_features,
             max_token_length=20
         )
-        
+
         # Assertions
-        self.mock_adapter.assert_called_with(self.ecg_embeddings)
+        self.mock_adapter.assert_called_with(self.quantized_features)
         self.mock_gpt2_instance.generate.assert_called_once()
         self.assertTrue(torch.equal(generated, expected_output))
         

@@ -1,0 +1,1023 @@
+import math
+import torch
+import torch.nn as nn
+
+from typing import Union, Optional, Dict, Any, Tuple, cast
+from transformers.generation.utils import GenerateOutput
+from transformers import LlamaForCausalLM, PreTrainedModel, AutoTokenizer
+from transformers import PreTrainedTokenizerBase
+
+from utils.enums import (
+    ModelName,
+    BridgeName
+)
+from utils.registry import ModelRegistry
+from models.types import ModelT, ModelClassT
+from utils.attention_visualization import ECGAttentionVisualizer, AttentionHook
+from models.bridge.bridge import (
+    ECGCodeBridge,
+    ECGProjectionBridge,
+    PerceiverProjectionBridge,
+    ECGQFormerBridge,
+)
+
+
+
+@ModelRegistry.register(ModelName.LLAMA32_DECODER)
+class Llama32Decoder(nn.Module):
+    """
+    Llama 3.2 decoder that generates clinical reports from quantized ECG features.
+    
+    Transforms ECG quantized features into Llama 3.2's embedding space via an adapter,
+    then generates text reports using either teacher forcing or ECG-only training.
+    """
+    def __init__(
+        self, 
+        huggingface_model_name: str = 'meta-llama/Llama-3.2-1B-Instruct', 
+        llm_input_embedding_size: int = 2048, 
+        quantized_feature_shape: Tuple[int, int] = (128, 82),
+        bridge_name: BridgeName = BridgeName.LLAMA32_SEQUENCE_BRIDGE,
+        adapter_dropout: float = 0.2,
+        # Sequence token adapter parameters
+        use_cross_attention: bool = True,
+        num_attention_heads: int = 8,
+        intermediate_dim: Optional[int] = None,
+        label_ignore_index: int = -100,
+        # Quantizer for direct codebook access
+        quantizer: Optional[nn.Module] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,  # NEW: Pass tokenizer for adding specials
+        ecg_codebook_size: int = 192,
+        num_visual_tokens: Optional[int] = None,
+        bridge_mid_dim: int = 512,
+        bridge_num_heads: int = 8,
+        bridge_dropout: float = 0.1,
+        bridge_num_special_tokens: int = 4,
+        num_quantizers: int = 1,
+        # Default generation parameters
+        default_do_sample: bool = True,
+        default_top_p: float = 0.92,
+        default_temperature: float = 0.85,
+        default_num_beams: int = 1,
+        # Attention visualization parameters
+        enable_attention_visualization: bool = False,
+        attention_log_frequency: int = 100,
+        **unused_kwargs: Any,
+    ):
+        """
+        Initialize Llama 3.2 decoder.
+        
+        Args:
+            huggingface_model_name: Name/path of the Llama 3.2 model.
+            llm_input_embedding_size: Embedding dimension of the Llama 3.2 model.
+            quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
+            bridge_name: Name of adapter to transform ECG features to Llama 3.2 space.
+            adapter_dropout: Dropout rate for the adapter.
+            tokenizer: Shared tokenizer instance for adding special tokens.
+            label_ignore_index: Index to ignore in loss computation.
+            default_do_sample: Default sampling strategy for generation.
+            default_top_p: Default nucleus sampling parameter.
+            default_temperature: Default temperature for generation.
+            default_num_beams: Default number of beams for beam search.
+        """
+        super(Llama32Decoder, self).__init__()
+        
+        # Store configuration
+        self.label_ignore_index = label_ignore_index
+        
+        # Store sequence token adapter parameters
+        self.use_cross_attention = use_cross_attention
+        self.num_attention_heads = num_attention_heads
+        self.intermediate_dim = intermediate_dim
+        
+        # Store quantizer for direct codebook access
+        self.quantizer = quantizer
+        
+        # Ensure tokenizer is available
+        if tokenizer is None:
+            self.tokenizer = AutoTokenizer.from_pretrained(huggingface_model_name)
+        else:
+            self.tokenizer = cast(PreTrainedTokenizerBase, tokenizer)
+        
+        if isinstance(bridge_name, str):
+            try:
+                bridge_name = BridgeName(bridge_name)
+            except ValueError as e:
+                valid = [e.value for e in BridgeName]
+                raise ValueError(
+                    f"Invalid bridge name '{bridge_name}'. Must be one of: {valid}"
+                ) from e
+
+        self.bridge_name = bridge_name
+        bridge_name_str = bridge_name.value if hasattr(bridge_name, 'value') else str(bridge_name)
+
+        self.bridge: Optional[Union[ECGCodeBridge, ECGProjectionBridge, PerceiverProjectionBridge]] = None
+        self.bridge_config: Optional[Dict[str, Any]] = None
+        self.adapter: Optional[ModelT] = None
+        self._prefix_debug_once = True
+
+        visual_tokens = num_visual_tokens if num_visual_tokens is not None else quantized_feature_shape[0]
+        qformer_layers = int(unused_kwargs.pop("bridge_qformer_layers", 6))
+        qformer_text_hidden = int(unused_kwargs.pop("bridge_text_hidden_size", bridge_mid_dim))
+        qformer_bias_last = float(unused_kwargs.pop("bridge_bias_last_codebook", 0.5))
+        qformer_codebook_dropout = float(unused_kwargs.pop("bridge_codebook_dropout", 0.0))
+
+        # Get codebook selection parameters from kwargs (passed from config)
+        kept = unused_kwargs.pop('num_codebooks_kept', None)
+        offset_raw = unused_kwargs.pop('codebook_offset', 0)  # Used for logging only
+
+        total_codebooks = max(1, int(num_quantizers))
+        requested_keep = int(kept) if kept is not None else total_codebooks
+        if requested_keep <= 0 or requested_keep > total_codebooks:
+            requested_keep = total_codebooks
+
+        offset = int(offset_raw or 0)
+        if requested_keep >= total_codebooks:
+            resolved_offset = 0
+        else:
+            if offset < 0:
+                resolved_offset = max(total_codebooks - requested_keep, 0)
+            else:
+                resolved_offset = max(0, min(offset, total_codebooks - requested_keep))
+
+        self.num_codebooks_kept = requested_keep
+        self.codebook_offset = resolved_offset
+
+        if bridge_name in {
+            BridgeName.LLAMA32_ECG_CODE_BRIDGE,
+            BridgeName.LLAMA32_ECG_PROJECTION_BRIDGE,
+            BridgeName.ECG_PERCEIVER_BRIDGE,
+            BridgeName.LLAMA32_ECG_QFORMER_BRIDGE,
+        }:
+            if bridge_name == BridgeName.LLAMA32_ECG_CODE_BRIDGE:
+                self.bridge = ECGCodeBridge(
+                    vocab_size=ecg_codebook_size,
+                    d_mid=bridge_mid_dim,
+                    d_model=llm_input_embedding_size,
+                    num_output_tokens=visual_tokens,
+                    num_heads=bridge_num_heads,
+                    num_special_tokens=bridge_num_special_tokens,
+                    dropout=bridge_dropout,
+                    num_codebooks=requested_keep,
+                    codebook_offset=resolved_offset,
+                    original_num_codebooks=total_codebooks,
+                )
+                self.bridge_config = {
+                    "style": "code",
+                    "vocab_size": ecg_codebook_size,
+                    "mid_dim": bridge_mid_dim,
+                    "output_tokens": visual_tokens,
+                    "num_heads": bridge_num_heads,
+                    "dropout": bridge_dropout,
+                    "num_special_tokens": bridge_num_special_tokens,
+                }
+            elif bridge_name == BridgeName.ECG_PERCEIVER_BRIDGE:
+                feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
+                self.bridge = PerceiverProjectionBridge(
+                    input_dim=feature_dim,
+                    d_model=llm_input_embedding_size,
+                    num_output_tokens=visual_tokens,
+                    num_heads=bridge_num_heads,
+                    dropout=bridge_dropout,
+                )
+                self.bridge_config = {
+                    "style": "perceiver",
+                    "input_dim": feature_dim,
+                    "d_model": llm_input_embedding_size,
+                    "output_tokens": visual_tokens,
+                    "num_heads": bridge_num_heads,
+                    "dropout": bridge_dropout,
+                }
+            elif bridge_name == BridgeName.LLAMA32_ECG_QFORMER_BRIDGE:
+                num_steps = quantized_feature_shape[0] if len(quantized_feature_shape) > 0 else visual_tokens
+                self.bridge = ECGQFormerBridge(
+                    vocab_size=ecg_codebook_size,
+                    num_codebooks=requested_keep,
+                    d_mid=bridge_mid_dim,
+                    d_llm=llm_input_embedding_size,
+                    d_txt=qformer_text_hidden,
+                    num_steps=num_steps,
+                    num_query_tokens=visual_tokens,
+                    num_layers=qformer_layers,
+                    num_heads=bridge_num_heads,
+                    dropout=bridge_dropout,
+                    num_special_tokens=bridge_num_special_tokens,
+                    bias_last_codebook=qformer_bias_last,
+                    codebook_dropout=qformer_codebook_dropout,
+                )
+                self.bridge_config = {
+                    "style": "qformer",
+                    "vocab_size": ecg_codebook_size,
+                    "mid_dim": bridge_mid_dim,
+                    "output_tokens": visual_tokens,
+                    "num_heads": bridge_num_heads,
+                    "dropout": bridge_dropout,
+                    "num_layers": qformer_layers,
+                    "text_hidden_size": qformer_text_hidden,
+                    "bias_last_codebook": qformer_bias_last,
+                    "codebook_dropout": qformer_codebook_dropout,
+                }
+            else:
+                feature_dim = quantized_feature_shape[1] if len(quantized_feature_shape) > 1 else llm_input_embedding_size
+                # Optional projection-bridge kwargs surfaced from config
+                proj_kwargs: dict = {
+                    'input_dim': feature_dim,
+                    'd_model': llm_input_embedding_size,
+                    'num_tokens': visual_tokens,
+                    'dropout': bridge_dropout,
+                }
+                # Positional encoding flexibility
+                use_sinusoidal = kwargs.pop('bridge_use_sinusoidal_pos_emb', None)
+                max_pos = kwargs.pop('bridge_pos_embedding_max_len', None)
+                if use_sinusoidal is not None:
+                    proj_kwargs['use_sinusoidal_pos_emb'] = bool(use_sinusoidal)
+                if max_pos is not None:
+                    try:
+                        proj_kwargs['pos_embedding_max_len'] = int(max_pos)
+                    except Exception:
+                        pass
+                # Optional knobs
+                softmax_temp = kwargs.pop('bridge_softmax_temp', None)
+                mix_residual = kwargs.pop('bridge_mix_residual', None)
+                add_modality_embed = kwargs.pop('bridge_add_modality_embed', None)
+                add_cls_token = kwargs.pop('bridge_add_cls_token', None)
+                if softmax_temp is not None:
+                    try:
+                        proj_kwargs['softmax_temp'] = float(softmax_temp)
+                    except Exception:
+                        pass
+                if mix_residual is not None:
+                    try:
+                        proj_kwargs['mix_residual'] = float(mix_residual)
+                    except Exception:
+                        pass
+                if add_modality_embed is not None:
+                    proj_kwargs['add_modality_embed'] = bool(add_modality_embed)
+                if add_cls_token is not None:
+                    proj_kwargs['add_cls_token'] = bool(add_cls_token)
+
+                self.bridge = ECGProjectionBridge(**proj_kwargs)
+                self.bridge_config = {
+                    "style": "projection",
+                    "input_dim": feature_dim,
+                    "d_model": llm_input_embedding_size,
+                    "output_tokens": visual_tokens,
+                    "dropout": bridge_dropout,
+                }
+            self.num_ecg_tokens = self.bridge.num_tokens
+        else:
+            self.adapter_class: ModelClassT = ModelRegistry.get(bridge_name)
+            if self.adapter_class is None:
+                raise ValueError(f"Adapter {bridge_name} not found in ModelRegistry")
+
+            adapter_ctor = cast(Any, self.adapter_class)
+            adapter_kwargs = {
+                'input_shape': quantized_feature_shape,
+                'output_size': llm_input_embedding_size,
+                'dropout': adapter_dropout
+            }
+
+            if 'SequenceToken' in bridge_name_str:
+                adapter_kwargs.update({
+                    'use_cross_attention': self.use_cross_attention,
+                    'num_attention_heads': self.num_attention_heads,
+                    'intermediate_dim': self.intermediate_dim
+                })
+
+            self.adapter = adapter_ctor(**adapter_kwargs)
+
+            num_ecg_tokens_raw = getattr(self.adapter, 'num_tokens', 1)
+            try:
+                num_ecg_tokens = int(num_ecg_tokens_raw)
+            except (TypeError, ValueError):
+                num_ecg_tokens = quantized_feature_shape[0]
+            self.num_ecg_tokens = num_ecg_tokens
+
+        num_ecg_tokens = self.num_ecg_tokens
+
+        # Load the Llama 3.2 model
+        self.llm_model: PreTrainedModel = LlamaForCausalLM.from_pretrained(huggingface_model_name)
+        
+        # Check if embedding size matches Llama 3.2's hidden size
+        if llm_input_embedding_size != self.llm_model.config.hidden_size:
+            raise ValueError(f"Embedding size {llm_input_embedding_size} does not match Llama 3.2 hidden size {self.llm_model.config.hidden_size}")
+        
+        # Store reference to LLM for phase-based training
+        self.llm = self.llm_model
+
+        # Configure pad/eos token ids (coerce to ints)
+        def _coerce_id(x):
+            if x is None:
+                return None
+            if isinstance(x, (list, tuple)):
+                if len(x) == 0:
+                    return None
+                return _coerce_id(x[0])
+            try:
+                return int(x)
+            except (TypeError, ValueError):
+                return None
+
+        pad_id = _coerce_id(getattr(self.llm_model.config, 'pad_token_id', None))
+        eos_id = _coerce_id(getattr(self.llm_model.config, 'eos_token_id', None))
+        if pad_id is None:
+            pad_id = eos_id if eos_id is not None else 0
+        if eos_id is None:
+            eos_id = pad_id
+        self.pad_token_id = int(pad_id)
+        self.eos_token_id = int(eos_id)
+        self.ecg_prefix_token_id = self.pad_token_id
+        
+        # Enhanced EOS token list for better stopping
+        # Include multiple Llama 3.2 stop tokens for robust generation control
+        self.eos_token_ids = [
+            128009,  # <|eot_id|> - primary end of turn token
+            128001,  # <|end_of_text|> - end of text token
+        ]
+
+        # Tokens to suppress at the beginning of generation
+        # This prevents the model from generating header tokens
+        self.begin_suppress_tokens = [
+            128006,  # <|start_header_id|> - should never start with this
+            128007,  # <|end_header_id|> - should never start with this  
+            128008,  # <|eom_id|> - should never start with this
+            128009,  # <|eot_id|> - should never start with this at the beginning
+        ]
+        
+        # Configure generation parameters after token IDs are set
+        self.default_generation_params = {
+            # Use sampling for more natural medical text
+            "do_sample": True,
+            "temperature": 0.7,  # Slightly higher for more variation
+            "top_p": 0.9,  # Nucleus sampling for quality
+            "typical_p": 0.95,  # Encourage diverse but on-topic language
+            # Length controls optimized for medical findings format
+            "max_new_tokens": 160,  # Allow longer structured findings when needed
+            "min_new_tokens": 5,  # Prevent premature termination after a single token
+            "length_penalty": 1.05,
+            # Moderate repetition control to allow medical terminology repetition
+            "repetition_penalty": 1.1,  # Reduced penalty
+            "no_repeat_ngram_size": 3,  # Allow some medical phrase repetition
+            # Proper stopping behavior
+            "early_stopping": False,  # Let it finish naturally
+            "pad_token_id": self.pad_token_id,
+            "eos_token_id": self.eos_token_ids,
+            # Suppress header tokens at the beginning
+            "begin_suppress_tokens": self.begin_suppress_tokens,
+        }
+        
+        # Initialize attention visualization components
+        self.enable_attention_visualization = enable_attention_visualization
+        self.attention_log_frequency = attention_log_frequency
+        self.attention_visualizer = None
+        self.attention_hook = None
+        self._training_step = 0  # Track training steps for logging frequency
+        
+        if self.enable_attention_visualization:
+            self.attention_visualizer = ECGAttentionVisualizer(num_ecg_tokens=self.num_ecg_tokens)
+            self.attention_hook = AttentionHook()
+            # Register hook on final transformer layer
+            self.attention_hook.register(self.llm_model)
+            # Attention visualization enabled
+    
+    def enable_lora_adapters(self):
+        """Enable LoRA adapters if configured."""
+        # This would be called from the runner when transitioning to phase 2
+        # If using PEFT/LoRA, the adapter would be enabled here
+        pass
+
+    def freeze_llm_parameters(self):
+        """Freeze all LLM parameters (for phase 1 training)."""
+        for param in self.llm_model.parameters():
+            param.requires_grad = False
+        print("❄️ Froze LLM parameters for alignment phase")
+    
+    def unfreeze_llm_parameters(self):
+        """Unfreeze LLM parameters (for phase 2 training)."""
+        for param in self.llm_model.parameters():
+            param.requires_grad = True
+        print("🔥 Unfroze LLM parameters for fine-tuning phase")
+    
+    def get_trainable_components(self) -> Dict[str, nn.Module]:
+        """Get trainable ECG-specific components."""
+        components = {}
+        
+        # Add adapter
+        if getattr(self, 'adapter', None) is not None:
+            components['adapter'] = self.adapter
+        if self.bridge is not None:
+            components['bridge'] = self.bridge
+        
+        # Add cross-attention if available (part of bridge for SequenceTokenBridge)
+        if hasattr(self.adapter, 'cross_attention'):
+            components['cross_attention'] = self.adapter.cross_attention
+        
+        return components
+
+    def _mask_input_prefix(self, sequences: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Replace the prefix (ECG + prompt) tokens with pad so decoded text omits them."""
+        if mask is None:
+            return sequences
+        masked = sequences.clone()
+        prefix_lengths = mask.sum(dim=1)
+        for idx, length in enumerate(prefix_lengths.tolist()):
+            if length > 0:
+                masked[idx, :int(length)] = self.pad_token_id
+        return masked
+
+    def forward(
+        self, 
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+        quantized_features: Optional[torch.Tensor] = None,
+        quantized_codes: Optional[torch.Tensor] = None,
+        prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without answer leakage
+        prompt_attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass for training: Prepends ECG embeddings to text embeddings.
+
+        Args:
+            input_ids: (B, L) with prepended ECG token IDs + text tokens.
+            attention_mask: (B, L) full sequence mask.
+            labels: (B, L) shifted for causal LM (ignores ECG + prompt).
+            quantized_features: Quantized latent features (for legacy adapters).
+            quantized_codes: Discrete ECG code indices [B, T] (required for code bridge).
+
+        Returns:
+            Dict with 'loss' and 'logits'.
+        """
+        batch_size = input_ids.size(0)
+
+        if quantized_features is None and self.bridge is None:
+            raise ValueError("quantized_features must be provided for ECG processing")
+
+        prompt_text_embeddings = None
+        prompt_mask = None
+        if prompt_input_ids is not None:
+            prompt_text_embeddings = self.llm_model.get_input_embeddings()(prompt_input_ids)
+            if prompt_attention_mask is not None:
+                prompt_mask = prompt_attention_mask.to(dtype=torch.bool)
+            else:
+                prompt_mask = (prompt_input_ids != self.pad_token_id)
+
+        text_input_ids = input_ids[:, self.num_ecg_tokens:]
+        text_embeddings = self.llm_model.get_input_embeddings()(text_input_ids)
+        text_mask = None
+        if attention_mask is not None:
+            text_mask = attention_mask[:, self.num_ecg_tokens:].to(dtype=torch.bool)
+
+        bridge_name_str = self.bridge_name.value if hasattr(self.bridge_name, 'value') else str(self.bridge_name)
+
+        if self.bridge is not None:
+            if getattr(self.bridge, 'uses_codes', False):
+                if quantized_codes is None:
+                    raise ValueError("quantized_codes must be provided when using the ECG code bridge")
+                ecg_ids = quantized_codes
+                if isinstance(ecg_ids, (tuple, list)):
+                    ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
+                if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
+                    ecg_ids = ecg_ids.squeeze(-1)
+                if ecg_ids.dim() not in (2, 3):
+                    raise ValueError(
+                        f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
+                    )
+                ecg_ids = ecg_ids.to(device=text_embeddings.device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
+
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(device=text_embeddings.device, dtype=torch.bool)
+
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embeddings = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embeddings = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embeddings is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embeddings = bridge_output
+            else:
+                if quantized_features is None:
+                    raise ValueError(
+                        "quantized_features must be provided when using the ECG projection bridge"
+                    )
+                ecg_embeddings = self.bridge(quantized_features.to(text_embeddings.device))
+        else:
+            if self.adapter is None:
+                raise RuntimeError("Adapter is not initialized")
+
+            cross_attn_text_emb = prompt_text_embeddings if prompt_text_embeddings is not None else text_embeddings
+            cross_attn_mask = prompt_mask if prompt_mask is not None else text_mask
+            if cross_attn_mask is not None and cross_attn_mask.dtype != torch.bool:
+                cross_attn_mask = cross_attn_mask.to(dtype=torch.bool)
+
+            if 'CrossModal' in bridge_name_str or (hasattr(self.adapter, 'use_cross_attention') and getattr(self.adapter, 'use_cross_attention', False)):
+                if hasattr(self.adapter, 'forward') and 'text_embeddings' in self.adapter.forward.__code__.co_varnames:
+                    ecg_embeddings = self.adapter(
+                        quantized_features,
+                        text_embeddings=cross_attn_text_emb,
+                        text_attention_mask=cross_attn_mask
+                    )
+                else:
+                    ecg_embeddings = self.adapter(quantized_features)
+            else:
+                ecg_embeddings = self.adapter(quantized_features)
+
+        if ecg_embeddings.dim() == 2:
+            ecg_embeddings = ecg_embeddings.unsqueeze(1)
+
+        model_dtype = self.llm_model.get_input_embeddings().weight.dtype
+        if ecg_embeddings.dtype != model_dtype:
+            ecg_embeddings = ecg_embeddings.to(model_dtype)
+        if text_embeddings.dtype != model_dtype:
+            text_embeddings = text_embeddings.to(model_dtype)
+
+        input_embeddings = torch.cat([ecg_embeddings, text_embeddings], dim=1)
+
+        if self.bridge is not None:
+            expected_len = ecg_embeddings.size(1) + text_embeddings.size(1)
+            if input_embeddings.size(1) != expected_len:
+                raise ValueError(
+                    f"Input embedding length mismatch: expected {expected_len}, got {input_embeddings.size(1)}"
+                )
+
+            if attention_mask is not None:
+                prefix_mask = attention_mask[:, :self.num_ecg_tokens]
+                if bool((prefix_mask != 1).any()):
+                    raise ValueError("ECG prefix positions must have attention mask == 1")
+
+            if labels is not None:
+                prefix_labels = labels[:, :self.num_ecg_tokens]
+                if bool((prefix_labels != self.label_ignore_index).any()):
+                    raise ValueError("ECG prefix labels must be ignore_index across all positions")
+
+            if not self._prefix_debug_once:
+                with torch.no_grad():
+                    prefix_norm = ecg_embeddings.norm(dim=-1).mean().item()
+                    text_norm = text_embeddings.norm(dim=-1).mean().item() if text_embeddings.numel() > 0 else 0.0
+                    print(
+                        f"[ECGCodeBridge] prefix_tokens={self.num_ecg_tokens}, "
+                        f"prefix_norm={prefix_norm:.4f}, text_norm={text_norm:.4f}"
+                    )
+                self._prefix_debug_once = True
+
+        outputs = self.llm_model(
+            inputs_embeds=input_embeddings,
+            attention_mask=attention_mask,
+            labels=labels
+        )
+
+        self._log_attention_if_enabled(input_ids)
+
+        
+        return outputs
+
+    def _log_attention_if_enabled(self, input_ids: torch.Tensor):
+        """Log attention if visualization enabled."""
+        if self.enable_attention_visualization and self._training_step % self.attention_log_frequency == 0:
+            # Assume self.attention_hook has captured attention; log via visualizer
+            if self.attention_hook and self.attention_visualizer is not None:
+                attention_weights = self.attention_hook.get_attention()
+                if attention_weights is not None:
+                    # Use unified visualizer API
+                    attention_data = self.attention_visualizer.extract_cross_modal_attention(
+                        attention_weights=attention_weights,
+                        input_ids=input_ids,
+                        ecg_start_idx=0
+                    )
+                    self.attention_visualizer.log_attention_to_wandb(attention_data, step=self._training_step, log_plots=(self._training_step % (self.attention_log_frequency * 5) == 0))
+        self._training_step += 1
+
+    @torch.no_grad()
+    def generate_report(
+        self, 
+        quantized_features: Optional[torch.Tensor] = None,
+        quantized_codes: Optional[torch.Tensor] = None,
+        max_token_length: int = 256, 
+        **generate_kwargs
+    ) -> Union[GenerateOutput, torch.Tensor]:
+        """
+        Generate clinical report from quantized ECG features (ECG-only mode with default prompt).
+
+        Args:
+            quantized_features: Quantized ECG features (legacy adapter path).
+            quantized_codes: Discrete ECG codes (required for code bridge path).
+            max_token_length: Maximum length of generated tokens.
+            **generate_kwargs: Additional generation parameters.
+
+        Returns:
+            Generated token IDs or GenerateOutput object.
+        """
+        system_message = (
+            "You are a medical expert specialized in ECG interpretation. Provide a concise list "
+            "of clinical findings separated by semicolons, similar to standard ECG reports."
+        )
+        default_user_content = "Analyze this ECG and list the clinical findings."
+        messages_prompt = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": default_user_content}
+        ]
+        prompt_text = cast(
+            str,
+            self.tokenizer.apply_chat_template(
+                messages_prompt,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+        )
+        prompt_encoding = self.tokenizer.encode_plus(
+            prompt_text,
+            add_special_tokens=False,
+            return_tensors=None
+        )
+        prompt_ids = prompt_encoding.input_ids
+
+        model_device = self.llm_model.get_input_embeddings().weight.device
+
+        if self.bridge is not None:
+            if getattr(self.bridge, 'uses_codes', False):
+                if quantized_codes is None:
+                    raise ValueError("quantized_codes must be provided when using the ECG code bridge")
+
+                ecg_ids = quantized_codes
+                if isinstance(ecg_ids, (tuple, list)):
+                    ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
+                if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
+                    ecg_ids = ecg_ids.squeeze(-1)
+                if ecg_ids.dim() not in (2, 3):
+                    raise ValueError(
+                        f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
+                    )
+
+                ecg_ids = ecg_ids.to(model_device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
+
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(model_device, dtype=torch.bool)
+                batch_size = ecg_ids.size(0)
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embedding = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embedding = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embedding is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embedding = bridge_output
+            else:
+                if quantized_features is None:
+                    raise ValueError("quantized_features must be provided when using the ECG projection bridge")
+                features = quantized_features.to(model_device)
+                ecg_embedding = self.bridge(features)
+                batch_size = ecg_embedding.size(0)
+
+            num_ecg_tokens = ecg_embedding.size(1)
+
+            def build_prompt_tensors(num_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+                max_text_len = max(0, max_token_length - num_tokens)
+                trimmed = prompt_ids[:max_text_len] if max_text_len > 0 else []
+                mask_value = 1
+                if len(trimmed) == 0:
+                    trimmed = [self.pad_token_id]
+                    mask_value = 0
+                prompt_tensor = torch.tensor(trimmed, dtype=torch.long, device=model_device).unsqueeze(0).expand(batch_size, -1)
+                prompt_mask = torch.full_like(prompt_tensor, mask_value, dtype=torch.long)
+                return prompt_tensor, prompt_mask
+
+            prompt_tensor, prompt_mask = build_prompt_tensors(num_ecg_tokens)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_tensor)
+
+        else:
+            if quantized_features is None:
+                raise ValueError("quantized_features must be provided for generation when adapter is used")
+
+            if quantized_features.dim() == 2:
+                adapter_input = quantized_features.unsqueeze(1)
+            else:
+                adapter_input = quantized_features
+
+            adapter_input = adapter_input.to(model_device)
+            batch_size = adapter_input.size(0)
+
+            num_ecg_tokens_hint = getattr(self.adapter, 'num_tokens', 1) if self.adapter is not None else 1
+            try:
+                num_ecg_tokens_hint = int(num_ecg_tokens_hint)
+            except (TypeError, ValueError):
+                num_ecg_tokens_hint = 1
+
+            def build_prompt_tensors(num_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+                max_text_len = max(0, max_token_length - num_tokens)
+                trimmed = prompt_ids[:max_text_len] if max_text_len > 0 else []
+                mask_value = 1
+                if len(trimmed) == 0:
+                    trimmed = [self.pad_token_id]
+                    mask_value = 0
+                prompt_tensor = torch.tensor(trimmed, dtype=torch.long, device=model_device).unsqueeze(0).expand(batch_size, -1)
+                prompt_mask = torch.full_like(prompt_tensor, mask_value, dtype=torch.long)
+                return prompt_tensor, prompt_mask
+
+            prompt_tensor, prompt_mask = build_prompt_tensors(num_ecg_tokens_hint)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_tensor)
+            ecg_embedding = self.adapter(
+                adapter_input,
+                text_embeddings=prompt_embeddings,
+                text_attention_mask=prompt_mask
+            )
+
+            is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+            num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+            if not is_sequence_tokens and ecg_embedding.dim() == 3:
+                ecg_embedding = ecg_embedding.squeeze(1)
+
+            if num_ecg_tokens != num_ecg_tokens_hint:
+                prompt_tensor, prompt_mask = build_prompt_tensors(num_ecg_tokens)
+                prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_tensor)
+                ecg_embedding = self.adapter(
+                    adapter_input,
+                    text_embeddings=prompt_embeddings,
+                    text_attention_mask=prompt_mask
+                )
+                is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+                if not is_sequence_tokens and ecg_embedding.dim() == 3:
+                    ecg_embedding = ecg_embedding.squeeze(1)
+                num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+
+            if ecg_embedding.dim() == 2:
+                ecg_embedding = ecg_embedding.unsqueeze(1)
+
+        ecg_token_ids = torch.full(
+            (batch_size, num_ecg_tokens),
+            fill_value=self.ecg_prefix_token_id,
+            dtype=torch.long,
+            device=model_device
+        )
+        full_prompt_ids = torch.cat([ecg_token_ids, prompt_tensor], dim=1)
+        attention_mask = torch.cat([torch.ones_like(ecg_token_ids, dtype=torch.long), prompt_mask], dim=1)
+
+        text_embeddings = prompt_embeddings
+        model_dtype = self.llm_model.get_input_embeddings().weight.dtype
+        if ecg_embedding.dtype != model_dtype:
+            ecg_embedding = ecg_embedding.to(model_dtype)
+        if text_embeddings.dtype != model_dtype:
+            text_embeddings = text_embeddings.to(model_dtype)
+        input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
+
+        generation_params = generate_kwargs.copy()
+        max_new_tokens_override = generation_params.get("max_new_tokens")
+        min_new_tokens_override = generation_params.get("min_new_tokens")
+        generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("input_ids", full_prompt_ids)
+        generation_params.setdefault("use_cache", True)
+
+        for key, value in self.default_generation_params.items():
+            generation_params.setdefault(key, value)
+
+        if max_new_tokens_override is None:
+            generation_params["max_new_tokens"] = max_token_length
+        else:
+            generation_params["max_new_tokens"] = min(int(max_new_tokens_override), max_token_length)
+
+        if min_new_tokens_override is None:
+            generation_params["min_new_tokens"] = min(
+                generation_params.get("min_new_tokens", max_token_length),
+                generation_params["max_new_tokens"]
+            )
+        else:
+            generation_params["min_new_tokens"] = min(int(min_new_tokens_override), generation_params["max_new_tokens"])
+
+        with torch.inference_mode():
+            result = self.llm_model.generate(
+                inputs_embeds=input_embedding,
+                **generation_params
+            )
+
+        sequences = result.sequences if hasattr(result, "sequences") else result
+        stripped = self._mask_input_prefix(sequences, attention_mask.to(sequences.device))
+        if hasattr(result, "sequences"):
+            result.sequences = stripped
+            return result
+        return stripped
+
+    @torch.no_grad()
+    def generate_report_with_question(
+        self,
+        prompt_input_ids: torch.Tensor,
+        quantized_features: Optional[torch.Tensor] = None,
+        quantized_codes: Optional[torch.Tensor] = None,
+        prompt_attention_mask: Optional[torch.Tensor] = None,
+        max_token_length: int = 256,
+        **generate_kwargs
+    ) -> Union[GenerateOutput, torch.Tensor]:
+        """Question-conditioned generation using provided prompt_input_ids (text-only).
+        Prepends ECG token IDs and embeddings.
+        """
+        model_device = self.llm_model.get_input_embeddings().weight.device
+
+        if prompt_attention_mask is None:
+            prompt_attention_mask = torch.ones_like(prompt_input_ids, dtype=torch.long)
+
+        prompt_input_ids = prompt_input_ids.to(model_device)
+        prompt_attention_mask = prompt_attention_mask.to(model_device)
+
+        if self.bridge is not None:
+            if getattr(self.bridge, 'uses_codes', False):
+                if quantized_codes is None:
+                    raise ValueError("quantized_codes must be provided when using the ECG code bridge")
+
+                ecg_ids = quantized_codes
+                if isinstance(ecg_ids, (tuple, list)):
+                    ecg_ids = ecg_ids[0]
+                if not isinstance(ecg_ids, torch.Tensor):
+                    ecg_ids = torch.as_tensor(ecg_ids)
+                if ecg_ids.dim() == 4 and ecg_ids.size(0) == 1:
+                    ecg_ids = ecg_ids.squeeze(0)
+                if ecg_ids.dim() == 3 and ecg_ids.size(-1) == 1:
+                    ecg_ids = ecg_ids.squeeze(-1)
+                if ecg_ids.dim() not in (2, 3):
+                    raise ValueError(
+                        f"quantized_codes must be [batch, seq] or [batch, seq, depth]; got {ecg_ids.shape}"
+                    )
+
+                ecg_ids = ecg_ids.to(model_device)
+                pad_id = getattr(self.bridge, "pad_id", None)
+                if ecg_ids.dim() == 3:
+                    mask_levels = ecg_ids >= 0
+                    if pad_id is not None and pad_id >= 0:
+                        mask_levels = mask_levels & (ecg_ids != pad_id)
+                    ecg_mask = mask_levels.any(dim=-1)
+                else:
+                    if pad_id is not None and pad_id >= 0:
+                        ecg_mask = ecg_ids != pad_id
+                    else:
+                        ecg_mask = ecg_ids >= 0
+
+                ecg_ids = ecg_ids.clamp_min(0).to(dtype=torch.long)
+                ecg_mask = ecg_mask.to(model_device, dtype=torch.bool)
+                batch_size = ecg_ids.size(0)
+                bridge_output = self.bridge(ecg_ids, attn_mask=ecg_mask)
+                if isinstance(bridge_output, tuple):
+                    ecg_embedding = bridge_output[0]
+                elif isinstance(bridge_output, dict):
+                    ecg_embedding = bridge_output.get("token_embeddings") or bridge_output.get("embeddings")
+                    if ecg_embedding is None:
+                        raise ValueError("Bridge dictionary output missing token embeddings.")
+                else:
+                    ecg_embedding = bridge_output
+            else:
+                if quantized_features is None:
+                    raise ValueError("quantized_features must be provided when using the ECG projection bridge")
+                features = quantized_features.to(model_device)
+                ecg_embedding = self.bridge(features)
+                batch_size = ecg_embedding.size(0)
+
+            num_ecg_tokens = ecg_embedding.size(1)
+
+            def trim_prompt(num_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+                max_text_len = max(0, max_token_length - num_tokens)
+                trimmed_ids = prompt_input_ids[:, :max_text_len] if max_text_len > 0 else prompt_input_ids[:, :0]
+                trimmed_mask = prompt_attention_mask[:, :max_text_len] if max_text_len > 0 else prompt_attention_mask[:, :0]
+                if trimmed_ids.size(1) == 0:
+                    trimmed_ids = torch.full((batch_size, 1), self.pad_token_id, dtype=torch.long, device=model_device)
+                    trimmed_mask = torch.zeros_like(trimmed_ids, dtype=torch.long)
+                return trimmed_ids, trimmed_mask
+
+            prompt_trimmed, mask_trimmed = trim_prompt(num_ecg_tokens)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_trimmed)
+
+        else:
+            if quantized_features is None:
+                raise ValueError("quantized_features must be provided for generation when adapter is used")
+
+            if quantized_features.dim() == 2:
+                adapter_input = quantized_features.unsqueeze(1)
+            else:
+                adapter_input = quantized_features
+
+            adapter_input = adapter_input.to(model_device)
+            batch_size = adapter_input.size(0)
+
+            num_ecg_tokens_hint = getattr(self.adapter, 'num_tokens', 1)
+            try:
+                num_ecg_tokens_hint = int(num_ecg_tokens_hint)
+            except (TypeError, ValueError):
+                num_ecg_tokens_hint = 1
+
+            def trim_prompt(num_tokens: int) -> Tuple[torch.Tensor, torch.Tensor]:
+                max_text_len = max(0, max_token_length - num_tokens)
+                trimmed_ids = prompt_input_ids[:, :max_text_len] if max_text_len > 0 else prompt_input_ids[:, :0]
+                trimmed_mask = prompt_attention_mask[:, :max_text_len] if max_text_len > 0 else prompt_attention_mask[:, :0]
+                if trimmed_ids.size(1) == 0:
+                    trimmed_ids = torch.full((batch_size, 1), self.pad_token_id, dtype=torch.long, device=model_device)
+                    trimmed_mask = torch.zeros_like(trimmed_ids, dtype=torch.long)
+                return trimmed_ids, trimmed_mask
+
+            prompt_trimmed, mask_trimmed = trim_prompt(num_ecg_tokens_hint)
+            prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_trimmed)
+            ecg_embedding = self.adapter(
+                adapter_input,
+                text_embeddings=prompt_embeddings,
+                text_attention_mask=mask_trimmed
+            )
+
+            is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+            num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+            if not is_sequence_tokens and ecg_embedding.dim() == 3:
+                ecg_embedding = ecg_embedding.squeeze(1)
+
+            if num_ecg_tokens != num_ecg_tokens_hint:
+                prompt_trimmed, mask_trimmed = trim_prompt(num_ecg_tokens)
+                prompt_embeddings = self.llm_model.get_input_embeddings()(prompt_trimmed)
+                ecg_embedding = self.adapter(
+                    adapter_input,
+                    text_embeddings=prompt_embeddings,
+                    text_attention_mask=mask_trimmed
+                )
+                is_sequence_tokens = ecg_embedding.dim() == 3 and ecg_embedding.size(1) > 1
+                if not is_sequence_tokens and ecg_embedding.dim() == 3:
+                    ecg_embedding = ecg_embedding.squeeze(1)
+                num_ecg_tokens = ecg_embedding.size(1) if is_sequence_tokens else 1
+
+            if ecg_embedding.dim() == 2:
+                ecg_embedding = ecg_embedding.unsqueeze(1)
+
+        ecg_token_tensor = torch.full(
+            (batch_size, num_ecg_tokens),
+            fill_value=self.ecg_prefix_token_id,
+            dtype=torch.long,
+            device=model_device
+        )
+        input_ids = torch.cat([ecg_token_tensor, prompt_trimmed], dim=1)
+        attention_mask = torch.cat([torch.ones_like(ecg_token_tensor, dtype=torch.long), mask_trimmed], dim=1)
+
+        text_embeddings = prompt_embeddings
+        model_dtype = self.llm_model.get_input_embeddings().weight.dtype
+        if ecg_embedding.dtype != model_dtype:
+            ecg_embedding = ecg_embedding.to(model_dtype)
+        if text_embeddings.dtype != model_dtype:
+            text_embeddings = text_embeddings.to(model_dtype)
+        input_embedding = torch.cat([ecg_embedding, text_embeddings], dim=1)
+
+        generation_params = generate_kwargs.copy()
+        max_new_tokens_override = generation_params.get("max_new_tokens")
+        min_new_tokens_override = generation_params.get("min_new_tokens")
+        generation_params.setdefault("attention_mask", attention_mask)
+        generation_params.setdefault("input_ids", input_ids)
+        generation_params.setdefault("use_cache", True)
+
+        for key, value in self.default_generation_params.items():
+            generation_params.setdefault(key, value)
+
+        if max_new_tokens_override is None:
+            generation_params["max_new_tokens"] = max_token_length
+        else:
+            generation_params["max_new_tokens"] = min(int(max_new_tokens_override), max_token_length)
+
+        if min_new_tokens_override is None:
+            generation_params["min_new_tokens"] = min(
+                generation_params.get("min_new_tokens", max_token_length),
+                generation_params["max_new_tokens"]
+            )
+        else:
+            generation_params["min_new_tokens"] = min(int(min_new_tokens_override), generation_params["max_new_tokens"])
+
+        with torch.inference_mode():
+            result = self.llm_model.generate(
+                inputs_embeds=input_embedding,
+                **generation_params
+            )
+        sequences = result.sequences if hasattr(result, "sequences") else result
+        stripped = self._mask_input_prefix(sequences, attention_mask.to(sequences.device))
+        if hasattr(result, "sequences"):
+            result.sequences = stripped
+            return result
+        return stripped

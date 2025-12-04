@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.adapters import LinearAdapter
+from models.bridge import LinearBridge
 
-class TestLinearAdapter(unittest.TestCase):
+class TestLinearBridge(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = LinearAdapter(
+        self.model = LinearBridge(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,7 +18,7 @@ class TestLinearAdapter(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, LinearAdapter)
+        self.assertIsInstance(self.model, LinearBridge)
         
         # Test that flatten dim is correctly calculated
         expected_flatten_dim = self.input_shape[0] * self.input_shape[1] * self.input_shape[2]
@@ -47,7 +47,7 @@ class TestLinearAdapter(unittest.TestCase):
     
     def test_init_no_dropout(self):
         """Test initialization with no dropout"""
-        model = LinearAdapter(
+        model = LinearBridge(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=0.0

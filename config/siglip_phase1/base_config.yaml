@@ -1,0 +1,114 @@
+pipeline_project: !!str "SigLIP_Phase1"
+runner_name: !!str "SigLIP_Phase1_Runner"
+bridge_name: !!str "ECGQFormerBridge"
+run_mode: !!str "train"
+seed: !!int 42
+base_checkpoint_path: !!str "checkpoints"
+# Logging
+wandb_project: !!str "siglip_phase1"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool true
+# Checkpoints & paths
+pretrained_encoder_checkpoint: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+use_quantized_bridge_inputs: !!bool true
+text_encoder_model_name: !!str "google/medgemma-4b-it"
+text_bank_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/text_bank.csv"
+mapping_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/ecg_text_labels.csv"
+mapping_split: !!str "train"
+validation_text_bank_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/text_bank.csv"
+validation_mapping_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/ecg_text_labels.csv"
+validation_mapping_split: !!str "val"
+text_embedding_cache_path: !!null
+checkpoint_dir: !!null
+# Data parameters
+waveform_length: !!int 2500
+num_leads: !!int 12
+normalize_waveforms: !!bool false
+lead_stats: !!null
+qa_positive_weight_multiplier: !!float 2.0
+batch_size: !!int 64
+num_workers: !!int 24
+num_epochs: !!int 10
+gradient_accumulation_steps: !!int 1
+lm_loss_weight: !!float 1.0
+siglip_loss_weight: !!float 0.0
+ce_max_length: !!int 512
+ce_report_probability: !!float 0.9
+ce_max_samples_per_batch: !!int 64
+lm_weight_warmup_steps: !!int 1000
+ce_scale_cap: !!float 0.0
+# Optimizer
+optimizer:
+  type: !!str "AdamW"
+  lr: !!float 1.0e-4
+  weight_decay: !!float 0.001
+  component_lr_scales:
+    shared_bridge: !!float 1.0
+    llm_decoder: !!float 0.3
+    siglip_projector: !!float 1.0
+lr: !!float 1.0e-4
+weight_decay: !!float 0.001
+component_lr_scales:
+  shared_bridge: !!float 1.0
+  llm_decoder: !!float 0.3
+  siglip_projector: !!float 1.0
+llm_unfreeze_last_n_layers: !!int 4
+llm_unfreeze_lm_head: !!bool true
+llm_unfreeze_additional_param_patterns:
+  - !!str "final_layernorm"
+# SigLIP weights
+w_pos: !!float 1.0
+w_hardneg: !!float 3.0
+w_implneg: !!float 0.2
+k_impl: !!int 64
+max_hardneg_per_group: !!int 3
+implicit_negatives_per_batch: !!int 0
+implicit_negatives_per_row: !!int 8
+negatives_mode: !!str "per_row"
+mutual_exclusion_aux_weight: !!float 0.0
+temperature_init: !!float 0.07
+# Focal-InfoNCE + tail handling
+focal_infonce: !!bool true
+focal_gamma_pos: !!float 2.0
+focal_gamma_neg: !!float 0.0
+focal_alpha_default: !!float 1.0
+focal_detach_weights: !!bool true
+loss_type: !!str "infonce"
+alpha_beta: !!float 0.999
+alpha_clip_min: !!float 0.5
+alpha_clip_max: !!float 8.0
+alpha_csv_name: !!str "class_weights.csv"
+tail_enable: !!bool true
+tail_select_mode: !!str "topN"
+tail_top_n: !!int 50
+tail_min_positives: !!int 10
+tail_alpha_boost: !!float 1.5
+tail_include_regex:
+  - "^LBL_.*$"
+  - "^QA_.*_yes$"
+  - ".*bundle.*branch.*block.*"
+  - ".*rhythm.*"
+tail_exclude_regex:
+  - "^QA_.*_no$"
+# Logging generated token IDs for a sample each epoch
+log_generated_token_ids: !!bool true
+generated_token_sample_k: !!int 50
+# Bridge architecture
+bridge_hidden_size: !!int 2560
+bridge_num_layers: !!int 6
+bridge_num_heads: !!int 8
+bridge_dropout: !!float 0.1
+bridge_max_seq_len: !!int 128
+bridge_bias_last_codebook: !!float 0.5
+bridge_codebook_dropout: !!float 0.0
+num_query_tokens: !!int 32
+num_codebooks_kept: !!int 1
+codebook_offset: -1 # -1 signals "keep the last num_codebooks_kept codebooks"
+codebook_size: !!int 512
+num_quantizers: !!int 8
+# Runtime
+dtype: !!str "bf16"
+log_every_steps: !!int 10
+checkpoint_every: !!int 1
+# Placeholder (unused but required by dataclass)
+encoder_name: !!null

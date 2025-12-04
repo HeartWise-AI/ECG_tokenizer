@@ -4,7 +4,7 @@ import os
 
 from projects.llm_finetuning_project import LLMFinetuningProject
 from utils.config import LLMFinetuningConfig
-from utils.enums import AdapterName
+from utils.enums import BridgeName
 
 class TestLLMFinetuningProject(unittest.TestCase):
     @patch('projects.llm_finetuning_project.GPT2Tokenizer')
@@ -34,7 +34,7 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.device = 0
         mock_config.huggingface_model_name = "gpt2"
         mock_config.llm_input_embedding_size = 768
-        mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
+        mock_config.bridge_name = BridgeName.GPT2_EMBEDDING_BRIDGE
         mock_config.adapter_dropout = 0.1
         mock_config.lr = 0.001
         mock_config.step_size = 10
@@ -140,7 +140,7 @@ class TestLLMFinetuningProject(unittest.TestCase):
         mock_config.device = 0
         mock_config.huggingface_model_name = "gpt2"
         mock_config.llm_input_embedding_size = 768
-        mock_config.adapter_name = AdapterName.GPT2_EMBEDDING_ADAPTER
+        mock_config.bridge_name = BridgeName.GPT2_EMBEDDING_BRIDGE
         mock_config.adapter_dropout = 0.1
         mock_config.checkpoint_dir = "/path/to/checkpoint.pt"
         

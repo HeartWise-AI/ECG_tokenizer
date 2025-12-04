@@ -3,6 +3,7 @@ import os
 from typing import Dict, Any, List, Type
 from dataclasses import dataclass, asdict
 
+from utils.enums import BridgeName
 from utils.files_handler import load_yaml
 from utils.registry import ConfigRegistry
 
