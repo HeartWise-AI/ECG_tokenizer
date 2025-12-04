@@ -51,19 +51,24 @@ def _load_medgemma_model(
         AutoModelForImageTextToText,
     )
     last_error: Exception | None = None
-    for loader in loaders:
-        try:
-            return loader.from_pretrained(
-                model_name,
-                dtype=torch_dtype,
-                torch_dtype=torch_dtype,
-                trust_remote_code=True,
-                attn_implementation="flash_attention_2",
-                use_cache=True,
-            )
-        except Exception as exc:  # pragma: no cover - depends on HF availability
-            last_error = exc
-            continue
+    # Try flash_attention_2 first, fall back to default if not available
+    for attn_impl in ("flash_attention_2", "sdpa", None):
+        for loader in loaders:
+            try:
+                kwargs = dict(
+                    dtype=torch_dtype,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=True,
+                )
+                if attn_impl:
+                    kwargs["attn_implementation"] = attn_impl
+                model = loader.from_pretrained(model_name, **kwargs)
+                if attn_impl:
+                    print(f"   Using attention: {attn_impl}")
+                return model
+            except Exception as exc:  # pragma: no cover - depends on HF availability
+                last_error = exc
+                continue
     hint = ""
     if last_error is not None and "does not recognize this architecture" in str(last_error):
         hint = (
