@@ -165,7 +165,7 @@ def detect_lead_stats(parquet_file: str) -> Dict[str, Dict[str, float]]:
     try:
         import pandas as pd
         import numpy as np
-        from data.ecg_tokenizer_classifier_dataset import ECGTokenizerClassifierDataset
+        from classical_baseline import ECGTokenizerClassifierDataset
         
         # Load a sample of the dataset
         dataset = ECGTokenizerClassifierDataset(

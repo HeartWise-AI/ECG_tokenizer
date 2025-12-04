@@ -61,8 +61,6 @@ class ECGTokenizerTrainingProject(BaseProject):
         decoder_mode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
         is_classification = decoder_mode == DecoderMode.CLASSIFICATION
         
-        shuffle_seed = getattr(self.config, 'seed', 42)
-
         if is_classification:
             # For classification, we need a dataset that provides both signals and labels
             train_dataloader: DataLoader = get_distributed_ecg_tokenizer_classifier_dataloader(
@@ -77,9 +75,7 @@ class ECGTokenizerTrainingProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=True,
-                pin_memory=True,
-                shuffle_rows=True,
-                shuffle_seed=shuffle_seed
+                pin_memory=True
             )
             
             validation_dataloader: DataLoader = get_distributed_ecg_tokenizer_classifier_dataloader(
@@ -94,9 +90,7 @@ class ECGTokenizerTrainingProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=False,
-                pin_memory=True,
-                shuffle_rows=False,
-                shuffle_seed=shuffle_seed
+                pin_memory=True
             )
         else:
             # For reconstruction, use the original ECG dataset
@@ -112,9 +106,7 @@ class ECGTokenizerTrainingProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=True,
-                pin_memory=True,
-                shuffle_rows=True,
-                shuffle_seed=shuffle_seed
+                pin_memory=True
             )
             
             validation_dataloader: DataLoader = get_distributed_ecg_dataloader(
@@ -129,9 +121,7 @@ class ECGTokenizerTrainingProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=False,
-                pin_memory=True,
-                shuffle_rows=False,
-                shuffle_seed=shuffle_seed
+                pin_memory=True
             )
         
         # Initialize the tokenizer with the appropriate configuration
@@ -198,7 +188,6 @@ class ECGTokenizerTrainingProject(BaseProject):
         Returns:
             Dictionary containing ECG tokenizer and embedding extraction data loader
         """    
-        shuffle_seed = getattr(self.config, 'seed', 42)
         embedding_extraction_dataloader: DataLoader = get_distributed_ecg_dataloader(
             parquet_file=self.config.embedding_extraction_dataset_path,
             expected_waveform_length=self.config.waveform_length,
@@ -211,9 +200,7 @@ class ECGTokenizerTrainingProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False,
-            pin_memory=True,
-            shuffle_rows=False,
-            shuffle_seed=shuffle_seed
+            pin_memory=True
         )
         
         # Initialize the tokenizer for embedding extraction

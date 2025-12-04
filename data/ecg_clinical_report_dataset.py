@@ -1,25 +1,16 @@
 import os
-import warnings
 import torch
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
-from typing import Any, Dict, Optional, Sequence, cast, List, TYPE_CHECKING
+from typing import Optional, cast, List
 from transformers import PreTrainedTokenizerBase
-try:
-    from transformers import ProcessorMixin
-except ImportError:  # pragma: no cover
-    ProcessorMixin = PreTrainedTokenizerBase  # type: ignore[misc,assignment]
 
 from utils.ddp import DistributedUtils
-from transformers import BatchEncoding
-from torch.utils.data import Dataset, DataLoader, default_collate, Subset
+from transformers import GPT2Tokenizer, BatchEncoding
+from torch.utils.data import Dataset, DataLoader, default_collate
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
-if TYPE_CHECKING:
-    from models.types import AutoTokenizerT
-else:
-    AutoTokenizerT = Any
-from utils.constants import lead_to_idx, ECG_PATTERNS
+from models.types import AutoTokenizerT
 
 
 class ECGClinicalReportDataset(Dataset):
@@ -32,33 +23,14 @@ class ECGClinicalReportDataset(Dataset):
         tokenizer: AutoTokenizerT, 
         max_length: int = 512,
         instruct_mode: bool = False,
-        # Default to 0 so the bridge owns the ECG prefix (BLIP-2 style)
-        num_ecg_tokens: int = 0,
-        ecg_token_start_id: Optional[int] = None,
-        prompt_column: str = "question",
-        answer_column: str = "report",
-        category_column: str = "prompt_category",
-        prefix_tuning: bool = False,
-        pattern_columns: Optional[Sequence[str]] = None,
-        medgemma_prompt_style: bool = False,
-        debug_print_example: bool = False,
+        num_ecg_tokens: int = 128,
+        ecg_token_start_id: Optional[int] = None
     ):
         """
         Args:
             dataset_path (str): Path to the dataset.
-            signal_path_column (str): Column name for ECG signal path.
-            ecg_waveform_length (int): Length of ECG waveform.
-            ecg_num_leads (int): Number of ECG leads.
             tokenizer (PreTrainedTokenizer): Tokenizer for the clinical reports.
             max_length (int): Maximum token length for the reports.
-            instruct_mode (bool): Whether to use instruction tuning mode.
-            num_ecg_tokens (int): Number of ECG tokens.
-            ecg_token_start_id (Optional[int]): Starting ID for ECG tokens.
-            prompt_column (str): Column name for input prompts/questions.
-            answer_column (str): Column name for expected outputs/answers.
-            category_column (str): Column name for prompt categories.
-            pattern_columns (Optional[Sequence[str]]): Column names providing multilabel ECG targets.
-            medgemma_prompt_style (bool): Use MedGemma-style chat prompts with <image_1> placeholder.
         """
         try:
             self.df: pd.DataFrame = pd.read_parquet(dataset_path)
@@ -66,74 +38,23 @@ class ECGClinicalReportDataset(Dataset):
             print(f"Error reading parquet file: {e}")
             raise Exception(f"Error reading parquet file: {e}")
         
-        # Normalize numeric configuration to ints to avoid type errors when YAML/CLI
-        # values are passed as strings.
-        self.ecg_waveform_length: int = int(ecg_waveform_length)
-        self.ecg_num_leads: int = int(ecg_num_leads)
-
-        if not isinstance(tokenizer, PreTrainedTokenizerBase):
-            raise ValueError("Tokenizer must be a PreTrainedTokenizerBase")
-
-        self.tokenizer: AutoTokenizerT = cast(AutoTokenizerT, tokenizer)
-        self._pt_tokenizer: PreTrainedTokenizerBase = tokenizer
-        self.max_length: int = int(max_length)
+        self.ecg_waveform_length: int = ecg_waveform_length
+        self.ecg_num_leads: int = ecg_num_leads
+        self.tokenizer: AutoTokenizerT = tokenizer
+        self._pt_tokenizer: PreTrainedTokenizerBase = cast(PreTrainedTokenizerBase, tokenizer)
+        self.max_length: int = max_length
         self.signal_path_column: str = signal_path_column
         self.instruct_mode: bool = instruct_mode
-        self.num_ecg_tokens: int = int(num_ecg_tokens)
-        self.prefix_tuning: bool = bool(prefix_tuning)
-        self.pattern_columns: List[str] = list(pattern_columns) if pattern_columns else list(ECG_PATTERNS)
-        self.medgemma_prompt_style: bool = bool(medgemma_prompt_style)
-        self.debug_print_example: bool = bool(debug_print_example)
-        self._debug_example_printed: bool = False
-        self._pattern_column_mask: List[bool] = [col in self.df.columns for col in self.pattern_columns]
-        missing_patterns = [col for col, present in zip(self.pattern_columns, self._pattern_column_mask) if not present]
-        if missing_patterns:
-            warnings.warn(
-                f"ECGClinicalReportDataset: missing {len(missing_patterns)} pattern columns in dataset: "
-                f"{missing_patterns[:5]}{'...' if len(missing_patterns) > 5 else ''}. "
-                "Missing columns will be treated as zeros.",
-                stacklevel=2,
-            )
-
-        pad_token_id = getattr(self._pt_tokenizer, 'pad_token_id', None)
-        eos_token_id = getattr(self._pt_tokenizer, 'eos_token_id', None)
-        if isinstance(eos_token_id, list):
-            eos_token_id = eos_token_id[0] if len(eos_token_id) > 0 else None
-        if pad_token_id is None and eos_token_id is None:
-            raise ValueError("Tokenizer must define a pad_token_id or eos_token_id for prefix placeholders")
-        if pad_token_id is None:
-            pad_token_id = eos_token_id
-        self.ecg_prefix_token_id: int = int(pad_token_id)
-
-        # Column configuration
-        self.prompt_column: str = prompt_column
-        self.answer_column: str = answer_column
-        self.category_column: str = category_column
+        self.num_ecg_tokens: int = num_ecg_tokens
+        self.ecg_token_start_id: Optional[int] = ecg_token_start_id
         if self.instruct_mode:
-            # Q-Former or query-only prefix: no textual ECG placeholders
-            if self.num_ecg_tokens <= 0:
-                self.ecg_token_start_id = None
-                self.ecg_token_ids = []
-            else:
-                # Prefer soft placeholders via existing pad/eos token to avoid expanding vocab
-                # Treat missing ecg_token_start_id as a signal to use pad/eos placeholders.
-                use_soft_prefix = self.prefix_tuning or (ecg_token_start_id is None)
-                if use_soft_prefix:
-                    self.ecg_token_start_id = self.ecg_prefix_token_id
-                    self.ecg_token_ids = [self.ecg_prefix_token_id] * self.num_ecg_tokens
-                else:
-                    token_id = int(ecg_token_start_id)
-                    self.ecg_token_start_id = token_id
-                    self.ecg_token_ids = list(range(
-                        self.ecg_token_start_id,
-                        self.ecg_token_start_id + self.num_ecg_tokens
-                    ))
+            if self.ecg_token_start_id is None:
+                raise ValueError("ecg_token_start_id is required in instruct_mode")
+            self.ecg_token_ids = list(range(self.ecg_token_start_id, self.ecg_token_start_id + self.num_ecg_tokens))
         else:
-            if self.prefix_tuning:
-                self.ecg_token_start_id = self.ecg_prefix_token_id
-            else:
-                self.ecg_token_start_id = 0 if ecg_token_start_id is None else int(ecg_token_start_id)
+            self.ecg_token_start_id = 0
             self.ecg_token_ids = []
+        
     def __len__(self):
         return len(self.df)
 
@@ -157,10 +78,10 @@ class ECGClinicalReportDataset(Dataset):
             # Get the row
             row = self.df.iloc[idx]
             
-            # Check if the waveform path or answer is missing
-            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row[self.answer_column]):
-                print(f"Missing {self.signal_path_column} or {self.answer_column} for index {idx}, skipping sample. "
-                      f"{self.signal_path_column}: {row.get(self.signal_path_column)}, {self.answer_column}: {row.get(self.answer_column)}")
+            # Check if the waveform path or report is missing
+            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row['report']):
+                print(f"Missing waveform_path or report for index {idx}, skipping sample. "
+                      f"waveform_path: {row.get(self.signal_path_column)}, report: {row.get('report')}")
                 return self.__getitem__((idx + 1) % len(self))
 
             # Load the waveform
@@ -171,270 +92,116 @@ class ECGClinicalReportDataset(Dataset):
             if np.isnan(waveform).any():
                 return self.__getitem__((idx + 1) % len(self))
             
-            target_length = int(self.ecg_waveform_length)
             current_length: int = waveform.shape[0]
-            if current_length >= target_length:
-                start = max((current_length - target_length) // 2, 0)
-                waveform = waveform[start:start + target_length, :]
-            else:
-                pad_before = max((target_length - current_length) // 2, 0)
-                pad_after = max(target_length - current_length - pad_before, 0)
-                waveform = np.pad(
-                    waveform,
-                    ((pad_before, pad_after), (0, 0)),
-                    mode="edge",
-                )
-            if waveform.shape[0] != target_length:
-                # Guard against unexpected padding behaviour
-                waveform = np.resize(waveform, (target_length, waveform.shape[1]))
+            if current_length > self.ecg_waveform_length:
+                step: int = waveform.shape[0] // self.ecg_waveform_length
+                waveform = waveform[::step, :]
+            
+            if waveform.shape[0] != self.ecg_waveform_length:
+                return self.__getitem__((idx + 1) % len(self))
             
             if waveform.shape[1] != self.ecg_num_leads:
                 return self.__getitem__((idx + 1) % len(self))
             
             # Tokenization logic
             if self.instruct_mode:
-                prompt_text: str = ""
-                if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
-                    prompt_text = str(row[self.prompt_column])
-                answer_text: str = str(row[self.answer_column])
-                candidate_answers_raw = row.get("candidate_answers")
-                gt_indices_raw = row.get("ground_truth_indices")
-                has_candidates = (
-                    candidate_answers_raw is not None
-                    and not (isinstance(candidate_answers_raw, float) and np.isnan(candidate_answers_raw))
-                )
-                is_cf_record = self.medgemma_prompt_style and has_candidates
-                options: list[str] = []
-                if is_cf_record:
-                    try:
-                        options = [str(x) for x in list(candidate_answers_raw)]
-                    except Exception:
-                        options = []
-                    if not options:
-                        is_cf_record = False
+                question_text: str = ""
+                if 'question' in self.df.columns and not pd.isnull(row['question']):
+                    question_text = str(row['question'])
+                report_text: str = str(row['report'])
 
-                if is_cf_record:
-                    candidate_answers = options
-                    system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
-                    letters = [chr(ord("A") + i) for i in range(min(len(options), 26))]
-                    gt_indices: list[int] = []
-                    if gt_indices_raw is not None and not (isinstance(gt_indices_raw, float) and np.isnan(gt_indices_raw)):
-                        try:
-                            gt_indices = [int(x) for x in list(gt_indices_raw)]
-                        except Exception:
-                            gt_indices = []
-                    canonical_letters = sorted({
-                        letters[i] for i in gt_indices if 0 <= i < len(letters)
-                    })
-                    canonical_answer = ",".join(canonical_letters) if canonical_letters else ""
-                    multi_label = len(canonical_letters) > 1
-                    selection_text = (
-                        "Select ALL applicable options from the list below."
-                        if multi_label else
-                        "Select the single best option from the list below."
-                    )
-                    options_block = "\n".join(
-                        f"{ltr}. {opt}" for ltr, opt in zip(letters, options)
-                    )
-                    if not prompt_text:
-                        prompt_text = "What is the primary finding on this ECG?"
-                    user_content = (
-                        "<start_of_image>\n\n"
-                        f"Question: {prompt_text}\n\n"
-                        f"{selection_text}\n"
-                        "Respond ONLY with the letters of the correct options in ascending order, separated by commas, and nothing else.\n\n"
-                        f"{options_block}"
-                    )
-                    answer_text = canonical_answer if canonical_answer else answer_text
-                    debug_payload = {
-                        "mode": "medgemma_cf",
-                        "question": prompt_text,
-                        "options": options,
-                        "letters": letters[:len(options)],
-                        "gt_indices": gt_indices,
-                        "canonical_answer": answer_text,
-                    }
-                elif self.medgemma_prompt_style:
-                    system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
-                    if not prompt_text:
-                        prompt_text = "Analyze this ECG and list the clinical findings."
-                    user_content = (
-                        "<start_of_image>\n\n"
-                        f"Question: {prompt_text}\n\n"
-                        "Respond concisely with the key finding or answer."
-                    )
-                    debug_payload = {
-                        "mode": "medgemma_instruct",
-                        "question": prompt_text,
-                        "canonical_answer": answer_text,
-                    }
-                else:
-                    print("Using LLAMA instruct mode")
-                    # Construct LLaMA 3.2 chat template with ECG integration
-                    # System message for ECG analysis task - optimized for concise medical findings
-                    system_message = "An electrocardiogram analysis and question answering tool"
-                    if not prompt_text:
-                        prompt_text = "Analyze this ECG and list the clinical findings."
-                    user_content = f"<image_1> {prompt_text}".strip()
-                    debug_payload = {
-                        "mode": "default_instruct",
-                        "question": prompt_text,
-                        "answer_text": answer_text,
-                    }
+                # Construct LLaMA 3.2 chat template with ECG integration
+                # System message for ECG analysis task - optimized for concise medical findings
+                system_message = "You are a medical expert specialized in ECG interpretation. Provide a concise list of clinical findings separated by semicolons, similar to standard ECG reports."
                 
-                # Build rendered prompts
-                if self.medgemma_prompt_style:
-                    # Explicitly construct Gemma-style turns; let tokenizer add BOS/EOS
-                    prompt_template_text = (
-                        "<start_of_turn>system\n"
-                        f"{system_message}<end_of_turn>\n"
-                        "<start_of_turn>user\n"
-                        f"{user_content}<end_of_turn>\n"
-                        "<start_of_turn>model\n"
-                    )
-                    full_template_text = (
-                        "<start_of_turn>system\n"
-                        f"{system_message}<end_of_turn>\n"
-                        "<start_of_turn>user\n"
-                        f"{user_content}<end_of_turn>\n"
-                        f"<start_of_turn>model\n{answer_text}<end_of_turn>"
-                    )
-                else:
-                    # Create messages for chat template
-                    messages_prompt = [
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": user_content}
-                    ]
-                    
-                    messages_full = [
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": user_content},
-                        {"role": "assistant", "content": answer_text}
-                    ]
-                    
-                    # Apply chat template
-                    prompt_template_text = cast(str, self._pt_tokenizer.apply_chat_template(
-                        messages_prompt, 
-                        tokenize=False, 
-                        add_generation_prompt=True
-                    ))
-                    full_template_text = cast(str, self._pt_tokenizer.apply_chat_template(
-                        messages_full, 
-                        tokenize=False, 
-                        add_generation_prompt=False
-                    ))
-
-                if self.debug_print_example and not self._debug_example_printed:
-                    print("=== Debug: MedGemma CF sample ===")
-                    print(full_template_text)
-                    self._debug_example_printed = True
+                # User message with ECG placeholder and question - focused on findings format
+                # user_content = f"<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\n{question_text}" if question_text else "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>\n\nAnalyze this ECG and list the clinical findings."
+                
+                user_content = question_text if question_text else "Analyze this ECG and list the clinical findings."
+                
+                # Create messages for chat template
+                messages_prompt = [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_content}
+                ]
+                
+                messages_full = [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": report_text}
+                ]
+                
+                # Apply chat template
+                prompt_text = cast(str, self._pt_tokenizer.apply_chat_template(
+                    messages_prompt, 
+                    tokenize=False, 
+                    add_generation_prompt=True
+                ))
+                full_text = cast(str, self._pt_tokenizer.apply_chat_template(
+                    messages_full, 
+                    tokenize=False, 
+                    add_generation_prompt=False
+                ))
+                
+                # Replace ECG placeholder with special tokens for tokenization
+                # The actual ECG embedding will replace the ECG token during training/inference
+                ecg_token_placeholder = "<|start_ecg|>\n[ECG_SIGNAL]\n<|end_ecg|>"
+                ecg_token_replacement = "<|start_ecg|><|end_ecg|>"  # Simplified to just the boundary tokens
+                
+                prompt_text = prompt_text.replace(ecg_token_placeholder, ecg_token_replacement)
+                full_text = full_text.replace(ecg_token_placeholder, ecg_token_replacement)
                 
                 # Tokenize both
                 prompt_encoding = self._pt_tokenizer.encode_plus(
-                    prompt_template_text,
-                    add_special_tokens=True,  # ensure BOS/EOS around prompt for all templates
+                    prompt_text,
+                    add_special_tokens=False,  # Chat template already adds special tokens
                     return_tensors=None
                 )
                 full_encoding = self._pt_tokenizer.encode_plus(
-                    full_template_text,
-                    add_special_tokens=True,  # ensure BOS/EOS around full sequence for all templates
+                    full_text,
+                    add_special_tokens=False,  # Chat template already adds special tokens
                     return_tensors=None
                 )
 
                 prompt_ids = prompt_encoding.input_ids
                 full_ids = full_encoding.input_ids
 
-                # Ensure assistant turn terminates with <eos> for stable stopping behavior.
-                # Some templates/tokenizers may omit or place EOT beyond truncation; enforce it here.
-                eos_int: Optional[int] = None
-                if not self.medgemma_prompt_style:
-                    try:
-                        eos = self._pt_tokenizer.convert_tokens_to_ids("<eos>")
-                    except Exception:
-                        eos = None
-                    if isinstance(eos, (list, tuple)):
-                        eos = eos[0] if eos else None
-                    try:
-                        eos_int = int(eos) if eos is not None else None
-                    except (TypeError, ValueError):
-                        eos_int = None
-                    # Append EOT if missing and if token is known
-                    if eos_int is not None and eos_int >= 0:
-                        if not full_ids or full_ids[-1] != eos_int:
-                            full_ids = list(full_ids) + [eos_int]
-
-                # Build ECG prefix tokens
-                if self.num_ecg_tokens > 0:
-                    if self.prefix_tuning:
-                        ecg_prefix = torch.full(
-                            (self.num_ecg_tokens,),
-                            fill_value=self.ecg_prefix_token_id,
-                            dtype=torch.long,
-                        )
-                    else:
-                        ecg_prefix = torch.arange(
-                            self.ecg_token_start_id,
-                            self.ecg_token_start_id + self.num_ecg_tokens,
-                            dtype=torch.long,
-                        )
-                else:
-                    ecg_prefix = torch.zeros(0, dtype=torch.long)
-                prefix_len = ecg_prefix.numel()
-
-                # Truncate text so total length fits within max_length after ECG prefix.
-                # If truncation would drop the final EOT token, replace the last kept token with EOT.
-                max_text_len = max(0, self.max_length - prefix_len)
-                full_ids_trunc = full_ids[:max_text_len]
-                if (
-                    eos_int is not None
-                    and eos_int >= 0
-                    and max_text_len > 0
-                    and full_ids
-                    and full_ids[-1] == eos_int
-                    and full_ids_trunc[-1] != eos_int
-                ):
-                    # Force last token to EOT to preserve terminator within context window
-                    full_ids_trunc = list(full_ids_trunc)
-                    full_ids_trunc[-1] = eos_int
-
-                # Construct final input_ids: place ECG prefix immediately after BOS for MedGemma; otherwise prepend
-                text_ids = torch.tensor(full_ids_trunc, dtype=torch.long)
-                bos_id = getattr(self._pt_tokenizer, "bos_token_id", None)
-                if isinstance(bos_id, (list, tuple)):
-                    bos_id = bos_id[0] if bos_id else None
-                insert_after_bos = (
-                    self.medgemma_prompt_style
-                    and prefix_len > 0
-                    and bos_id is not None
-                    and text_ids.numel() > 0
-                    and text_ids[0].item() == bos_id
+                # Build ECG token prefix [ecg_start_id .. ecg_start_id + num_ecg_tokens)
+                if self.ecg_token_start_id is None:
+                    raise ValueError("ecg_token_start_id must be provided in instruct_mode")
+                ecg_prefix = torch.arange(
+                    self.ecg_token_start_id,
+                    self.ecg_token_start_id + self.num_ecg_tokens,
+                    dtype=torch.long
                 )
-                insert_after_image = False
-                image_pos = None
-                if self.medgemma_prompt_style and prefix_len > 0:
-                    try:
-                        image_token_id = self._pt_tokenizer.convert_tokens_to_ids("<start_of_image>")
-                        if isinstance(image_token_id, (list, tuple)):
-                            image_token_id = image_token_id[0] if image_token_id else None
-                    except Exception:
-                        image_token_id = None
-                    if image_token_id is not None:
-                        try:
-                            image_pos = text_ids.tolist().index(int(image_token_id))
-                            insert_after_image = True
-                        except ValueError:
-                            insert_after_image = False
 
-                if insert_after_image and image_pos is not None:
-                    input_ids = torch.cat([text_ids[:image_pos + 1], ecg_prefix, text_ids[image_pos + 1:]], dim=0)
-                elif insert_after_bos:
-                    input_ids = torch.cat([text_ids[:1], ecg_prefix, text_ids[1:]], dim=0)
-                else:
-                    input_ids = torch.cat([ecg_prefix, text_ids], dim=0)
+                # Truncate text so total length fits within max_length after ECG prefix
+                max_text_len = max(0, self.max_length - self.num_ecg_tokens)
+                full_ids_trunc = full_ids[:max_text_len]
+
+                # Construct final input_ids: [ECG x 128] + [full text tokens]
+                input_ids = torch.cat([
+                    ecg_prefix,
+                    torch.tensor(full_ids_trunc, dtype=torch.long)
+                ], dim=0)
 
                 # Create attention mask and pad to max_length
                 attention_mask = torch.ones_like(input_ids, dtype=torch.long)
-                pad_id = self.ecg_prefix_token_id
+                # if input_ids.numel() < self.max_length:
+                #     pad_len = self.max_length - input_ids.numel()
+                pad_id_attr = getattr(self._pt_tokenizer, 'pad_token_id', None)
+                eos_attr = getattr(self._pt_tokenizer, 'eos_token_id', None)
+                if isinstance(eos_attr, list):
+                    eos_id = int(eos_attr[0]) if len(eos_attr) > 0 else 0
+                elif eos_attr is None:
+                    eos_id = 0
+                else:
+                    eos_id = int(eos_attr)
+                pad_id = int(pad_id_attr) if pad_id_attr is not None else eos_id
+                # input_ids = F.pad(input_ids, (0, pad_len), value=pad_id)
+                # attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
+
+                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
                 if input_ids.numel() < self.max_length:
                     pad_len = self.max_length - input_ids.numel()
                     # Now pad_id is guaranteed to exist
@@ -452,155 +219,41 @@ class ECGClinicalReportDataset(Dataset):
                 # Create labels: ignore prompt (question + assistant header) and padding
                 prompt_len = len(prompt_ids)
                 text_prompt_len = len(prompt_encoding.input_ids)
-                full_prompt_len = min(self.max_length, prefix_len + text_prompt_len)
+                full_prompt_len = self.num_ecg_tokens + text_prompt_len
                 # prompt_len = min(len(prompt_ids), self.max_length)
                 labels = input_ids.clone()
                 # labels[:prompt_len] = -100
                 labels[:full_prompt_len] = -100
                 labels = labels.masked_fill(attention_mask == 0, -100)
 
-                # Add category information if available
-                waveform_name = row.get('waveform_name')
-                if pd.isnull(waveform_name):
-                    waveform_name = os.path.basename(str(row[self.signal_path_column]))
-                sample_data = {
+                return {
                     'signal': np.transpose(waveform, (1, 0)),
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
                     'prompt_input_ids': prompt_input_ids,
                     'prompt_attention_mask': prompt_attention_mask,
                     'labels': labels,
-                    'waveform_name': waveform_name,
-                    'prompt_text': prompt_text,  # Add original prompt for metrics display
-                    'rendered_prompt': prompt_template_text,
-                    'task_type': 'cf' if is_cf_record else 'instruct',
+                    'waveform_name': row['waveform_name']
                 }
-                
-                # Add category information for per-category metrics
-                if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
-                    sample_data['prompt_category'] = str(row[self.category_column])
-                
-                if self.pattern_columns:
-                    pattern_values = []
-                    for col, present in zip(self.pattern_columns, self._pattern_column_mask):
-                        if present:
-                            value = row[col]
-                            if pd.isnull(value):
-                                value = 0.0
-                            pattern_values.append(float(value))
-                        else:
-                            pattern_values.append(0.0)
-                    sample_data['pattern_targets'] = torch.tensor(pattern_values, dtype=torch.float32)
-                    
-                return sample_data
             else:
-                # CF/QA non-instruction mode: build a simple prompt/answer pair
-                # Use dataset-provided question as prompt; model learns to complete the answer
-                prompt_q = ""
-                if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
-                    prompt_q = str(row[self.prompt_column]).strip()
-                answer_text: str = str(row[self.answer_column])
-
-                # Minimal template for non-chat tokenization
-                prompt_template_text = (
-                    f"Question: {prompt_q}\nAnswer:" if prompt_q else "Question: What is the primary ECG finding?\nAnswer:"
-                )
-                full_template_text = f"{prompt_template_text} {answer_text}".strip()
-
-                # Tokenize prompt (for generation context) and full text (for labels)
-                prompt_enc: BatchEncoding = self._pt_tokenizer.encode_plus(
-                    prompt_template_text,
+                # Tokenize the report only (legacy behavior)
+                encoding: BatchEncoding = self._pt_tokenizer.encode_plus(
+                    row['report'],
                     add_special_tokens=True,
-                    return_tensors=None
+                    max_length=self.max_length,
+                    padding='max_length',
+                    truncation=True,
+                    return_tensors='pt'
                 )
-                full_enc: BatchEncoding = self._pt_tokenizer.encode_plus(
-                    full_template_text,
-                    add_special_tokens=True,
-                    return_tensors=None
-                )
+                input_ids = cast(torch.Tensor, encoding['input_ids']).squeeze()
+                attention_mask = cast(torch.Tensor, encoding['attention_mask']).squeeze()
 
-                prompt_ids = prompt_enc.get('input_ids', [])
-                full_ids = full_enc.get('input_ids', [])
-
-                # ECG prefix placeholders (usually 0 for Q-Former bridges)
-                if self.num_ecg_tokens > 0:
-                    if self.prefix_tuning:
-                        ecg_prefix = torch.full(
-                            (self.num_ecg_tokens,),
-                            fill_value=self.ecg_prefix_token_id,
-                            dtype=torch.long,
-                        )
-                    else:
-                        ecg_prefix = torch.arange(
-                            self.ecg_token_start_id,
-                            self.ecg_token_start_id + self.num_ecg_tokens,
-                            dtype=torch.long,
-                        )
-                else:
-                    ecg_prefix = torch.zeros(0, dtype=torch.long)
-                prefix_len = ecg_prefix.numel()
-
-                # Truncate combined text to fit within max_length
-                max_text_len = max(0, self.max_length - prefix_len)
-                full_ids_trunc = full_ids[:max_text_len]
-
-                text_ids = torch.tensor(full_ids_trunc, dtype=torch.long)
-                input_ids = torch.cat([ecg_prefix, text_ids], dim=0)
-
-                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
-                pad_id = self.ecg_prefix_token_id
-                if input_ids.numel() < self.max_length:
-                    pad_len = self.max_length - input_ids.numel()
-                    input_ids = F.pad(input_ids, (0, pad_len), value=pad_id)
-                    attention_mask = F.pad(attention_mask, (0, pad_len), value=0)
-
-                # Prompt-only ids for generation (no ECG textual tokens)
-                prompt_input_ids = torch.tensor(prompt_ids[: self.max_length], dtype=torch.long)
-                prompt_attention_mask = torch.ones_like(prompt_input_ids, dtype=torch.long)
-                if prompt_input_ids.numel() < self.max_length:
-                    pad_len = self.max_length - prompt_input_ids.numel()
-                    prompt_input_ids = F.pad(prompt_input_ids, (0, pad_len), value=pad_id)
-                    prompt_attention_mask = F.pad(prompt_attention_mask, (0, pad_len), value=0)
-
-                # Create labels: mask out the prompt tokens
-                full_prompt_len = min(self.max_length, prefix_len + len(prompt_ids))
-                labels = input_ids.clone()
-                labels[:full_prompt_len] = -100
-                labels = labels.masked_fill(attention_mask == 0, -100)
-
-                # Add category and prompt info
-                waveform_name = row.get('waveform_name')
-                if pd.isnull(waveform_name):
-                    waveform_name = os.path.basename(str(row[self.signal_path_column]))
-                sample_data = {
+                return {
                     'signal': np.transpose(waveform, (1, 0)),
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
-                    'prompt_input_ids': prompt_input_ids,
-                    'prompt_attention_mask': prompt_attention_mask,
-                    'labels': labels,
-                    'waveform_name': waveform_name,
-                    'prompt_text': prompt_q,
-                    'rendered_prompt': prompt_template_text,
-                    'task_type': 'instruct',
+                    'waveform_name': row['waveform_name']
                 }
-
-                if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
-                    sample_data['prompt_category'] = str(row[self.category_column])
-
-                if self.pattern_columns:
-                    pattern_values = []
-                    for col, present in zip(self.pattern_columns, self._pattern_column_mask):
-                        if present:
-                            value = row[col]
-                            if pd.isnull(value):
-                                value = 0.0
-                            pattern_values.append(float(value))
-                        else:
-                            pattern_values.append(0.0)
-                    sample_data['pattern_targets'] = torch.tensor(pattern_values, dtype=torch.float32)
-
-                return sample_data
             
         except Exception as e:
             print(f"Error processing index {idx}: {e}")
@@ -610,38 +263,19 @@ class ECGClinicalReportDataset(Dataset):
 def get_clinical_report_dataloader(
     config: LLMFinetuningConfig,
     shuffle: bool = True,
-    pin_memory: bool = True,
-    subset_size: Optional[int] = None,
-    balance_categories: bool = False,
-    sampling_seed: Optional[int] = None,
-    medgemma_prompt_style: bool = False,
-    debug_print_example: bool = False,
+    pin_memory: bool = True
 ):
-    max_length = getattr(config, "max_length", getattr(config, "max_token_length", 512))
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=config.train_dataset_path, 
         signal_path_column=config.signal_path_column,
         ecg_waveform_length=config.ecg_waveform_length,
         ecg_num_leads=config.ecg_num_leads,
         tokenizer=config.tokenizer, 
-        max_length=int(max_length),
+        max_length=config.max_length,
         instruct_mode=getattr(config, 'instruct_mode', False),
         num_ecg_tokens=config.num_ecg_tokens,
-        ecg_token_start_id=config.ecg_token_start_id,
-        prompt_column=getattr(config, 'prompt_column', 'question'),
-        answer_column=getattr(config, 'answer_column', 'report'),
-        category_column=getattr(config, 'category_column', 'prompt_category'),
-        prefix_tuning=getattr(config, 'prefix_tuning', False),
-        pattern_columns=getattr(config, 'pattern_label_columns', None),
-        medgemma_prompt_style=medgemma_prompt_style,
-        debug_print_example=debug_print_example,
-    )
-    dataset = _maybe_subset_dataset(
-        dataset=dataset,
-        subset_size=subset_size,
-        balance_categories=balance_categories,
-        category_column=config.category_column,
-        seed=sampling_seed,
+        ecg_token_start_id=config.ecg_token_start_id
+
     )
     return DataLoader(
         dataset, 
@@ -649,7 +283,6 @@ def get_clinical_report_dataloader(
         shuffle=shuffle, 
         num_workers=config.num_workers, 
         pin_memory=pin_memory,
-        persistent_workers=True if getattr(config, "num_workers", 0) else False,
         collate_fn=custom_collate_fn
     )
     
@@ -668,17 +301,8 @@ def get_distributed_clinical_report_dataloader(
     pin_memory: bool = True,
     instruct_mode: bool = False,
     num_ecg_tokens: int = 128,
-    ecg_token_start_id: Optional[int] = None,
-    prompt_column: str = "question",
-    answer_column: str = "report",
-    category_column: str = "prompt_category",
-    prefix_tuning: bool = False,
-    pattern_columns: Optional[Sequence[str]] = None,
-    subset_size: Optional[int] = None,
-    balance_categories: bool = False,
-    sampling_seed: Optional[int] = None,
-    medgemma_prompt_style: bool = False,
-    debug_print_example: bool = False,
+    ecg_token_start_id: Optional[int] = None
+
 ):
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
         dataset_path=dataset_path, 
@@ -689,22 +313,9 @@ def get_distributed_clinical_report_dataloader(
         max_length=max_token_length,
         instruct_mode=instruct_mode,
         num_ecg_tokens=num_ecg_tokens,
-        ecg_token_start_id=ecg_token_start_id,
-        prompt_column=prompt_column,
-        answer_column=answer_column,
-        category_column=category_column,
-        prefix_tuning=prefix_tuning,
-        pattern_columns=pattern_columns,
-        medgemma_prompt_style=medgemma_prompt_style,
-        debug_print_example=debug_print_example,
+        ecg_token_start_id=ecg_token_start_id
     )
-    dataset = _maybe_subset_dataset(
-        dataset=dataset,
-        subset_size=subset_size,
-        balance_categories=balance_categories,
-        category_column=category_column,
-        seed=sampling_seed,
-    )
+    
     return DistributedUtils.get_distributed_dataloader(
         dataset=dataset,
         batch_size=batch_size, 
@@ -715,141 +326,6 @@ def get_distributed_clinical_report_dataloader(
         shuffle=shuffle,
         collate_fn=custom_collate_fn
     )
-
-
-def _maybe_subset_dataset(
-    dataset: ECGClinicalReportDataset,
-    subset_size: Optional[int],
-    balance_categories: bool,
-    category_column: str,
-    seed: Optional[int],
-) -> Dataset:
-    total_size = len(dataset)
-    if subset_size is None or subset_size <= 0 or subset_size >= total_size:
-        return dataset
-
-    rng = np.random.default_rng(seed)
-    if not balance_categories or category_column not in dataset.df.columns:
-        chosen = rng.choice(total_size, size=subset_size, replace=False)
-        subset = Subset(dataset, chosen.tolist())
-        return _attach_dataset_attributes(subset, dataset)
-
-    category_series = dataset.df[category_column].fillna("unknown").astype(str)
-    category_indices: dict[str, list[int]] = {}
-    for idx, label in enumerate(category_series):
-        category_indices.setdefault(label, []).append(idx)
-
-    unique_categories = list(category_indices.keys())
-    if subset_size < len(unique_categories):
-        warnings.warn(
-            "Requested subset_size is smaller than the number of prompt categories; "
-            "falling back to random sampling without balancing.",
-            stacklevel=2,
-        )
-        chosen = rng.choice(total_size, size=subset_size, replace=False)
-        subset = Subset(dataset, chosen.tolist())
-        return _attach_dataset_attributes(subset, dataset)
-
-    total_records = float(total_size)
-    counts: dict[str, int] = {}
-    remainders: dict[str, float] = {}
-    capacities: dict[str, int] = {}
-
-    for category, indices in category_indices.items():
-        proportion = len(indices) / total_records
-        raw_target = proportion * subset_size
-        base = int(np.floor(raw_target))
-        remainder = raw_target - base
-        base = min(base, len(indices))
-        if base == 0:
-            base = 1
-            remainder = 0.0
-        counts[category] = base
-        remainders[category] = remainder
-        capacities[category] = len(indices) - base
-
-    assigned = sum(counts.values())
-    if assigned > subset_size:
-        excess = assigned - subset_size
-        adjustable = sorted(
-            (cat for cat in counts if counts[cat] > 1),
-            key=lambda cat: (remainders.get(cat, 0.0), counts[cat]),
-        )
-        idx = 0
-        while excess > 0 and adjustable:
-            cat = adjustable[idx % len(adjustable)]
-            if counts[cat] > 1:
-                counts[cat] -= 1
-                capacities[cat] += 1
-                excess -= 1
-                if counts[cat] <= 1:
-                    adjustable = [c for c in adjustable if counts[c] > 1]
-            else:
-                adjustable = [c for c in adjustable if counts[c] > 1]
-            idx += 1
-
-    assigned = sum(counts.values())
-    if assigned < subset_size:
-        deficit = subset_size - assigned
-        priority = sorted(counts.keys(), key=lambda cat: remainders.get(cat, 0.0), reverse=True)
-        idx = 0
-        while deficit > 0 and priority:
-            cat = priority[idx % len(priority)]
-            if capacities[cat] > 0:
-                counts[cat] += 1
-                capacities[cat] -= 1
-                deficit -= 1
-            idx += 1
-            if idx > len(priority) * 2:
-                extras = [c for c in counts if capacities[c] > 0]
-                if not extras:
-                    break
-                cat = extras[0]
-                counts[cat] += 1
-                capacities[cat] -= 1
-                deficit -= 1
-                idx = 0
-
-    if sum(counts.values()) != subset_size:
-        warnings.warn(
-            "Unable to achieve balanced category sampling for the requested subset size; "
-            "falling back to random sampling.",
-            stacklevel=2,
-        )
-        chosen = rng.choice(total_size, size=subset_size, replace=False)
-        subset = Subset(dataset, chosen.tolist())
-        return _attach_dataset_attributes(subset, dataset)
-
-    selected_indices: list[int] = []
-    for category, indices in category_indices.items():
-        sample_count = counts.get(category, 0)
-        if sample_count <= 0:
-            continue
-        sampled = rng.choice(indices, size=sample_count, replace=False)
-        selected_indices.extend(sampled.tolist())
-
-    rng.shuffle(selected_indices)
-    subset = Subset(dataset, selected_indices)
-    return _attach_dataset_attributes(subset, dataset)
-
-
-def _attach_dataset_attributes(subset: Subset, base_dataset: ECGClinicalReportDataset) -> Subset:
-    """Propagate commonly accessed attributes from the base dataset onto a Subset."""
-    transferable_attrs = (
-        "tokenizer",
-        "_pt_tokenizer",
-        "df",
-        "prefix_tuning",
-        "num_ecg_tokens",
-        "prompt_column",
-        "answer_column",
-        "category_column",
-        "pattern_columns",
-    )
-    for attr in transferable_attrs:
-        if hasattr(base_dataset, attr):
-            setattr(subset, attr, getattr(base_dataset, attr))
-    return subset
 
 def custom_collate_fn(batch):
     """

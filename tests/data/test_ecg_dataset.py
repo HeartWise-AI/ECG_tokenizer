@@ -221,40 +221,20 @@ class TestECGDataset:
                 num_replicas=2,
                 rank=0,
                 shuffle=True,
-                pin_memory=True,
-                shuffle_rows=True,
-                shuffle_seed=123
+                pin_memory=True
             )
             
             # Verify the dataloader was created with correct parameters
             mock_get_dataloader.assert_called_once()
-
+            
+            # Check that the first argument is an ECGDataset
             args, kwargs = mock_get_dataloader.call_args
-            dataset_arg = kwargs['dataset']
-            assert isinstance(dataset_arg, ECGDataset)
-
-            expected_df = mock_parquet_data.sample(frac=1.0, random_state=123).reset_index(drop=True)
-            pd.testing.assert_frame_equal(dataset_arg.data, expected_df)
-
+            assert isinstance(kwargs['dataset'], ECGDataset)
+            
+            # Check the other parameters
             assert kwargs['batch_size'] == 32
             assert kwargs['num_workers'] == 4
             assert kwargs['num_replicas'] == 2
             assert kwargs['rank'] == 0
             assert kwargs['shuffle'] is True
-            assert kwargs['pin_memory'] is True
-
-    @patch('pandas.read_parquet')
-    def test_dataset_row_shuffle(self, mock_read_parquet, mock_parquet_data):
-        shuffled = mock_parquet_data.copy()
-        mock_read_parquet.return_value = shuffled
-
-        dataset = ECGDataset(
-            parquet_file="dummy.parquet",
-            normalize_waveforms=False,
-            shuffle_rows=True,
-            shuffle_seed=7
-        )
-
-        assert len(dataset.data) == len(shuffled)
-        expected = shuffled.sample(frac=1.0, random_state=7).reset_index(drop=True)
-        pd.testing.assert_frame_equal(dataset.data, expected)
+            assert kwargs['pin_memory'] is True 

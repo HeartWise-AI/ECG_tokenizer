@@ -10,7 +10,6 @@ dependencies = [
     "fastparquet>=2024.11.0",
     "iterative-stratification>=0.1.9",
     "matplotlib>=3.9.2",
-    "nltk>=3.9.1",
     "pandas>=2.2.3",
     "peft>=0.7.0",
     "pyarrow>=19.0.0",
@@ -24,9 +23,6 @@ dependencies = [
     "transformers>=4.46.2",
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
-    "xmltodict>=0.12.0",
-    "pywavelets>=1.1.0",
-    "sacrebleu>=2.5.1",
 ]
 
 [tool.setuptools]

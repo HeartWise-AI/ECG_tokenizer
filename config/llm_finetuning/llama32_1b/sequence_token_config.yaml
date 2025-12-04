@@ -3,51 +3,18 @@ pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
 run_mode: !!str "train"
-num_epochs: !!int 30 # Reduced to avoid overfitting in late epochs
+num_epochs: !!int 10
 seed: !!int 42
-# Two-stage training configuration
-training_phases:
-  phase1_alignment:
-    epochs: !!int 2 # Alignment phase (ECG components only)
-    freeze_llm: !!bool false
-    use_lora: !!bool false
-    ecg_embedding_lr: !!float 1e-4 # Reduced LR for stability
-    adapter_lr: !!float 1e-4 # Reduced LR for stability
-    cross_attention_lr: !!float 1e-4 # Reduced LR for stability
-    warmup_steps: !!int 100
-    log_frequency: !!int 10 # Frequent logging for debugging
-  phase2_finetuning:
-    epochs: !!int 28 # Remaining epochs for fine-tuning
-    freeze_llm: !!bool false
-    use_lora: !!bool true
-    llm_lr: !!float 1e-5 # Align with fine-tuning phase requirements
-    ecg_embedding_lr: !!float 1e-5 # Match LoRA and adapter rates
-    adapter_lr: !!float 1e-5 # Matches LLM learning rate for balanced updates
-    cross_attention_lr: !!float 1e-5 # Keep cross-modal bridge in sync
-    llm_weight_decay: !!float 0.0
-    adapter_weight_decay: !!float 0.0
-    cross_attention_weight_decay: !!float 0.0
-    ecg_embedding_weight_decay: !!float 0.0
-    warmup_steps: !!int 50
-    log_frequency: !!int 50
-# Debug and monitoring settings
-debug_config:
-  show_sample_outputs: !!bool true # Show sample generations
-  samples_per_epoch: !!int 2 # Number of samples to show
-  log_attention_weights: !!bool false # Skip attention patterns for now
-  log_gradient_norms: !!bool true # Monitor gradient flow - important!
-  verbose_loss_logging: !!bool false # Skip detailed loss breakdown
 base_checkpoint_path: !!str "checkpoints"
-pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
-resume_checkpoint_path: !!str ""
+pretrained_tokenizer_path: !!str "/volume/ECG_tokenizer/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt"
 # wandb parameters
 wandb_project: !!str "ECG_tokenizer_LLM_finetuning_Llama32_1B_SequenceTokens"
 wandb_entity: !!str "mhi_ai"
-use_wandb: !!bool false
-# training parameters (balanced for two-stage dynamics)
-llm_lr: !!float 1e-7 # Very low LR creates phase 1 alignment effect
-adapter_lr: !!float 3e-5 # Reduced from 1e-4 to prevent late-epoch overfitting
-llm_weight_decay: !!float 1e-4
+use_wandb: !!bool true
+# training parameters
+llm_lr: !!float 1e-7 # Lower LR for sequence tokens (more complex)
+adapter_lr: !!float 1e-6 # Same adapter LR
+llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
 scheduler_type: !!str "cosine_with_warmup"
 lr_step_period: !!int 1
@@ -63,34 +30,31 @@ decoder_mode: !!str "llm"
 decoder_name: !!str "Llama32_Decoder"
 # LLM tokenizer parameters
 tokenizer_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-max_token_length: !!int 640 # 128 ECG tokens + up to 512 text tokens (fits 768 context)
-ecg_token_start_id: null
+max_token_length: !!int 400 # Increased to accommodate 128 ECG tokens + text
+ecg_token_start_id: !!int 128258
 # Instruction tuning
 instruct_mode: !!bool true
 # LLM model parameters
 huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
-bridge_name: !!str "Llama32_SequenceTokenBridge" # Sequence token bridge
+adapter_name: !!str "Llama32_SequenceTokenAdapter" # New sequence token adapter
 llm_input_embedding_size: !!int 2048
 # Sequence token specific parameters
 use_cross_attention: !!bool true
 num_attention_heads: !!int 8
 intermediate_dim: !!int 1024
-# LoRA parameters (enabled in phase 2)
-use_lora: !!bool false # Initially disabled, enabled in phase 2
-lora_r: !!int 16
-lora_alpha: !!int 32 # Corrected parameter name
-lora_dropout: !!float 0.05
-lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-lora_bias: "none"
+# LoRA parameters (optional)
+use_lora: !!bool true
+lora_config:
+  r: !!int 16
+  lora_alpha: !!int 32 # Corrected parameter name
+  lora_dropout: !!float 0.05
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+  bias: "none"
 # Dataset parameters
-train_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/mimic_train_qa_800k.parquet"
-validation_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/mimic_test_qa_10k.parquet"
-# Dataset column configuration
-prompt_column: !!str "prompt" # Input question/prompt column
-answer_column: !!str "generated_answer" # Expected output/answer column  
-category_column: !!str "prompt_category" # For per-category metrics
-num_workers: !!int 16 # Reduced due to longer sequences
-batch_size: !!int 32 # Smaller microbatch to prevent GPU OOM at 640-token context
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/train_subset.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/test_subsets/test_subset.parquet"
+num_workers: !!int 8 # Reduced due to longer sequences
+batch_size: !!int 8 # Reduced batch size due to 128 ECG tokens
 signal_path_column: !!str "waveform_path_psa"
 # ECG parameters
 ecg_waveform_length: !!int 2500
@@ -101,17 +65,11 @@ metrics:
   - !!str "bleu"
   - !!str "meteor"
   - !!str "bertscore"
-# Per-category metrics configuration
-compute_category_metrics: !!bool true
-category_metrics:
-  - !!str "rouge"
-  - !!str "bleu"
-  - !!str "meteor"
 # Memory optimization for longer sequences
-gradient_accumulation_steps: !!int 4 # Effective batch size of 160
+gradient_accumulation_steps: !!int 2
 dataloader_pin_memory: !!bool true
 # Sequence length management
-max_sequence_length: !!int 768 # 128 ECG + 640 text tokens
+max_sequence_length: !!int 528 # 128 ECG + 400 max text tokens
 num_ecg_tokens: !!int 128
 # Attention visualization
 enable_attention_visualization: !!bool true # Enable cross-modal attention logging

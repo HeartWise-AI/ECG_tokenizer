@@ -81,8 +81,6 @@ class ECGTokenizerLinearProbing(BaseProject):
         # Print training configuration
         self._print_training_config(ecg_tokenizer)
                
-        shuffle_seed = getattr(self.config, 'seed', 42)
-
         # Get the train dataloader
         train_dataloader: DataLoader = get_distributed_ecg_tokenizer_classifier_dataloader(
             parquet_file=self.config.train_dataset_path,
@@ -96,9 +94,7 @@ class ECGTokenizerLinearProbing(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=True,
-            pin_memory=True,
-            shuffle_rows=True,
-            shuffle_seed=shuffle_seed
+            pin_memory=True
         )
         # Get the validation dataloader
         validation_dataloader: DataLoader = get_distributed_ecg_tokenizer_classifier_dataloader(
@@ -113,9 +109,7 @@ class ECGTokenizerLinearProbing(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=False,
-            pin_memory=True,
-            shuffle_rows=False,
-            shuffle_seed=shuffle_seed
+            pin_memory=True
         )
 
         # Wrap the model in DDP

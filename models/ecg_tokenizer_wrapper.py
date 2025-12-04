@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, Union, cast, Tuple
+from typing import Optional, Dict, Any, Union, cast
 from models.local_residual_vq import ResidualVQ
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
 
@@ -8,9 +8,6 @@ from utils.registry import ModelRegistry
 from utils.enums import DecoderMode, ModelName
 from models.types import ModelT, ModelClassT
 import math
-# from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
-from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
-from utils.config.llm_finetuning_config import LLMFinetuningConfig
 
 try:
     from peft import LoraConfig, get_peft_model, TaskType
@@ -895,45 +892,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         num_classes: int = 77,
         huggingface_model_name: str = 'gpt2',
         llm_input_embedding_size: int = 768,
-        bridge_name: str = "GPT2_SimpleEmbeddingBridge",
+        adapter_name: str = "GPT2_SimpleEmbeddingAdapter",
         adapter_dropout: float = 0.2,
-        num_visual_tokens: Optional[int] = None,
-        bridge_mid_dim: int = 512,
-        bridge_num_heads: int = 8,
-        bridge_dropout: float = 0.1,
-        bridge_num_special_tokens: int = 4,
-        bridge_qformer_layers: Optional[int] = None,
-        bridge_text_hidden_size: Optional[int] = None,
-        bridge_bias_last_codebook: Optional[float] = None,
-        bridge_codebook_dropout: Optional[float] = None,
-        bridge_cross_every: Optional[int] = None,
-        instruction_dropout: float = 0.0,
         use_lora: bool = False,
         lora_config: Optional[dict[str, Any]] = None,
         tokenizer: Optional[Any] = None,
-        processor: Optional[Any] = None,
-        ecg_token_start_id: Optional[int] = None,
-        ecg_waveform_length: int = 2500,
-        ecg_num_leads: int = 12,
-        ecg_projection_config: Optional[Dict[str, Any]] = None,
-        default_generation_kwargs: Optional[Dict[str, Any]] = None,
-        # Projection-bridge knobs (forwarded to decoder)
-        bridge_use_sinusoidal_pos_emb: Optional[bool] = None,
-        bridge_pos_embedding_max_len: Optional[int] = None,
-        bridge_softmax_temp: Optional[float] = None,
-        bridge_mix_residual: Optional[float] = None,
-        bridge_add_modality_embed: Optional[bool] = None,
-        bridge_add_cls_token: Optional[bool] = None,
         # Attention visualization parameters
         enable_attention_visualization: bool = False,
-        attention_log_frequency: int = 100,
-        prefix_tuning: bool = False,
-        num_codebooks_kept: Optional[int] = None,
-        codebook_offset: int = 0,
-        stage1_checkpoint_path: Optional[str] = None,
-        pattern_loss_weight: Optional[float] = None,
-        pattern_label_count: Optional[int] = None,
-        pattern_bce_pos_weight: Optional[Any] = None,
+        attention_log_frequency: int = 100
     ):
         """
         Args:
@@ -942,8 +908,6 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             decoder_name: Name of the decoder
             use_lora: Whether to apply LoRA to the LLM decoder
             lora_config: LoRA configuration dictionary
-            pattern_loss_weight: Auxiliary multilabel loss weight passed to the decoder
-            pattern_label_count: Number of multilabel targets expected by the decoder
         """
         super(ECG_Tokenizer_Wrapper, self).__init__()
 
@@ -953,43 +917,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.decoder_name: str = decoder_name
         self.using_pretrained_weights: bool = False
         self.use_lora: bool = use_lora
-        self.bridge_name = bridge_name
-        self.processor: Optional[Any] = processor
-        self.ecg_token_start_id = ecg_token_start_id
-        self.prefix_tuning = prefix_tuning
-        self.num_codebooks_kept = num_codebooks_kept
-        self.codebook_offset = codebook_offset
-        self.stage1_checkpoint_path = stage1_checkpoint_path
-        self.bridge_qformer_layers = bridge_qformer_layers
-        self.bridge_text_hidden_size = bridge_text_hidden_size
-        self.bridge_bias_last_codebook = bridge_bias_last_codebook
-        self.bridge_codebook_dropout = bridge_codebook_dropout
-        self.bridge_cross_every = bridge_cross_every
-        self.instruction_dropout = instruction_dropout
-        self.pattern_loss_weight = pattern_loss_weight
-        self.pattern_label_count = pattern_label_count
-        self.pattern_bce_pos_weight = pattern_bce_pos_weight
-        # ECG image projection disabled - module not available
-        self.ecg_image_projection = None
-        if False:  # Disabled ecg_image_projection:
-            projection_cfg = ecg_projection_config or {}
-            if isinstance(projection_cfg, ECGImageProjectionConfig):
-                config_obj = projection_cfg
-            else:
-                try:
-                    config_obj = ECGImageProjectionConfig(**projection_cfg)
-                except TypeError as exc:
-                    raise ValueError(
-                        "Invalid ecg_projection_config provided to ECG_Tokenizer_Wrapper"
-                    ) from exc
-
-            pass  # self.ecg_image_projection = ECG2ImageProjection(config=config_obj)
-
+        
         # Use the DecoderMode enum instead of a string
         self.decoder_mode: DecoderMode = decoder_mode if isinstance(decoder_mode, DecoderMode) else DecoderMode(decoder_mode)
-        
-        # Track if LoRA has been applied
-        self._lora_applied = False
 
         # Retrieve the components from the registry using the provided names
         encoder_class: ModelClassT = ModelRegistry.get(encoder_name)
@@ -1014,98 +944,27 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             try:
                 quantized_feature_shape = (128, 82)
                 decoder_ctor = cast(Any, decoder_class)
-                decoder_kwargs: dict[str, Any] = {
-                    'huggingface_model_name': huggingface_model_name,
-                    'llm_input_embedding_size': llm_input_embedding_size,
-                    'quantized_feature_shape': quantized_feature_shape,
-                    'bridge_name': bridge_name,
-                    'adapter_dropout': adapter_dropout,
-                    'quantizer': self.quantizer,
-                    'tokenizer': tokenizer,
-                    'enable_attention_visualization': enable_attention_visualization,
-                    'attention_log_frequency': attention_log_frequency,
-                    'ecg_token_start_id': ecg_token_start_id,
-                    'default_generation_kwargs': default_generation_kwargs,
-                    'stage1_checkpoint_path': stage1_checkpoint_path,
-                }
-
-                if decoder_name == ModelName.LLAMA32_DECODER.value or decoder_name == "Llama32_Decoder":
-                    decoder_kwargs.update({
-                        'ecg_codebook_size': codebook_size,
-                        'num_visual_tokens': num_visual_tokens,
-                        'bridge_mid_dim': bridge_mid_dim,
-                        'bridge_num_heads': bridge_num_heads,
-                        'bridge_dropout': bridge_dropout,
-                        'bridge_num_special_tokens': bridge_num_special_tokens,
-                        'num_quantizers': num_quantizers,
-                        'num_codebooks_kept': num_codebooks_kept,
-                        'codebook_offset': codebook_offset,
-                        # Projection-bridge knobs (unused by others, consumed by projection)
-                        'bridge_use_sinusoidal_pos_emb': bridge_use_sinusoidal_pos_emb,
-                        'bridge_pos_embedding_max_len': bridge_pos_embedding_max_len,
-                        'bridge_softmax_temp': bridge_softmax_temp,
-                        'bridge_mix_residual': bridge_mix_residual,
-                        'bridge_add_modality_embed': bridge_add_modality_embed,
-                        'bridge_add_cls_token': bridge_add_cls_token,
-                    })
-                elif decoder_name == ModelName.MEDGEMMA_DECODER.value or decoder_name == "MedGemma_Decoder":
-                    decoder_kwargs.update({
-                        'ecg_codebook_size': codebook_size,
-                        'num_visual_tokens': num_visual_tokens,
-                        'bridge_mid_dim': bridge_mid_dim,
-                        'bridge_num_heads': bridge_num_heads,
-                        'bridge_dropout': bridge_dropout,
-                        'bridge_num_special_tokens': bridge_num_special_tokens,
-                        'num_quantizers': num_quantizers,
-                        'default_generation_kwargs': default_generation_kwargs,
-                        'prefix_tuning': prefix_tuning,
-                        'num_codebooks_kept': num_codebooks_kept,
-                        'codebook_offset': codebook_offset,
-                        # Only include Q-Former knobs when explicitly provided (avoid None cast errors)
-                        'bridge_qformer_layers': bridge_qformer_layers,
-                        'bridge_text_hidden_size': bridge_text_hidden_size or bridge_mid_dim,
-                        'bridge_bias_last_codebook': bridge_bias_last_codebook,
-                        'bridge_codebook_dropout': bridge_codebook_dropout,
-                        'bridge_cross_every': bridge_cross_every,
-                        'instruction_dropout': instruction_dropout,
-                        # Projection-bridge knobs (unused by Q-Former, consumed by projection)
-                        'bridge_use_sinusoidal_pos_emb': bridge_use_sinusoidal_pos_emb,
-                        'bridge_pos_embedding_max_len': bridge_pos_embedding_max_len,
-                        'bridge_softmax_temp': bridge_softmax_temp,
-                        'bridge_mix_residual': bridge_mix_residual,
-                        'bridge_add_modality_embed': bridge_add_modality_embed,
-                        'bridge_add_cls_token': bridge_add_cls_token,
-                    })
-                    # Drop explicit None values for Q-Former-only fields to prevent int/float(None) casts
-                    for k in (
-                        'bridge_qformer_layers',
-                        'bridge_text_hidden_size',
-                        'bridge_bias_last_codebook',
-                        'bridge_codebook_dropout',
-                        'bridge_cross_every',
-                        'instruction_dropout',
-                    ):
-                        if decoder_kwargs.get(k, None) is None:
-                            decoder_kwargs.pop(k, None)
-                    if pattern_loss_weight is not None:
-                        decoder_kwargs['pattern_loss_weight'] = pattern_loss_weight
-                    if pattern_label_count is not None:
-                        decoder_kwargs['pattern_label_count'] = pattern_label_count
-                    if pattern_bce_pos_weight is not None:
-                        decoder_kwargs['pattern_bce_pos_weight'] = pattern_bce_pos_weight
-
-                self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
+                self.decoder = cast(nn.Module, decoder_ctor(
+                    huggingface_model_name=huggingface_model_name,
+                    llm_input_embedding_size=llm_input_embedding_size,
+                    quantized_feature_shape=quantized_feature_shape,
+                    adapter_name=adapter_name,
+                    adapter_dropout=adapter_dropout,
+                    quantizer=self.quantizer,  # Pass quantizer for direct codebook access
+                    tokenizer=tokenizer,
+                    enable_attention_visualization=enable_attention_visualization,
+                    attention_log_frequency=attention_log_frequency
+                ))
                 
                 # Apply LoRA to the LLM if requested
                 if use_lora and lora_config:
                     self._apply_lora(lora_config)
-                    self._lora_applied = True
                     
             except TypeError as e:
                 raise ValueError(
                     f"Decoder '{decoder_name}' does not support LLM mode parameters. "
                     f"For LLM mode, decoder must accept: huggingface_model_name, llm_input_embedding_size, "
-                    f"quantized_feature_shape, bridge_name, and adapter_dropout. Error: {e}"
+                    f"quantized_feature_shape, adapter_name, and adapter_dropout. Error: {e}"
                 )
         elif self.decoder_mode == DecoderMode.CLASSIFICATION:
 
@@ -1134,7 +993,6 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             'gpt2': ['c_attn', 'c_proj'],
             'qwen2': ['q_proj', 'k_proj', 'v_proj', 'o_proj'],
             'llama': ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
-            'gemma': ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
         }
         
         # Try to get the LLM model from the decoder
@@ -1148,7 +1006,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             return
         
         # Determine model type and target modules
-        model_type = getattr(llm_model.config, "model_type", "llama").lower()
+        model_type = llm_model.config.model_type.lower()
         target_modules = lora_config.get('target_modules') or default_targets.get(model_type, ['q_proj', 'v_proj'])
         
         lora_config_obj = LoraConfig(
@@ -1158,8 +1016,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             lora_alpha=lora_config.get('lora_alpha', 32),
             lora_dropout=lora_config.get('lora_dropout', 0.05),
             target_modules=target_modules,
-            bias=lora_config.get('bias', 'none'),
-            modules_to_save=lora_config.get('modules_to_save')
+            bias=lora_config.get('bias', 'none')
         )
         
         # Apply LoRA to the LLM
@@ -1168,62 +1025,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         elif hasattr(self.decoder, 'llm'):
             self.decoder.llm = get_peft_model(self.decoder.llm, lora_config_obj)
         
-        top_k_layers = lora_config.get('top_k_layers')
-        if top_k_layers is not None:
-            self._freeze_lower_lora_layers(top_k_layers)
-
         print(f"Applied LoRA to LLM with config: {lora_config_obj}")
-        self._lora_applied = True
-
-    def _freeze_lower_lora_layers(self, top_k_layers: int) -> None:
-        """Freeze LoRA parameters outside the top-k decoder layers."""
-        if top_k_layers <= 0:
-            return
-
-        llm_model = None
-        if hasattr(self.decoder, 'llm_model'):
-            llm_model = self.decoder.llm_model
-        elif hasattr(self.decoder, 'llm'):
-            llm_model = self.decoder.llm
-        if llm_model is None:
-            return
-
-        base = getattr(llm_model, 'base_model', None)
-        if base is None:
-            return
-
-        layer_container = getattr(getattr(base, 'model', base), 'layers', None)
-        if layer_container is None:
-            return
-
-        total_layers = len(layer_container)
-        cutoff = max(0, total_layers - top_k_layers)
-
-        frozen, trainable = 0, 0
-        for name, param in llm_model.named_parameters():
-            if 'lora_' not in name:
-                continue
-            if '.layers.' in name:
-                try:
-                    layer_idx = int(name.split('.layers.')[1].split('.')[0])
-                except ValueError:
-                    param.requires_grad = False
-                    frozen += 1
-                    continue
-                if layer_idx < cutoff:
-                    param.requires_grad = False
-                    frozen += 1
-                else:
-                    param.requires_grad = True
-                    trainable += 1
-            else:
-                param.requires_grad = True
-                trainable += 1
-
-        if self.use_lora:
-            print(
-                f"LoRA top-k restriction: training {trainable} adapter params, frozen {frozen}"
-            )
 
     def set_lora_inference_mode(self, inference_mode: bool = True):
         """Set LoRA inference mode to optimize for inference."""
@@ -1289,32 +1091,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     # For all other keys, try direct mapping
                     if key in current_state_dict:
                         filtered_state_dict[key] = value
-
-            # Align checkpoint tensors with current model shapes (handle token count changes)
-            target_state_dict = self.state_dict()
-            for key in list(filtered_state_dict.keys()):
-                target_tensor = target_state_dict.get(key)
-                if target_tensor is None:
-                    continue
-
-                source_tensor = filtered_state_dict[key]
-                if source_tensor.shape == target_tensor.shape:
-                    continue
-
-                # Allow safe trimming/padding along the first dimension when inner dims match
-                if source_tensor.dim() >= 1 and target_tensor.dim() >= 1 and source_tensor.shape[1:] == target_tensor.shape[1:]:
-                    resized = target_tensor.clone()
-                    copy_rows = min(source_tensor.shape[0], target_tensor.shape[0])
-                    resized[:copy_rows] = source_tensor[:copy_rows].to(dtype=resized.dtype, device=resized.device)
-                    if copy_rows < target_tensor.shape[0]:
-                        # Leave remaining rows as initialised in resized (typically random init)
-                        pass
-                    filtered_state_dict[key] = resized
-                    print(f"Adjusted checkpoint tensor '{key}' from {tuple(source_tensor.shape)} to {tuple(target_tensor.shape)}")
-                else:
-                    print(f"Skipping incompatible tensor '{key}' with shape {tuple(source_tensor.shape)} (expected {tuple(target_tensor.shape)})")
-                    filtered_state_dict.pop(key)
-
+            
             self.load_state_dict(filtered_state_dict, strict=False)
         elif has_lora_keys and not current_has_lora:
             # Checkpoint has LoRA but current model doesn't - need to extract base weights
@@ -1516,167 +1293,6 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             
         print(f"  Decoder: {'TRAIN' if self.decoder.training else 'EVAL'}")
 
-    @staticmethod
-    def _extract_primary_codes(
-        indices: Optional[torch.Tensor],
-        num_codebooks_kept: Optional[int] = None,
-        codebook_offset: int = 0
-    ) -> Optional[torch.Tensor]:
-        """
-        Extract codebook indices with optional slicing for multi-codebook models.
-
-        Args:
-            indices: Codebook indices tensor
-            num_codebooks_kept: Number of codebooks to keep (None = keep all)
-            codebook_offset: Skip the first N codebooks
-
-        Returns:
-            Sliced codes tensor with shape [batch, seq, num_kept] or [batch, seq] if num_kept==1
-        """
-        if not isinstance(indices, torch.Tensor):
-            return None
-
-        codes = indices.long()
-
-        # Normalize shape to [batch, seq, depth]
-        if codes.dim() == 4:
-            # Assume shape [groups, batch, seq, depth]; take first group
-            codes = codes[0]
-
-        # Now codes should be [batch, seq, depth]
-        if codes.dim() != 3:
-            raise ValueError(f"Expected 3D codes after normalization, got shape {codes.shape}")
-
-        batch, seq, depth = codes.shape
-
-        # Determine how many codebooks to keep
-        keep = num_codebooks_kept if (num_codebooks_kept is not None and num_codebooks_kept > 0) else depth
-        keep = min(int(keep), depth)
-
-        # Resolve offset semantics (negative offsets mean "align to the end")
-        offset = int(codebook_offset or 0)
-        if keep == depth:
-            offset = 0
-        else:
-            if offset < 0:
-                offset = max(depth - keep, 0)
-            if offset >= depth:
-                offset = depth - keep
-            if offset + keep > depth:
-                offset = max(depth - keep, 0)
-
-        codes = codes[..., offset:offset + keep]
-
-        # NOTE: Keep 3D shape [batch, seq, num_codebooks] even when num_codebooks=1
-        # The bridge expects this format and will handle it correctly.
-        # Don't squeeze to maintain consistent interface.
-
-        return codes
-
-    def _module_device(self) -> torch.device:
-        """Return the device the wrapper currently resides on."""
-        try:
-            return next(self.parameters()).device
-        except StopIteration:  # pragma: no cover - defensive fallback
-            return torch.device('cpu')
-
-    def _get_text_tokenizer(self) -> Any:
-        """Fetch the tokenizer associated with the decoder or processor."""
-        tokenizer = getattr(self.decoder, 'tokenizer', None)
-        if tokenizer is not None:
-            return tokenizer
-        processor = getattr(self.decoder, 'processor', None)
-        if processor is not None and hasattr(processor, 'tokenizer'):
-            return processor.tokenizer
-        raise ValueError(
-            f"Decoder '{self.decoder_name}' does not expose a tokenizer for prompt preparation"
-        )
-
-    def _prepare_generation_inputs_from_config(
-        self,
-        config: LLMFinetuningConfig | dict[str, Any],
-        sample_idx: int = 0,
-        dataset_split: str = "validation",
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Dict[str, Any]]:
-        """Load ECG and prompt tokens from the parquet dataset defined in the config."""
-
-        def cfg_get(key: str, default: Any = None) -> Any:
-            if hasattr(config, key):
-                return getattr(config, key)
-            if isinstance(config, dict):
-                return config.get(key, default)
-            return default
-
-        split = dataset_split.lower()
-        if split not in {"train", "validation", "val", "dev"}:
-            raise ValueError(
-                f"Unsupported dataset split '{dataset_split}'. Use 'train' or 'validation'."
-            )
-
-        dataset_path = cfg_get('validation_dataset_path') if split != 'train' else cfg_get('train_dataset_path')
-        if dataset_path is None:
-            raise ValueError("Dataset path not specified in configuration for the requested split")
-
-        tokenizer = self._get_text_tokenizer()
-
-        dataset = ECGClinicalReportDataset(
-            dataset_path=dataset_path,
-            signal_path_column=cfg_get('signal_path_column'),
-            ecg_waveform_length=int(cfg_get('ecg_waveform_length')),
-            ecg_num_leads=int(cfg_get('ecg_num_leads')),
-            tokenizer=tokenizer,
-            max_length=int(cfg_get('max_length', cfg_get('max_token_length', 512))),
-            instruct_mode=bool(cfg_get('instruct_mode', False)),
-            num_ecg_tokens=int(cfg_get('num_ecg_tokens', 128)),
-            ecg_token_start_id=cfg_get('ecg_token_start_id'),
-            prompt_column=cfg_get('prompt_column', 'question'),
-            answer_column=cfg_get('answer_column', 'report'),
-            category_column=cfg_get('category_column', 'prompt_category'),
-            pattern_columns=cfg_get('pattern_label_columns', None),
-        )
-
-        sample = dataset[sample_idx]
-        if sample is None:
-            raise ValueError(
-                f"Sample at index {sample_idx} could not be retrieved from dataset '{dataset_path}'."
-            )
-
-        device = self._module_device()
-        signal = sample['signal']
-        if isinstance(signal, torch.Tensor):
-            ecg_tensor = signal.to(device=device, dtype=torch.float32)
-        else:
-            ecg_tensor = torch.from_numpy(signal).to(device=device, dtype=torch.float32)
-        if ecg_tensor.dim() == 2:
-            ecg_tensor = ecg_tensor.unsqueeze(0)
-
-        prompt_input_ids = sample.get('prompt_input_ids')
-        if prompt_input_ids is not None:
-            if isinstance(prompt_input_ids, torch.Tensor):
-                if prompt_input_ids.dim() == 1:
-                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
-                prompt_input_ids = prompt_input_ids.to(device=device, dtype=torch.long)
-            else:
-                prompt_input_ids = torch.as_tensor(prompt_input_ids, dtype=torch.long, device=device).unsqueeze(0)
-
-        prompt_attention_mask = sample.get('prompt_attention_mask')
-        if prompt_attention_mask is not None:
-            if isinstance(prompt_attention_mask, torch.Tensor):
-                if prompt_attention_mask.dim() == 1:
-                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
-                prompt_attention_mask = prompt_attention_mask.to(device=device, dtype=torch.long)
-            else:
-                prompt_attention_mask = torch.as_tensor(prompt_attention_mask, dtype=torch.long, device=device).unsqueeze(0)
-
-        metadata = {
-            'dataset_path': dataset_path,
-            'dataset_split': split,
-            'sample_idx': sample_idx,
-            'raw_sample': sample,
-        }
-
-        return ecg_tensor, prompt_input_ids, prompt_attention_mask, metadata
-
     def forward(
         self, 
         ecg_signal: torch.Tensor, 
@@ -1684,11 +1300,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         # Additional parameters for LLM mode
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
-        prompt_attention_mask: Optional[torch.Tensor] = None,
-        pattern_targets: Optional[torch.Tensor] = None,
-        **kwargs
+        labels: Optional[torch.Tensor] = None
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
         Args:
@@ -1697,7 +1309,6 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             input_ids: Input IDs for the LLM
             attention_mask: Attention mask for the LLM
             labels: Labels for the LLM
-            pattern_targets: Optional multilabel ECG targets (shape [batch, num_labels])
         """
         ecg_signal = ecg_signal.to(dtype=torch.float32)  # or torch.bfloat16 if you prefer
         features = self.encoder(ecg_signal)
@@ -1717,45 +1328,15 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             quantized, indices, commit_loss = quantizer_outputs
             all_codes = None
 
-        quantized_code_ids = self._extract_primary_codes(
-            indices, self.num_codebooks_kept, self.codebook_offset
-        )
-        pixel_values: Optional[torch.Tensor] = None
-        # ECG image projection disabled
-        if False:  # self.ecg_image_projection is not None:
-            pass  # pixel_values = self.ecg_image_projection(quantized)
-            if pixel_values.dtype != quantized.dtype:
-                pixel_values = pixel_values.to(dtype=quantized.dtype)
-
         # Handle different decoder types
         if self.decoder_mode == DecoderMode.LLM:
             try:
-                if pattern_targets is not None:
-                    if isinstance(pattern_targets, torch.Tensor):
-                        pattern_targets = pattern_targets.to(device=quantized.device, dtype=torch.float32)
-                    else:
-                        pattern_targets = torch.as_tensor(pattern_targets, dtype=torch.float32, device=quantized.device)
-
-                decoder_inputs = {
-                    'quantized_features': quantized,
-                    'input_ids': input_ids,
-                    'attention_mask': attention_mask,
-                    'labels': labels,
-                    'prompt_input_ids': prompt_input_ids,
-                    'prompt_attention_mask': prompt_attention_mask,
-                }
-                if pattern_targets is not None:
-                    decoder_inputs['pattern_targets'] = pattern_targets
-                
-                # Only add quantized_codes for decoders that support it
-                # GPT2 decoder doesn't accept quantized_codes
-                if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:
-                    decoder_inputs['quantized_codes'] = quantized_code_ids
-                
-                if pixel_values is not None:
-                    decoder_inputs['pixel_values'] = pixel_values
-
-                decoder_output = self.decoder(**decoder_inputs)
+                decoder_output = self.decoder(
+                    quantized_features=quantized,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
 
                 if isinstance(decoder_output, dict):
                     return decoder_output
@@ -1779,108 +1360,44 @@ class ECG_Tokenizer_Wrapper(nn.Module):
     @torch.no_grad()
     def generate_report(
         self,
-        x: Optional[torch.Tensor] = None,
+        x: torch.Tensor,
         max_token_length: int = 512,
-        config: Optional[LLMFinetuningConfig | dict[str, Any]] = None,
-        sample_idx: int = 0,
-        dataset_split: str = "validation",
-        return_metadata: bool = False,
         **generate_kwargs
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
-        """Generate a clinical report, optionally sourcing prompts directly from the configured dataset."""
-
+    ) -> torch.Tensor:
+        """
+        Generate a clinical report from ECG signal using any LLM decoder.
+        Available when decoder_mode is LLM and decoder supports generation.
+        
+        Args:
+            x: ECG signal tensor
+            max_token_length: Maximum length of generated tokens
+            **generate_kwargs: Additional arguments for generation
+            
+        Returns:
+            Generated token IDs
+        """
         if self.decoder_mode != DecoderMode.LLM:
             raise ValueError("generate_report() is only available in LLM mode")
+        
         if self.decoder is None:
             raise ValueError("No decoder available for generation")
-
-        prompt_input_ids = generate_kwargs.pop('prompt_input_ids', None)
-        prompt_attention_mask = generate_kwargs.pop('prompt_attention_mask', None)
-        metadata: Optional[Dict[str, Any]] = None
-
-        if config is not None:
-            x_cfg, prompt_ids_cfg, prompt_mask_cfg, metadata = self._prepare_generation_inputs_from_config(
-                config=config,
-                sample_idx=sample_idx,
-                dataset_split=dataset_split,
-            )
-            x = x_cfg
-            if prompt_input_ids is None:
-                prompt_input_ids = prompt_ids_cfg
-            if prompt_attention_mask is None:
-                prompt_attention_mask = prompt_mask_cfg
-            max_token_length = getattr(config, 'max_token_length', max_token_length)
-
-        if x is None:
-            raise ValueError(
-                "generate_report requires either an ECG tensor `x` or a configuration to load data from."
-            )
-
-        device = self._module_device()
-        x = x.to(device=device, dtype=torch.float32)
-
-        if prompt_input_ids is not None:
-            if isinstance(prompt_input_ids, torch.Tensor):
-                if prompt_input_ids.dim() == 1:
-                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
-                prompt_input_ids = prompt_input_ids.to(device=device, dtype=torch.long)
-            else:
-                prompt_input_ids = torch.as_tensor(prompt_input_ids, dtype=torch.long, device=device)
-                if prompt_input_ids.dim() == 1:
-                    prompt_input_ids = prompt_input_ids.unsqueeze(0)
-
-        if prompt_attention_mask is not None:
-            if isinstance(prompt_attention_mask, torch.Tensor):
-                if prompt_attention_mask.dim() == 1:
-                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
-                prompt_attention_mask = prompt_attention_mask.to(device=device, dtype=torch.long)
-            else:
-                prompt_attention_mask = torch.as_tensor(prompt_attention_mask, dtype=torch.long, device=device)
-                if prompt_attention_mask.dim() == 1:
-                    prompt_attention_mask = prompt_attention_mask.unsqueeze(0)
-
-        features = self.encoder(x)
-        quantized, indices, _ = self.quantizer(features)
-        quantized_codes = self._extract_primary_codes(
-            indices, self.num_codebooks_kept, self.codebook_offset
-        )
-        pixel_values: Optional[torch.Tensor] = None
-        # ECG image projection disabled
-        if False:  # self.ecg_image_projection is not None:
-            pass  # pixel_values = self.ecg_image_projection(quantized)
-            if pixel_values.dtype != quantized.dtype:
-                pixel_values = pixel_values.to(dtype=quantized.dtype)
-
-        decoder_inputs: Dict[str, Any] = {
-            'quantized_features': quantized,
-            'max_token_length': max_token_length,
-            **generate_kwargs,
-        }
-        
-        # Only add quantized_codes for decoders that support it
-        # GPT2 decoder doesn't accept quantized_codes
-        if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:
-            decoder_inputs['quantized_codes'] = quantized_codes
             
-        if pixel_values is not None:
-            decoder_inputs['pixel_values'] = pixel_values
-
-        if prompt_input_ids is not None:
-            if not hasattr(self.decoder, 'generate_report_with_question'):
-                raise ValueError(
-                    f"Decoder '{self.decoder_name}' does not support question-conditioned generation"
-                )
-            decoder_inputs['prompt_input_ids'] = prompt_input_ids
-            decoder_inputs['prompt_attention_mask'] = prompt_attention_mask
-            generated_ids = self.decoder.generate_report_with_question(**decoder_inputs)
-        else:
-            if not hasattr(self.decoder, 'generate_report'):
-                raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
-            generated_ids = self.decoder.generate_report(**decoder_inputs)
-
-        if return_metadata:
-            return generated_ids, (metadata or {})
-        return generated_ids
+        # Ensure input is in the right dtype
+        x = x.to(dtype=torch.float32)
+        
+        # Get quantized features
+        features = self.encoder(x)
+        quantized, _, _ = self.quantizer(features)
+        
+        # Check if decoder has a generate method
+        if not hasattr(self.decoder, 'generate_report'):
+            raise ValueError(f"Decoder '{self.decoder_name}' does not support text generation")
+        
+        return self.decoder.generate_report(
+            quantized_features=quantized,
+            max_token_length=max_token_length,
+            **generate_kwargs
+        )
 
     @torch.no_grad()
     def generate_report_with_question(
@@ -1892,10 +1409,22 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         **generate_kwargs
     ) -> torch.Tensor:
         """Generate conditioned on a chat-formatted question prompt."""
-        return self.generate_report(
-            x=x,
-            max_token_length=max_token_length,
+        if self.decoder_mode != DecoderMode.LLM:
+            raise ValueError("generate_report_with_question() is only available in LLM mode")
+        if self.decoder is None:
+            raise ValueError("No decoder available for generation")
+
+        x = x.to(dtype=torch.float32)
+        features = self.encoder(x)
+        quantized, _, _ = self.quantizer(features)
+
+        if not hasattr(self.decoder, 'generate_report_with_question'):
+            raise ValueError(f"Decoder '{self.decoder_name}' does not support question-conditioned generation")
+
+        return self.decoder.generate_report_with_question(
+            quantized_features=quantized,
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
-            **generate_kwargs,
+            max_token_length=max_token_length,
+            **generate_kwargs
         )

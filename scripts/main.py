@@ -31,7 +31,6 @@ def main(config: HeartWiseConfig):
         )
         
         # Initialize wandb wrapper
-        print(f"📊 W&B Configuration: use_wandb={config.use_wandb}, is_ref_device={config.is_ref_device}")
         wandb_wrapper: WandbWrapper = WandbWrapper(
             config=config, # The config object
             initialized=config.use_wandb, # If wandb is not initialized, it will not be initialized

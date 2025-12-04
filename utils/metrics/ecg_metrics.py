@@ -7,7 +7,7 @@ from sklearn.metrics import (
     roc_curve
 )
 
-from utils.constants import DEEPECG_CATEGORIES
+from utils.constants import ECG_CATEGORIES
 
 
 def compute_best_threshold(
@@ -111,7 +111,7 @@ def compute_metrics(
     """    
     # initialize metrics dictionary
     metrics: dict[str, dict] = {}
-    for cat in DEEPECG_CATEGORIES:
+    for cat in ECG_CATEGORIES:
         metrics[cat] = {
             "macro_auc": np.nan,
             "macro_auprc": np.nan,
@@ -134,10 +134,10 @@ def compute_metrics(
         }
 
     # Compute category metrics
-    for category in DEEPECG_CATEGORIES:
+    for category in ECG_CATEGORIES:
         # Get category columns
         category_columns: list[str] = [
-            col for col in DEEPECG_CATEGORIES[category]
+            col for col in ECG_CATEGORIES[category]
             if df_gt[col].sum() > 0 # filter out columns with no ground truth
         ]
                         

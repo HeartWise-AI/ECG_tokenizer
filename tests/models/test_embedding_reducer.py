@@ -1,15 +1,15 @@
 import unittest
 import torch
 
-from models.bridge import EmbeddingBridge
+from models.adapters import EmbeddingAdapter
 
-class TestEmbeddingBridge(unittest.TestCase):
+class TestEmbeddingAdapter(unittest.TestCase):
     
     def setUp(self):
         self.input_shape = (8, 128, 160)
         self.output_size = 768
         self.dropout = 0.2
-        self.model = EmbeddingBridge(
+        self.model = EmbeddingAdapter(
             input_shape=self.input_shape,
             output_size=self.output_size,
             dropout=self.dropout
@@ -18,7 +18,7 @@ class TestEmbeddingBridge(unittest.TestCase):
     
     def test_init(self):
         """Test model initialization"""
-        self.assertIsInstance(self.model, EmbeddingBridge)
+        self.assertIsInstance(self.model, EmbeddingAdapter)
         self.assertEqual(self.model.input_shape, self.input_shape)
         self.assertEqual(self.model.output_size, self.output_size)
         

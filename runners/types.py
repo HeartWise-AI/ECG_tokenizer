@@ -6,8 +6,7 @@ if TYPE_CHECKING:
         BaseRunner,
         ECGTokenizerRunner,
         LLMFinetuningRunner, 
-        BertReportClassifierRunner,
-        ECGTextStage1Runner,
+        BertReportClassifierRunner
     )
 
 class Runner(Protocol):
@@ -26,7 +25,6 @@ RunnerUnionT = Union[
     "BaseRunner",
     "ECGTokenizerRunner", 
     "LLMFinetuningRunner",
-    "BertReportClassifierRunner",
-    "ECGTextStage1Runner",
+    "BertReportClassifierRunner"
 ]
 RunnerClassUnionT = Type[RunnerUnionT]

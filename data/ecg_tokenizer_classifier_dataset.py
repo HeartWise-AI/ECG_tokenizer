@@ -15,14 +15,9 @@ class ECGTokenizerClassifierDataset(Dataset):
         num_leads: int,
         normalize_waveforms: bool,
         lead_stats: dict[str, dict[str, float]],
-        signal_path_column: str = 'waveform_path_psa',
-        shuffle_rows: bool = False,
-        shuffle_seed: int | None = None
+        signal_path_column: str = 'waveform_path_psa'
     ):
         self.data: pd.DataFrame = pd.read_parquet(parquet_file)
-        if shuffle_rows:
-            seed = 42 if shuffle_seed is None else shuffle_seed
-            self.data = self.data.sample(frac=1.0, random_state=seed).reset_index(drop=True)
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
         self.normalize_waveforms: bool = normalize_waveforms
@@ -91,9 +86,7 @@ def get_distributed_ecg_tokenizer_classifier_dataloader(
     rank: int,
     shuffle: bool,
     pin_memory: bool,
-    signal_path_column: str = 'waveform_path_psa',
-    shuffle_rows: bool = False,
-    shuffle_seed: int | None = None
+    signal_path_column: str = 'waveform_path_psa'
 ):
     dataset: ECGTokenizerClassifierDataset = ECGTokenizerClassifierDataset(
         parquet_file=parquet_file,
@@ -101,9 +94,7 @@ def get_distributed_ecg_tokenizer_classifier_dataloader(
         num_leads=num_leads,
         normalize_waveforms=normalize_waveforms,
         lead_stats=lead_stats,
-        signal_path_column=signal_path_column,
-        shuffle_rows=shuffle_rows,
-        shuffle_seed=shuffle_seed
+        signal_path_column=signal_path_column
     )
     
     return DistributedUtils.get_distributed_dataloader(
