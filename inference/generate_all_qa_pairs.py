@@ -67,7 +67,7 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_num_special_tokens=int(getattr(config, "bridge_num_special_tokens", 4)),
         bridge_qformer_layers=getattr(config, "bridge_qformer_layers", None),
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
-        stage1_checkpoint_path=getattr(config, "stage1_checkpoint_path", None),
+        stage1_checkpoint_path=None,  # Don't load stage1 - all weights are in the finetuned checkpoint
         use_lora=bool(getattr(config, "use_lora", False)),
         lora_config=getattr(config, "lora_config", None),
         tokenizer=tokenizer,
