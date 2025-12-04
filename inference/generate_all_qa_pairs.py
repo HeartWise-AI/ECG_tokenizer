@@ -233,10 +233,8 @@ def main():
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Load model
     model, tokenizer, config = load_model(args.checkpoint, device)
     
-    # Load validation data
     print(f"\nLoading validation data from {args.validation_parquet}...")
     val_df = pd.read_parquet(args.validation_parquet)
     print(f"Total QA pairs: {len(val_df)}")
@@ -246,7 +244,6 @@ def main():
         val_df = val_df.head(args.max_samples)
         print(f"Limited to {len(val_df)} samples")
     
-    # Check for existing checkpoint to resume from
     checkpoint_csv = os.path.join(args.output_dir, f"{args.output_prefix}_checkpoint.csv")
     start_idx = 0
     results = []
@@ -294,10 +291,7 @@ def main():
             else:
                 waveform = waveform_cache[waveform_path]
             
-            # Convert to tensor
             ecg_tensor = torch.from_numpy(waveform.astype(np.float32)).T.unsqueeze(0).to(device)
-            
-            # Generate answer
             generation = generate_answer(model, tokenizer, ecg_tensor, question, device)
             
             results.append({
@@ -309,7 +303,6 @@ def main():
                 'prompt_category': prompt_category,
             })
             
-            # Save checkpoint periodically
             if len(results) % args.save_interval == 0:
                 save_checkpoint(results)
             
@@ -321,22 +314,15 @@ def main():
     
     print(f"\nGenerated {len(results)} answers, {errors} errors")
     
-    # Save final results
     save_checkpoint(results, is_final=True)
-    
-    # Clean up checkpoint file if it exists
     if os.path.exists(checkpoint_csv):
         os.remove(checkpoint_csv)
         print(f"Removed checkpoint file: {checkpoint_csv}")
     
-    # Create DataFrame
     results_df = pd.DataFrame(results)
-    
-    # Final CSV path is already saved by save_checkpoint with is_final=True
     csv_path = os.path.join(args.output_dir, f"{args.output_prefix}.csv")
     print(f"Saved CSV to {csv_path}")
     
-    # Save as JSON (grouped by waveform for compatibility)
     json_data = {}
     for waveform_name, group in results_df.groupby('waveform_name'):
         json_data[waveform_name] = []
@@ -353,7 +339,6 @@ def main():
         json.dump(json_data, f, indent=2)
     print(f"Saved JSON to {json_path}")
     
-    # Compute and print metrics
     print("\n" + "=" * 80)
     print("METRICS")
     print("=" * 80)
@@ -402,7 +387,6 @@ def main():
         print(f"  BLEU-4:  {np.mean(bleu4):.4f}")
         print(f"  METEOR:  {np.mean(meteor_scores):.4f}")
         
-        # Per-category metrics
         print("\nPer-Category Metrics:")
         for category in results_df['prompt_category'].unique():
             cat_df = results_df[results_df['prompt_category'] == category]
