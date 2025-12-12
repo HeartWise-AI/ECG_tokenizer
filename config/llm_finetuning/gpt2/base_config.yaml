@@ -2,7 +2,7 @@
 pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
-run_mode: !!str "train"
+run_mode: !!str "validate"
 num_epochs: !!int 10
 seed: !!int 42
 base_checkpoint_path: !!str "checkpoints"
@@ -12,7 +12,7 @@ pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenize
 # wandb parameters
 wandb_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 wandb_entity: !!str "mhi_ai"
-use_wandb: !!bool true
+use_wandb: !!bool false
 # training parameters
 llm_lr: !!float 5e-5
 adapter_lr: !!float 5e-4
