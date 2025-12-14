@@ -29,6 +29,19 @@ from transformers import AutoTokenizer
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
 from runners.llm_finetuning_runner import LLMFinetuningRunner
+from utils.files_handler import load_yaml
+
+
+def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
+    """Get config value from dict or object."""
+    if container is None:
+        return fallback
+    if isinstance(container, dict) and key in container:
+        return container[key]
+    if hasattr(container, key):
+        val = getattr(container, key)
+        return val if val is not None else fallback
+    return fallback
 
 
 def _is_lora_key(k: str) -> bool:
@@ -183,8 +196,15 @@ def _build_prompt_tensors(
     return prompt_ids, prompt_mask, prompt_text
 
 
-def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_Tokenizer_Wrapper:
-    """Recreate ECG_Tokenizer_Wrapper with config->model hyperparameters."""
+def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int, yaml_config: Any = None) -> ECG_Tokenizer_Wrapper:
+    """Recreate ECG_Tokenizer_Wrapper with config->model hyperparameters.
+    
+    Args:
+        config: Config object from checkpoint
+        tokenizer: HuggingFace tokenizer
+        ecg_token_start_id: Start ID for ECG tokens (if any)
+        yaml_config: Optional config.yaml dict from checkpoint folder for bridge configuration
+    """
     decoder_mode = config.decoder_mode if isinstance(config.decoder_mode, DecoderMode) else DecoderMode(config.decoder_mode)
     
     # Get num_visual_tokens from various config keys (Q-Former uses num_query_tokens)
@@ -194,11 +214,24 @@ def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_T
     if num_visual_tokens is None:
         num_visual_tokens = getattr(config, "num_visual_tokens", None)
     
+    num_quantizers = int(getattr(config, "num_quantizers", 8))
+    
+    # Get num_codebooks_kept from config (prefer yaml_config, fall back to checkpoint config)
+    # This is critical for matching the bridge shape (e.g., 1CB vs 8CB models)
+    num_codebooks_kept = _cfg_get(yaml_config, "num_codebooks_kept", None)
+    if num_codebooks_kept is None:
+        num_codebooks_kept = _cfg_get(config, "num_codebooks_kept", None)
+    codebook_offset = _cfg_get(yaml_config, "codebook_offset", _cfg_get(config, "codebook_offset", 0))
+    
+    # Log the bridge configuration being used
+    if num_codebooks_kept is not None:
+        print(f"   Bridge config: num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}, num_quantizers={num_quantizers}")
+    
     model = ECG_Tokenizer_Wrapper(
         encoder_name=config.encoder_name,
         quantizer_name=config.quantizer_name,
         decoder_name=config.decoder_name,
-        num_quantizers=int(getattr(config, "num_quantizers", 8)),
+        num_quantizers=num_quantizers,
         codebook_size=int(getattr(config, "codebook_size", 512)),
         decoder_mode=decoder_mode,
         huggingface_model_name=config.huggingface_model_name,
@@ -212,7 +245,11 @@ def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_T
         bridge_num_special_tokens=int(getattr(config, "bridge_num_special_tokens", 4)),
         bridge_qformer_layers=getattr(config, "bridge_qformer_layers", None),
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
-        stage1_checkpoint_path=getattr(config, "stage1_checkpoint_path", None),
+        bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
+        bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
+        instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
+        stage1_checkpoint_path=None,  # Don't reload stage1 during inference - weights come from finetuned checkpoint
         use_lora=bool(getattr(config, "use_lora", False)),
         lora_config=getattr(config, "lora_config", None),
         tokenizer=tokenizer,
@@ -222,8 +259,8 @@ def _instantiate_model(config: Any, tokenizer, ecg_token_start_id: int) -> ECG_T
         default_generation_kwargs=getattr(config, "default_generation_kwargs", None),
         enable_attention_visualization=bool(getattr(config, "enable_attention_visualization", False)),
         attention_log_frequency=int(getattr(config, "attention_log_frequency", 200)),
-        num_codebooks_kept=getattr(config, "num_codebooks_kept", None),
-        codebook_offset=int(getattr(config, "codebook_offset", 0)),
+        num_codebooks_kept=num_codebooks_kept,
+        codebook_offset=codebook_offset,
     )
     return model
 
@@ -383,16 +420,38 @@ def generate_answer(checkpoint: str, waveform_path: str, question: str, device_s
     config.world_size = 1
     config.is_ref_device = True
 
+    # Load config.yaml from checkpoint folder for bridge configuration
+    checkpoint_dir = os.path.dirname(checkpoint)
+    config_yaml_path = os.path.join(checkpoint_dir, "config.yaml")
+    yaml_config = None
+    if os.path.exists(config_yaml_path):
+        print(f"Loading config.yaml from {config_yaml_path}...")
+        yaml_config = load_yaml(config_yaml_path)
+
+    # Reconstruct LoRA config when the checkpoint stores scalar LoRA fields (lora_r/lora_alpha/...)
+    # instead of a full lora_config dict.
+    if bool(getattr(config, "use_lora", False)) and getattr(config, "lora_config", None) is None:
+        try:
+            setattr(config, "lora_config", {
+                "r": int(getattr(config, "lora_r", 16)),
+                "lora_alpha": int(getattr(config, "lora_alpha", getattr(config, "lora_r", 16))),
+                "lora_dropout": float(getattr(config, "lora_dropout", 0.0)),
+                "target_modules": list(getattr(config, "lora_target_modules", None) or []),
+                "bias": str(getattr(config, "lora_bias", "none")),
+            })
+        except Exception:
+            pass
+
     tokenizer, ecg_token_start_id = _prepare_tokenizer(config)
-    model = _instantiate_model(config, tokenizer, ecg_token_start_id)
+    model = _instantiate_model(config, tokenizer, ecg_token_start_id, yaml_config)
     state_dict = checkpoint_data["model_state_dict"]
-    base_sd, lora_sd = _split_state_dict(state_dict)
-    missing, unexpected = model.load_state_dict(base_sd, strict=False)
-    if missing:
-        print(f"Warning: missing {len(missing)} keys when loading state dict (expected for MedGemma vision tower).")
-    if unexpected:
-        print(f"Warning: unexpected keys (first 10): {sorted(unexpected)[:10]}")
-    _maybe_attach_or_merge_lora(model, lora_sd, config)
+    # Load the full checkpoint with the wrapper's LoRA-aware loader to preserve correct scaling (alpha/r).
+    model._load_state_dict(state_dict, strict=False)
+    try:
+        if bool(getattr(config, "use_lora", False)):
+            model.set_lora_inference_mode(True)
+    except Exception:
+        pass
 
     model.eval()
     model.to(target_device)

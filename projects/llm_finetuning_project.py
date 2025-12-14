@@ -272,6 +272,9 @@ class LLMFinetuningProject(BaseProject):
             bridge_mix_residual=getattr(self.config, 'bridge_mix_residual', None),
             bridge_add_modality_embed=getattr(self.config, 'bridge_add_modality_embed', None),
             bridge_add_cls_token=getattr(self.config, 'bridge_add_cls_token', None),
+            # Codebook selection (critical for 1CB vs 8CB runs)
+            num_codebooks_kept=getattr(self.config, 'num_codebooks_kept', None),
+            codebook_offset=getattr(self.config, 'codebook_offset', 0),
             use_lora=self.config.use_lora,
             lora_config=lora_config,
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),

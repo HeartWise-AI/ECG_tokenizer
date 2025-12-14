@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import re
-from typing import Optional
+from typing import Optional, Any
 
 os.environ.setdefault("LOCAL_RANK", "0")
 os.environ.setdefault("RANK", "0")
@@ -34,13 +34,39 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from transformers import AutoTokenizer
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
+from utils.files_handler import load_yaml
+
+
+def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
+    """Get config value from dict or object."""
+    if container is None:
+        return fallback
+    if isinstance(container, dict) and key in container:
+        return container[key]
+    if hasattr(container, key):
+        val = getattr(container, key)
+        return val if val is not None else fallback
+    return fallback
 
 
 def load_model(checkpoint_path: str, device: torch.device):
-    """Load model from checkpoint."""
+    """Load model from checkpoint.
+    
+    Loads both the checkpoint weights and the config.yaml from the checkpoint folder
+    to properly configure the bridge (e.g., num_codebooks_kept for 1CB models).
+    """
     print(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint_data = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     config = checkpoint_data["config"]
+    
+    # Load config.yaml from checkpoint folder for bridge configuration
+    # The config.yaml may have settings not stored in the checkpoint config object
+    checkpoint_dir = os.path.dirname(checkpoint_path)
+    config_yaml_path = os.path.join(checkpoint_dir, "config.yaml")
+    yaml_config = None
+    if os.path.exists(config_yaml_path):
+        print(f"Loading config.yaml from {config_yaml_path}...")
+        yaml_config = load_yaml(config_yaml_path)
     
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     if tokenizer.pad_token is None:
@@ -50,11 +76,39 @@ def load_model(checkpoint_path: str, device: torch.device):
     decoder_mode = config.decoder_mode if isinstance(config.decoder_mode, DecoderMode) else DecoderMode(config.decoder_mode)
     num_visual_tokens = getattr(config, "num_query_tokens", getattr(config, "num_visual_tokens", None))
     
+    # Get num_codebooks_kept from config (prefer yaml_config, fall back to checkpoint config)
+    # This is critical for matching the bridge shape (e.g., 1CB vs 8CB models)
+    num_codebooks_kept = _cfg_get(yaml_config, "num_codebooks_kept", None)
+    if num_codebooks_kept is None:
+        num_codebooks_kept = _cfg_get(config, "num_codebooks_kept", None)
+    codebook_offset = _cfg_get(yaml_config, "codebook_offset", _cfg_get(config, "codebook_offset", 0))
+    
+    # Log the bridge configuration being used
+    num_quantizers = int(getattr(config, "num_quantizers", 8))
+    if num_codebooks_kept is not None:
+        print(f"   Bridge config: num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}, num_quantizers={num_quantizers}")
+    
+    # Reconstruct LoRA config if training stored scalar fields (common) instead of a full lora_config dict.
+    lora_config = getattr(config, "lora_config", None)
+    if lora_config is None and bool(getattr(config, "use_lora", False)):
+        lora_config = {
+            "r": int(getattr(config, "lora_r", 16)),
+            "lora_alpha": int(getattr(config, "lora_alpha", getattr(config, "lora_r", 16))),
+            "lora_dropout": float(getattr(config, "lora_dropout", 0.0)),
+            "target_modules": list(getattr(config, "lora_target_modules", None) or []),
+            "bias": str(getattr(config, "lora_bias", "none")),
+        }
+        # Persist so downstream code paths can reuse it.
+        try:
+            setattr(config, "lora_config", lora_config)
+        except Exception:
+            pass
+
     model = ECG_Tokenizer_Wrapper(
         encoder_name=config.encoder_name,
         quantizer_name=config.quantizer_name,
         decoder_name=config.decoder_name,
-        num_quantizers=int(getattr(config, "num_quantizers", 8)),
+        num_quantizers=num_quantizers,
         codebook_size=int(getattr(config, "codebook_size", 512)),
         decoder_mode=decoder_mode,
         huggingface_model_name=config.huggingface_model_name,
@@ -67,67 +121,34 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_num_special_tokens=int(getattr(config, "bridge_num_special_tokens", 4)),
         bridge_qformer_layers=getattr(config, "bridge_qformer_layers", None),
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
+        bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
+        bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
+        instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,  # Don't load stage1 - all weights are in the finetuned checkpoint
         use_lora=bool(getattr(config, "use_lora", False)),
-        lora_config=getattr(config, "lora_config", None),
+        lora_config=lora_config,
         tokenizer=tokenizer,
         ecg_token_start_id=None,
         ecg_waveform_length=int(getattr(config, "ecg_waveform_length", 2500)),
         ecg_num_leads=int(getattr(config, "ecg_num_leads", 12)),
         default_generation_kwargs=getattr(config, "default_generation_kwargs", None),
+        num_codebooks_kept=num_codebooks_kept,
+        codebook_offset=codebook_offset,
     )
     
+    # Load *full* checkpoint weights using the wrapper's loader.
+    # This is important for LoRA checkpoints because the correct LoRA scaling (alpha/r),
+    # target modules, and naming conventions must match what was used during training.
     state_dict = checkpoint_data["model_state_dict"]
-    
-    def _is_lora_key(k):
-        return "lora_A" in k or "lora_B" in k or "lora_embedding" in k or k.endswith("lora_scaling")
-    
-    base_sd = {k: v for k, v in state_dict.items() if not _is_lora_key(k)}
-    lora_sd = {k: v for k, v in state_dict.items() if _is_lora_key(k)}
-    model.load_state_dict(base_sd, strict=False)
-    
-    if lora_sd:
-        from peft import get_peft_model, set_peft_model_state_dict, LoraConfig
-        
-        lora_r = 32
-        for k, v in lora_sd.items():
-            if 'lora_A' in k and v.ndim == 2:
-                lora_r = v.shape[0]
-                break
-        
-        target_modules = set()
-        for k in lora_sd.keys():
-            if 'lora_A' in k or 'lora_B' in k:
-                parts = k.split('.')
-                for i, p in enumerate(parts):
-                    if p in ('lora_A', 'lora_B') and i > 0:
-                        target_modules.add(parts[i-1])
-                        break
-        target_modules = list(target_modules) if target_modules else ["q_proj", "k_proj", "v_proj", "o_proj"]
-        
-        lora_config = LoraConfig(
-            r=lora_r,
-            lora_alpha=lora_r * 2,
-            target_modules=target_modules,
-            lora_dropout=0.0,
-            bias="none",
-            task_type="CAUSAL_LM"
-        )
-        
-        peft_llm = get_peft_model(model.decoder.llm_model, lora_config)
-        
-        def _clean_lora_key(k):
-            if "base_model." in k:
-                return k[k.index("base_model."):]
-            for pref in ("decoder.", "llm_model.", "model.", "language_model.", "transformer."):
-                if k.startswith(pref):
-                    k = k[len(pref):]
-            return k
-        
-        adapter_sd = {_clean_lora_key(k): v for k, v in lora_sd.items()}
-        set_peft_model_state_dict(peft_llm, adapter_sd, adapter_name="default")
-        model.decoder.llm_model = peft_llm.merge_and_unload()
-        print("   LoRA weights merged")
+    model._load_state_dict(state_dict, strict=False)
+
+    # Put LoRA into inference mode if present (keeps adapters attached; generation works either way).
+    try:
+        if bool(getattr(config, "use_lora", False)):
+            model.set_lora_inference_mode(True)
+    except Exception:
+        pass
     
     model.eval()
     model.to(device)

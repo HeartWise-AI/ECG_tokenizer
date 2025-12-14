@@ -1,0 +1,239 @@
+# MedGemma champion configuration scaled for 5M training pairs with 1 codebook bridge (1CB).
+# Stage 1 checkpoint: BEST_1CB_QFORMER_MEDGEMMA_i3zxhxj8_20251115-170156
+
+pipeline_project: "ECG_Tokenizer_LLM_Finetuning"
+model_name: "ECG_Tokenizer_Wrapper"
+runner_name: "ECG_Tokenizer_LLM_Finetuning"
+run_mode: "train"
+num_epochs: 1
+seed: 42
+# Training phases configuration
+training_phases:
+  phase1_alignment:
+    epochs: 1
+    freeze_llm: true
+    use_lora: true
+    llm_lr: 5.0e-5
+    ecg_embedding_lr: 0.0
+    adapter_lr: 5.0e-4
+    cross_attention_lr: 5.0e-4
+    warmup_steps: 2000
+    debug_config:
+      log_gradient_norms: true
+debug_config:
+  log_gradient_norms: true
+  show_sample_outputs: false
+  log_frequency: 50
+base_checkpoint_path: "checkpoints"
+pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+# Resume from mid-epoch checkpoint (set to empty string or remove to start fresh)
+resume_checkpoint_path: null
+wandb_project: "ECG_tokenizer_MedGemma"
+wandb_entity: "mhi_ai"
+use_wandb: true
+# Optimizer & scheduler
+llm_lr: 5.0e-5
+adapter_lr: 5.0e-4
+llm_weight_decay: 1.0e-5
+adapter_weight_decay: 1.0e-5
+scheduler_type: "cosine_with_warmup"
+lr_step_period: 1
+factor: 0.5
+optimizer: "AdamW"
+step_size: 1
+gamma: 0.8
+num_warmup_percent: 0.256 # 5000 steps / 19531 total steps ≈ 25.6%
+# Restart parameters (kept for config schema compatibility)
+num_hard_restarts_cycles: 1.0
+warm_restart_tmult: 2
+# Warm-start bridge from Stage-1 (1CB Q-Former checkpoint)
+stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_1CB_QFORMER_MEDGEMMA_i3zxhxj8_20251115-170156/checkpoints/stage1_last_epoch_006.pt"
+decoder_mode: "llm"
+decoder_name: "MedGemma_Decoder"
+tokenizer_name: "google/medgemma-4b-it"
+use_auto_processor: false
+max_token_length: 640
+num_ecg_tokens: 0
+instruct_mode: true
+prefix_tuning: false
+huggingface_model_name: "google/medgemma-4b-it"
+# Use MedGemma chat template with <start_of_turn>/<end_of_turn> and <start_of_image>
+medgemma_prompt_style: true
+# Bridge configuration (Instruction-aware Q-Former for instruction tuning)
+# Parameters matched to Stage-1 checkpoint i3zxhxj8
+bridge_name: "InstructionAwareECGQFormerBridge"
+bridge_mid_dim: 768 # match Stage-1 hidden size
+bridge_num_heads: 12 # match Stage-1 heads
+bridge_dropout: 0.1
+bridge_num_special_tokens: 4
+num_query_tokens: 32 # Q-Former query tokens (replaces bridge_num_visual_tokens)
+bridge_qformer_layers: 6 # match Stage-1 bridge_num_layers
+bridge_text_hidden_size: 768
+bridge_bias_last_codebook: 0.5
+bridge_codebook_dropout: 0.0 # match Stage-1
+bridge_cross_every: 2 # match Stage-1 cross_every
+instruction_dropout: 0.2
+use_cross_attention: false
+num_attention_heads: 8
+intermediate_dim: 1024
+# Codebook selection (match Stage-1 i3zxhxj8 - 1 codebook)
+num_codebooks_kept: 1
+codebook_offset: -1
+num_quantizers: 8
+ecg_codebook_size: 512
+llm_input_embedding_size: 2560
+# LoRA configuration
+use_lora: true
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_top_k_layers: 12
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+lora_bias: "none"
+# Dataset paths (5M train / 25k validation)
+train_dataset_path: "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k.parquet"
+validation_dataset_path: "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"
+prompt_column: "prompt"
+answer_column: "generated_answer"
+category_column: "prompt_category"
+# Pattern classification columns (77 ECG patterns from utils/constants.py)
+pattern_label_columns:
+  - "Sinusal"
+  - "Regular"
+  - "Monomorph"
+  - "QS complex in V1-V2-V3"
+  - "R complex in V5-V6"
+  - "T wave inversion (inferior - II, III, aVF)"
+  - "Left bundle branch block"
+  - "RaVL > 11 mm"
+  - "SV1 + RV5 or RV6 > 35 mm"
+  - "T wave inversion (lateral -I, aVL, V5-V6)"
+  - "T wave inversion (anterior - V3-V4)"
+  - "Left axis deviation"
+  - "Left ventricular hypertrophy"
+  - "Bradycardia"
+  - "Q wave (inferior - II, III, aVF)"
+  - "Afib"
+  - "Irregularly irregular"
+  - "Atrial tachycardia (>= 100 BPM)"
+  - "Nonspecific intraventricular conduction delay"
+  - "Premature ventricular complex"
+  - "Polymorph"
+  - "T wave inversion (septal- V1-V2)"
+  - "Right bundle branch block"
+  - "Ventricular paced"
+  - "ST elevation (anterior - V3-V4)"
+  - "ST elevation (septal - V1-V2)"
+  - "1st degree AV block"
+  - "Premature atrial complex"
+  - "Atrial flutter"
+  - "rSR' in V1-V2"
+  - "qRS in V5-V6-I, aVL"
+  - "Left anterior fascicular block"
+  - "Right axis deviation"
+  - "2nd degree AV block - mobitz 1"
+  - "ST depression (inferior - II, III, aVF)"
+  - "Acute pericarditis"
+  - "ST elevation (inferior - II, III, aVF)"
+  - "Low voltage"
+  - "Regularly irregular"
+  - "Junctional rhythm"
+  - "Left atrial enlargement"
+  - "ST elevation (lateral - I, aVL, V5-V6)"
+  - "Atrial paced"
+  - "Right ventricular hypertrophy"
+  - "Delta wave"
+  - "Wolff-Parkinson-White (Pre-excitation syndrome)"
+  - "Prolonged QT"
+  - "ST depression (anterior - V3-V4)"
+  - "QRS complex negative in III"
+  - "Q wave (lateral- I, aVL, V5-V6)"
+  - "Supraventricular tachycardia"
+  - "ST downslopping"
+  - "ST depression (lateral - I, avL, V5-V6)"
+  - "2nd degree AV block - mobitz 2"
+  - "U wave"
+  - "R/S ratio in V1-V2 >1"
+  - "RV1 + SV6 > 11 mm"
+  - "Left posterior fascicular block"
+  - "Right atrial enlargement"
+  - "ST depression (septal- V1-V2)"
+  - "Q wave (septal- V1-V2)"
+  - "Q wave (anterior - V3-V4)"
+  - "ST upslopping"
+  - "Right superior axis"
+  - "Ventricular tachycardia"
+  - "ST elevation (posterior - V7-V8-V9)"
+  - "Ectopic atrial rhythm (< 100 BPM)"
+  - "Lead misplacement"
+  - "Third Degree AV Block"
+  - "Acute MI"
+  - "Early repolarization"
+  - "Q wave (posterior - V7-V9)"
+  - "Bi-atrial enlargement"
+  - "LV pacing"
+  - "Brugada"
+  - "Ventricular Rhythm"
+  - "no_qrs"
+num_workers: 24
+batch_size: 16
+signal_path_column: "waveform_path_psa"
+ecg_waveform_length: 2500
+ecg_num_leads: 12
+# Metrics
+metrics:
+  - "rouge"
+  - "bleu"
+  - "meteor"
+  - "bertscore"
+  - "json_parse_rate"
+  - "structured_f1"
+# Compute BERTScore on up to 10 batches by default
+bertscore_max_batches: 10
+compute_category_metrics: true
+category_metrics:
+  - "rouge"
+  - "bleu"
+  - "meteor"
+pattern_loss_weight: 0
+pattern_bce_pos_weight: 1.0
+# Training optimizations
+gradient_accumulation_steps: 16
+dataloader_pin_memory: true
+max_sequence_length: 768
+# Mid-epoch validation & train snapshots
+validation_step_interval: 1000
+validation_snapshot_batches: 20
+validation_snapshot_prefix: "step"
+validation_subset_size: 2000
+validation_balance_prompt_categories: true
+validation_sampling_seed: 42
+train_metric_interval: 9600
+train_metric_batches: 10
+# Visualization
+enable_attention_visualization: false
+attention_log_frequency: 200
+plot_validation_ecgs: true
+num_validation_plots: 6
+plot_selection_strategy: "worst_random_best"
+# Generation parameters (deterministic defaults; router overrides per task)
+default_generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  top_p: 1.0
+  top_k: 0
+  no_repeat_ngram_size: 5
+  max_new_tokens: 96
+  min_new_tokens: 0
+  repetition_penalty: 1.10
+  force_json: false
+  min_tokens_guard: 12
+# CF Evaluation (early signal)
+use_cf_eval: false
+cf_eval_dataset_path: "ecg_cf_eval/test_cf.json"
+cf_eval_interval: 500
+cf_eval_samples: 1000
