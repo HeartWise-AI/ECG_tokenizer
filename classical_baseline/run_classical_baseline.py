@@ -226,6 +226,10 @@ def main():
     if not validate_parquet_file(parquet_file):
         return
     
+    # Create output directory early (needed for limited dataset creation)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # Handle limited dataset for testing
     if args.max_samples:
         parquet_file = create_limited_dataset(parquet_file, args.max_samples, args.output_dir)
@@ -264,10 +268,6 @@ def main():
     
     # Load lead statistics
     lead_stats = load_lead_stats(args.lead_stats_file, parquet_file)
-    
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Output directory: {output_dir}")
     
