@@ -38,7 +38,7 @@ optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
 num_warmup_percent: 0.03
-num_hard_restarts_cycles: 1.0
+num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_QFORMER_MEDGEMMA_j4bb0w33_20251113-141927/checkpoints/stage1_last_epoch_010.pt"
 decoder_mode: "llm"

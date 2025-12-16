@@ -47,7 +47,7 @@ optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
 num_warmup_percent: 0.03
-num_hard_restarts_cycles: 1.0
+num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage 1 checkpoint (Q-Former pretrained weights)
 stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/9osc201w_20251029-114746/checkpoints/stage1_best_epoch_009.pt"

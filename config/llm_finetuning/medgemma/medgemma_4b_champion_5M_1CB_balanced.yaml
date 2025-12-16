@@ -45,7 +45,7 @@ step_size: 1
 gamma: 0.8
 num_warmup_percent: 0.256 # 5000 steps / 19531 total steps ≈ 25.6%
 # Restart parameters (kept for config schema compatibility)
-num_hard_restarts_cycles: 1.0
+num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Warm-start bridge from Stage-1 (1CB Q-Former checkpoint)
 stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_1CB_QFORMER_MEDGEMMA_i3zxhxj8_20251115-170156/checkpoints/stage1_last_epoch_006.pt"

@@ -45,7 +45,7 @@ optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
 num_warmup_percent: 0.0
-num_hard_restarts_cycles: 1.0
+num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 
 # Decoder & tokenizer

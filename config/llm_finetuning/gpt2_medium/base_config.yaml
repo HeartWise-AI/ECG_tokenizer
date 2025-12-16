@@ -22,7 +22,7 @@ optimizer: !!str "AdamW"
 step_size: !!int 1
 gamma: !!float 0.1
 num_warmup_percent: !!float 0.1
-num_hard_restarts_cycles: !!float 1.0
+num_hard_restarts_cycles: !!float 0.5
 warm_restart_tmult: !!int 2
 # VQVAE parameters
 decoder_mode: !!str "llm"
