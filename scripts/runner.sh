@@ -107,7 +107,7 @@ export OMP_NUM_THREADS=1
 # Run the script
 torchrun \
     --nproc_per_node=$NUM_GPUS \
-    --master_port=29505 \
+    --master_port=29546 \
     --nnodes=1 \
     --node_rank=0 \
     scripts/main.py \

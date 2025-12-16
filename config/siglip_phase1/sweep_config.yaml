@@ -1,0 +1,57 @@
+command:
+  - torchrun
+  - "--nproc_per_node=1"
+  - "--master_port=29510"
+  - "scripts/main.py"
+  - "--base_config"
+  - "config/siglip_phase1/base_config.yaml"
+  - "--num_epochs"
+  - "10"
+  - ${args}
+name: "siglip_phase1_infonce_sweep"
+project: "siglip_phase1"
+entity: "mhi_ai"
+method: bayes
+metric:
+  name: val/loss
+  goal: minimize
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.0004
+  weight_decay:
+    values: [0.0, 0.005, 0.01, 0.02]
+  batch_size:
+    values: [512, 1024]
+  w_hardneg:
+    values: [2.0, 3.0, 4.0]
+  temperature_init:
+    distribution: uniform
+    min: 0.05
+    max: 0.09
+  focal_gamma_pos:
+    values: [1.0, 1.5, 2.0, 2.5]
+  focal_gamma_neg:
+    values: [0.0, 0.25, 0.5]
+  focal_alpha_default:
+    distribution: uniform
+    min: 0.8
+    max: 1.6
+  tail_alpha_boost:
+    values: [1.0, 1.5, 2.0]
+  num_codebooks_kept:
+    values: [1, 2, 4, 8]
+  project:
+    values: ["siglip_phase1"]
+  entity:
+    values: ["mhi_ai"]
+  name:
+    values: ["siglip_phase1_infonce_sweep"]
+early_terminate:
+  type: hyperband
+  min_iter: 3
+  eta: 2
+  s: 2
+run_mode: train
+use_wandb: true

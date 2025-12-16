@@ -6,8 +6,8 @@ from transformers.generation.utils import GenerateOutput
 from transformers import GPT2LMHeadModel, PreTrainedModel
 
 from utils.enums import (
-    ModelName, 
-    AdapterName
+    ModelName,
+    BridgeName
 )
 from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
@@ -27,7 +27,7 @@ class GPT2Decoder(nn.Module):
         huggingface_model_name: str = 'gpt2', 
         llm_input_embedding_size: int = 768, 
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: AdapterName = AdapterName.GPT2_SEQUENCE_ADAPTER,
+        bridge_name: BridgeName = BridgeName.GPT2_SEQUENCE_BRIDGE,
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # Default generation parameters
@@ -43,7 +43,7 @@ class GPT2Decoder(nn.Module):
             huggingface_model_name: Pre-trained GPT-2 model name from HuggingFace.
             llm_input_embedding_size: GPT-2 embedding dimension (must match model).
             quantized_feature_shape: Shape of quantized ECG features (seq_len, features).
-            adapter_name: Name of adapter to transform ECG features to GPT-2 space.
+            bridge_name: Name of adapter to transform ECG features to GPT-2 space.
             adapter_dropout: Dropout rate for the adapter.
             label_ignore_index: Index to ignore in loss computation.
             default_do_sample: Default sampling strategy for generation.
@@ -54,6 +54,10 @@ class GPT2Decoder(nn.Module):
         super(GPT2Decoder, self).__init__()
         
         # Store configuration
+        self.huggingface_model_name = huggingface_model_name
+        self.llm_input_embedding_size = llm_input_embedding_size
+        self.quantized_feature_shape = quantized_feature_shape
+        self.adapter_dropout = adapter_dropout
         self.label_ignore_index = label_ignore_index
         self.default_generation_params = {
             "do_sample": default_do_sample,
@@ -63,11 +67,11 @@ class GPT2Decoder(nn.Module):
         }
         
         # Load the adapter class
-        self.adapter_class: ModelClassT = ModelRegistry.get(adapter_name)
+        self.adapter_class: ModelClassT = ModelRegistry.get(bridge_name)
         if self.adapter_class is None:
-            raise ValueError(f"Adapter {adapter_name} not found in ModelRegistry")       
+            raise ValueError(f"Bridge {bridge_name} not found in ModelRegistry")
         
-        self.adapter_name = adapter_name
+        self.bridge_name = bridge_name
         
         # Initialize the adapter to transform quantized features to GPT-2 embedding space
         # Input shape: (batch, channels, sequence_length)
@@ -76,6 +80,8 @@ class GPT2Decoder(nn.Module):
             output_size=llm_input_embedding_size, 
             dropout=adapter_dropout
         )
+        # Backwards-compatible attribute used by tests and legacy callers
+        self.embedding_adapter = self.adapter
         
         # Load the GPT-2 model
         self.llm_model: PreTrainedModel = GPT2LMHeadModel.from_pretrained(huggingface_model_name)
@@ -93,7 +99,7 @@ class GPT2Decoder(nn.Module):
         self, 
         quantized_features: torch.Tensor,
         input_ids: torch.Tensor, 
-        labels: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         question_ids: Optional[torch.Tensor] = None,
         question_attention_mask: Optional[torch.Tensor] = None,
@@ -105,7 +111,7 @@ class GPT2Decoder(nn.Module):
             quantized_features: ECG features from tokenizer (batch, seq_len, features).
             input_ids: Text token IDs (batch, seq_len). Required for training.
             attention_mask: Attention mask for padding tokens (batch, seq_len).
-            labels: Target labels for loss computation (batch, seq_len).
+            labels: Optional target labels for loss computation (batch, seq_len).
             question_ids: Question token IDs (batch, question_seq_len). Optional.
             question_attention_mask: Attention mask for question padding (batch, question_seq_len).
             
@@ -131,7 +137,7 @@ class GPT2Decoder(nn.Module):
         self,
         ecg_embedding: torch.Tensor,
         input_ids: torch.Tensor,
-        labels: torch.Tensor,
+        labels: Optional[torch.Tensor],
         question_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         question_attention_mask: Optional[torch.Tensor] = None,

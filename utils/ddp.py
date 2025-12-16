@@ -47,7 +47,8 @@ class DistributedUtils:
         """
         Cleanup the DistributedDataParallel.
         """
-        destroy_process_group()
+        if dist.is_available() and dist.is_initialized():
+            destroy_process_group()
 
     @staticmethod
     def sync_process_group(

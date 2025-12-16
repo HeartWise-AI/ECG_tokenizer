@@ -14,13 +14,19 @@ class ECGDataset(Dataset):
         num_leads: int = 12,
         normalize_waveforms: bool = True,
         lead_stats: dict[str, dict[str, float]] | None = None,
-        signal_path_column: str = 'waveform_path_psa'
+        signal_path_column: str = 'waveform_path_psa',
+        shuffle_rows: bool = False,
+        shuffle_seed: int | None = None
     ):
         try:
             self.data: pd.DataFrame = pd.read_parquet(parquet_file)
         except Exception as e:
             print(f"Error reading parquet file: {e}")
             raise Exception(f"Error reading parquet file: {e}")
+
+        if shuffle_rows:
+            seed = 42 if shuffle_seed is None else shuffle_seed
+            self.data = self.data.sample(frac=1.0, random_state=seed).reset_index(drop=True)
         
         self.expected_waveform_length: int = expected_waveform_length
         self.num_leads: int = num_leads
@@ -117,7 +123,9 @@ def get_distributed_ecg_dataloader(
     num_replicas: int = 1,
     rank: int = 0,
     shuffle: bool = True,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    shuffle_rows: bool = False,
+    shuffle_seed: int | None = None
 ):
     dataset: ECGDataset = ECGDataset(
         parquet_file=parquet_file,
@@ -125,7 +133,9 @@ def get_distributed_ecg_dataloader(
         num_leads=num_leads,
         normalize_waveforms=normalize_waveforms,
         lead_stats=lead_stats,
-        signal_path_column=signal_path_column
+        signal_path_column=signal_path_column,
+        shuffle_rows=shuffle_rows,
+        shuffle_seed=shuffle_seed
     )
     
     return DistributedUtils.get_distributed_dataloader(

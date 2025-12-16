@@ -3,9 +3,9 @@
 Generate a Question-Answering dataset from ECG data for Hugging Face.
 
 This script creates a QA dataset where:
-- Question: "What is the diagnosis for this ECG?"
-- Answer: The diagnosis from the report column
-- Additional metadata includes the signal path and detected conditions
+- Question: "Is the rhythm regular, irregularly irregular, or regularly irregular?"
+- Answer: One of "regular", "irregularly irregular", or "regularly irregular" inferred from the diagnosis columns
+- Additional metadata includes the signal path, detected conditions, and the original report for traceability
 """
 
 import os
@@ -18,7 +18,20 @@ from pathlib import Path
 import json
 
 # Import constants for category mappings
-from constants import ECG_CATEGORIES, ECG_PATTERNS_TRANSLATION
+from constants import DEEPECG_CATEGORIES, ECG_PATTERNS_TRANSLATION
+
+
+QUESTION_TEXT = "Is the rhythm regular, irregularly irregular, or regularly irregular?"
+RHYTHM_DIAGNOSIS_PRIORITY = [
+    "Irregularly irregular",
+    "Regularly irregular",
+    "Regular",
+]
+RHYTHM_LABELS = {
+    "Irregularly irregular": "irregularly irregular",
+    "Regularly irregular": "regularly irregular",
+    "Regular": "regular",
+}
 
 
 def load_parquet_data(train_path: str, test_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -95,6 +108,19 @@ def get_detected_conditions(row: pd.Series) -> List[str]:
     return detected
 
 
+def determine_rhythm_label(row: pd.Series) -> Optional[str]:
+    """Infer the rhythm label from diagnosis columns following a priority order."""
+    detected = [diagnosis for diagnosis in RHYTHM_DIAGNOSIS_PRIORITY if row.get(diagnosis, 0) == 1]
+
+    if not detected:
+        return None
+
+    if len(detected) > 1:
+        print(f"Multiple rhythm diagnoses detected ({detected}); selecting '{detected[0]}' based on priority order.")
+
+    return RHYTHM_LABELS[detected[0]]
+
+
 def map_to_categories(detected_conditions: List[str]) -> Dict[str, List[str]]:
     """
     Map detected conditions to the 6 major categories.
@@ -107,7 +133,7 @@ def map_to_categories(detected_conditions: List[str]) -> Dict[str, List[str]]:
     """
     category_mapping = {}
     
-    for category, conditions in ECG_CATEGORIES.items():
+    for category, conditions in DEEPECG_CATEGORIES.items():
         category_conditions = [cond for cond in detected_conditions if cond in conditions]
         if category_conditions:
             category_mapping[category] = category_conditions
@@ -139,6 +165,7 @@ def create_qa_dataset(df: pd.DataFrame, split_name: str) -> Dataset:
     })
     
     records = []
+    skipped_no_rhythm = 0
     
     for idx, row in df.iterrows():
         try:
@@ -147,11 +174,17 @@ def create_qa_dataset(df: pd.DataFrame, split_name: str) -> Dataset:
             
             # Map to categories
             category_mapping = map_to_categories(detected_conditions)
-            
+
+            rhythm_answer = determine_rhythm_label(row)
+
+            if rhythm_answer is None:
+                skipped_no_rhythm += 1
+                continue
+
             # Create the QA record
             record = {
-                "question": "What is the diagnosis for this ECG?",
-                "answer": row['report'].strip(),
+                "question": QUESTION_TEXT,
+                "answer": rhythm_answer,
                 "signal_path": row['waveform_path_psa'],
                 "detected_conditions": detected_conditions,
                 "condition_categories": str(category_mapping),  # Convert to string for storage
@@ -165,6 +198,8 @@ def create_qa_dataset(df: pd.DataFrame, split_name: str) -> Dataset:
             continue
     
     print(f"Created {len(records)} QA records for {split_name}")
+    if skipped_no_rhythm:
+        print(f"Skipped {skipped_no_rhythm} records without a rhythm label")
     
     # Create and return the dataset
     dataset = Dataset.from_list(records, features=features)
@@ -252,7 +287,7 @@ def generate_qa_dataset(
         print(f"\nSample {i+1}:")
         sample = dataset_dict['train'][i]
         print(f"Question: {sample['question']}")
-        print(f"Answer: {sample['answer'][:200]}...")  # Truncate long answers
+        print(f"Answer: {sample['answer']}")
         print(f"Detected conditions: {sample['detected_conditions'][:5]}...")  # Show first 5
         print(f"Signal path: {sample['signal_path']}")
     
