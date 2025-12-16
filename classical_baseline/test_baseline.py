@@ -15,8 +15,8 @@ from pathlib import Path
 sys.path.append('/volume/ECG_tokenizer')
 
 try:
-    from classical_baseline import ClassicalFeatureExtractor, ClassicalBaselineConfig, ClassicalECGBaseline
-    from config import DEFAULT_LEAD_STATS, create_default_config_file
+    from classical_baseline import SAXExtractor, SAXConfig, ClassicalBaselineConfig, ClassicalECGBaseline
+    from classical_baseline.config import DEFAULT_LEAD_STATS, create_default_config_file, load_config
     from utils.constants import ECG_PATTERNS, standard_lead_order
     print("✅ All imports successful")
 except ImportError as e:
@@ -110,60 +110,38 @@ def create_test_dataset():
 
 
 def test_feature_extraction():
-    """Test feature extraction on synthetic data"""
-    print("\nTesting feature extraction...")
+    """Test SAX feature extraction on synthetic data"""
+    print("\nTesting SAX feature extraction...")
     
-    config = ClassicalBaselineConfig()
-    extractor = ClassicalFeatureExtractor(config)
+    config = SAXConfig()
+    extractor = SAXExtractor(config)
     
     # Generate test signal
     signal = generate_synthetic_ecg(duration=10, sampling_rate=500)
     print(f"Test signal shape: {signal.shape}")
     
-    # Test individual feature extraction methods
+    # Test single lead SAX string extraction
     lead_signal = signal[1, :]  # Lead II
     
-    # Test wavelet features
     try:
-        wavelet_features = extractor.extract_wavelet_features(lead_signal, "II")
-        print(f"✅ Wavelet features extracted: {len(wavelet_features)}")
+        sax_string = extractor.extract_sax_string(lead_signal)
+        print(f"✅ SAX string extracted: length={len(sax_string)}, sample='{sax_string[:30]}...'")
     except Exception as e:
-        print(f"❌ Wavelet feature extraction failed: {e}")
+        print(f"❌ SAX string extraction failed: {e}")
+        return
     
-    # Test SAX features
+    # Test all leads extraction
     try:
-        sax_features = extractor.extract_sax_features(lead_signal, "II")
-        print(f"✅ SAX features extracted: {len(sax_features)}")
-    except Exception as e:
-        print(f"❌ SAX feature extraction failed: {e}")
-    
-    # Test EMD features (optional)
-    try:
-        emd_features = extractor.extract_emd_features(lead_signal, "II")
-        if emd_features:
-            print(f"✅ EMD features extracted: {len(emd_features)}")
-        else:
-            print("ℹ️ EMD features skipped (library not available)")
-    except Exception as e:
-        print(f"⚠️ EMD feature extraction failed: {e}")
-    
-    # Test all features
-    try:
-        all_features = extractor.extract_all_features(signal)
-        print(f"✅ All features extracted: {len(all_features)}")
+        all_leads_sax = extractor.extract_all_leads(signal)
+        print(f"✅ All leads SAX extracted: {len(all_leads_sax)} leads")
         
-        # Show some example features
-        feature_types = {}
-        for feature_name in list(all_features.keys())[:10]:
-            parts = feature_name.split('_')
-            if len(parts) > 1:
-                feature_type = parts[1]
-                feature_types[feature_type] = feature_types.get(feature_type, 0) + 1
-        
-        print(f"   Example feature types: {feature_types}")
+        # Show some example SAX codes
+        for lead_name in list(all_leads_sax.keys())[:3]:
+            code = all_leads_sax[lead_name]
+            print(f"   {lead_name}: {code[:30]}{'...' if len(code) > 30 else ''}")
         
     except Exception as e:
-        print(f"❌ All features extraction failed: {e}")
+        print(f"❌ All leads extraction failed: {e}")
 
 
 def test_dataset_loading():
@@ -226,15 +204,20 @@ def test_pipeline():
         results = baseline.run_baseline(test_parquet, DEFAULT_LEAD_STATS)
         
         print("✅ Pipeline completed successfully")
-        print(f"   Results for {len(results)} classifiers")
         
-        # Show brief results
-        for clf_name, result in results.items():
-            if 'error' not in result:
-                accuracy = result.get('exact_match_accuracy', 0)
-                print(f"   {clf_name}: {accuracy:.3f} accuracy")
-            else:
-                print(f"   {clf_name}: failed - {result['error']}")
+        # Show summary results
+        # run_baseline returns a dict with keys: 'summary', 'lead_stats_used', 'sax_results'
+        summary = results.get('summary', {})
+        if summary:
+            print(f"   Samples processed: {summary.get('num_samples_processed', 0)}")
+            print(f"   Avg SAX code length: {summary.get('avg_sax_code_length', 0):.0f}")
+            print(f"   Number of leads: {summary.get('num_leads', 0)}")
+            print(f"   SAX alphabet size: {summary.get('sax_alphabet_size', 0)}")
+        
+        # Show SAX results summary
+        sax_results = results.get('sax_results', [])
+        if sax_results:
+            print(f"   SAX codes extracted for {len(sax_results)} samples")
         
     except Exception as e:
         print(f"❌ Pipeline test failed: {e}")
@@ -252,7 +235,6 @@ def test_configuration():
         print(f"✅ Default configuration created: {config_file}")
         
         # Load config
-        from config import load_config
         config = load_config(config_file)
         print(f"✅ Configuration loaded with {len(config)} sections")
         

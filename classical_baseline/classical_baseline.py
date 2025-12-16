@@ -16,7 +16,7 @@ from pyts.approximation import SymbolicAggregateApproximation
 sys.path.append('/volume/ECG_tokenizer')
 from data.ecg_tokenizer_classifier_dataset import ECGTokenizerClassifierDataset
 from utils.constants import standard_lead_order
-from dataset_utils import FilteredECGDataset
+from .dataset_utils import FilteredECGDataset
 
 warnings.filterwarnings('ignore')
 
