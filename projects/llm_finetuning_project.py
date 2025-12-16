@@ -160,14 +160,13 @@ class LLMFinetuningProject(BaseProject):
             codebook_size_int,
         )
         
-    def _load_and_setup_model(self, checkpoint_path: str, model_registry_key: str = None, for_training: bool = False) -> tuple[ECG_Tokenizer_Wrapper, dict]:
-        """Load checkpoint and setup model with pretrained weights.
+    def _setup_training_objects(self)->dict[str, Any]: 
+        """Setup objects required for LLM finetuning training.
         
-        Args:
-            checkpoint_path: Path to model checkpoint
-            model_registry_key: Key for model registry (defaults to self.config.model_name)
-            for_training: Whether setting up for training (affects weight loading)
-            
+        Loads pretrained tokenizer, freezes encoder/quantizer components,
+        and prepares training infrastructure including data loaders,
+        optimizer, scheduler, and gradient scaler.
+        
         Returns:
             Dictionary containing training objects: optimizer, scheduler, 
             scaler, model, and data loaders
@@ -188,8 +187,7 @@ class LLMFinetuningProject(BaseProject):
             codebook_size,
         ) = self._resolve_checkpoint_structure(pretrained_config_raw, checkpoint_path)
         if self.config.is_ref_device:
-            print(f"Loading model from: {checkpoint_path}")
-            print(f"Model config: {pretrained_config}")
+            print(f"Pretrained config: {pretrained_config}")                
         
         # Ensure config has the resolved structural attributes available for later use
         self.config.encoder_name = encoder_name  # type: ignore[attr-defined]
@@ -272,9 +270,6 @@ class LLMFinetuningProject(BaseProject):
             bridge_mix_residual=getattr(self.config, 'bridge_mix_residual', None),
             bridge_add_modality_embed=getattr(self.config, 'bridge_add_modality_embed', None),
             bridge_add_cls_token=getattr(self.config, 'bridge_add_cls_token', None),
-            # Codebook selection (critical for 1CB vs 8CB runs)
-            num_codebooks_kept=getattr(self.config, 'num_codebooks_kept', None),
-            codebook_offset=getattr(self.config, 'codebook_offset', 0),
             use_lora=self.config.use_lora,
             lora_config=lora_config,
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
@@ -386,9 +381,6 @@ class LLMFinetuningProject(BaseProject):
             medgemma_prompt_style=medgemma_prompt_style,
             debug_print_example=debug_print_example,
         )
-
-    def _create_test_dataloader(self, tokenizer, shuffle: bool = False) -> DataLoader:
-        """Create test dataloader with common parameters."""
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.validation_dataset_path,
@@ -450,9 +442,11 @@ class LLMFinetuningProject(BaseProject):
                 })
 
         
+        # Get the optimizer
         optimizer_class = getattr(torch.optim, self.config.optimizer)
         optimizer: Optimizer = optimizer_class(param_groups)
 
+        # Get the scheduler
         scheduler: LRScheduler = get_scheduler(
             scheduler_name=self.config.scheduler_type,
             optimizer=optimizer,
@@ -1052,6 +1046,26 @@ class LLMFinetuningProject(BaseProject):
             NotImplementedError: Extraction not implemented for LLM finetuning
         """        
         raise NotImplementedError("Extraction is not implemented for this project")
+
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """Setup objects for validation mode.
+        
+        For LLM finetuning, validation uses the same setup as inference.
+        
+        Returns:
+            Dictionary containing validation data loader and model
+        """
+        return self._setup_inference_objects()
+    
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects for test mode.
+        
+        For LLM finetuning, test uses the same setup as inference.
+        
+        Returns:
+            Dictionary containing test data loader and model
+        """
+        return self._setup_inference_objects()
     
     def _get_tokenizer(self, tokenizer_name: str) -> tuple[Any, Optional[Any]]:
         """Return the text tokenizer and optional processor based on configuration."""

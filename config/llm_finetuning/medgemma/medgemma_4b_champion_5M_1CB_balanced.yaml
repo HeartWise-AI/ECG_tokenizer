@@ -86,7 +86,7 @@ llm_input_embedding_size: 2560
 # LoRA configuration
 use_lora: true
 lora_r: 32
-lora_alpha: 32 # Reduced from 64 for stable training (α/r = 1.0)
+lora_alpha: 64 # Reduced from 64 for stable training (α/r = 1.0)
 lora_dropout: 0.05
 lora_top_k_layers: 12
 lora_target_modules:

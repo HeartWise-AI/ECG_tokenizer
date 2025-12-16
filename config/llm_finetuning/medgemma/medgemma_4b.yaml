@@ -40,7 +40,6 @@ gamma: 0.8
 num_warmup_percent: 0.03
 num_hard_restarts_cycles: 1.0
 warm_restart_tmult: 2
-stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/9osc201w_20251029-114746/checkpoints/stage1_best_epoch_009.pt"
 stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_QFORMER_MEDGEMMA_j4bb0w33_20251113-141927/checkpoints/stage1_last_epoch_010.pt"
 decoder_mode: "llm"
 decoder_name: "MedGemma_Decoder"

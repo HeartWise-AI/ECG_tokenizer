@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from utils.config import (
     HeartWiseConfig,
-    LinearProbingConfig,
+    ECGTokenizerLinearProbingConfig,
     LLMFinetuningConfig,
     BertReportClassifierConfig,
     ECGTokenizerTrainingConfig

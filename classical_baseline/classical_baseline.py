@@ -118,12 +118,22 @@ class SAXBaseline:
         
         return lead_stats
 
-    def run(self, parquet_file: str, dataset_filter: str = None, max_samples: int = None):
-        """Run SAX extraction on dataset"""
+    def run(self, parquet_file: str, dataset_filter: str = None, max_samples: int = None, lead_stats: Dict[str, Dict[str, float]] = None):
+        """Run SAX extraction on dataset
+        
+        Args:
+            parquet_file: Path to the parquet file containing ECG data
+            dataset_filter: Optional filter string for the dataset
+            max_samples: Optional limit on number of samples to process
+            lead_stats: Optional pre-computed lead statistics. If not provided, will be calculated from the data.
+        """
         print(f"Loading dataset from: {parquet_file}")
         
-        # Calculate actual lead statistics from the data
-        lead_stats = self.calculate_lead_stats(parquet_file)
+        # Use provided lead_stats or calculate from the data
+        if lead_stats is None:
+            lead_stats = self.calculate_lead_stats(parquet_file)
+        else:
+            print("Using provided lead statistics")
         
         if dataset_filter:
             dataset = FilteredECGDataset(
@@ -288,21 +298,24 @@ class ClassicalECGBaseline:
             save_results=self.config.save_features
         )
         
-        # Run SAX baseline
+        # Run SAX baseline with provided lead_stats
         sax_baseline = SAXBaseline(sax_config)
-        sax_baseline.run(parquet_file, max_samples=max_samples)
+        sax_baseline.run(parquet_file, dataset_filter=dataset_filter, max_samples=max_samples, lead_stats=lead_stats)
         
         # Extract results from SAX baseline
+        # Note: This is a feature extraction baseline, not a classifier.
+        # Classification metrics would require a downstream classifier trained on these features.
+        num_samples = len(sax_baseline.results)
+        avg_code_length = sum(len(r.get('final_code', '')) for r in sax_baseline.results) / num_samples if num_samples > 0 else 0
+        
         self.results = {
-            'metrics': {
-                'accuracy': 0.85,
-                'f1': 0.84,
-                'precision': 0.83,
-                'recall': 0.85
+            'summary': {
+                'num_samples_processed': num_samples,
+                'avg_sax_code_length': avg_code_length,
+                'num_leads': self.config.num_leads,
+                'sax_alphabet_size': self.config.sax_alphabet_size,
             },
-            'feature_importance': {
-                'sax': 1.0
-            },
+            'lead_stats_used': lead_stats,
             'sax_results': sax_baseline.results
         }
         
@@ -315,21 +328,27 @@ class ClassicalECGBaseline:
             return
             
         print("\n===== CLASSICAL BASELINE RESULTS SUMMARY =====")
-        print("Performance Metrics:")
-        for metric, value in self.results.get('metrics', {}).items():
-            print(f"  {metric}: {value:.4f}")
         
-        print("\nFeature Importance:")
-        for feature, importance in self.results.get('feature_importance', {}).items():
-            print(f"  {feature}: {importance:.4f}")
+        # Print processing summary
+        summary = self.results.get('summary', {})
+        if summary:
+            print("Processing Summary:")
+            print(f"  Samples processed: {summary.get('num_samples_processed', 0)}")
+            print(f"  Average SAX code length: {summary.get('avg_sax_code_length', 0):.0f}")
+            print(f"  Number of leads: {summary.get('num_leads', 0)}")
+            print(f"  SAX alphabet size: {summary.get('sax_alphabet_size', 0)}")
             
-        # Print SAX results summary
+        # Print SAX results details
         if 'sax_results' in self.results:
-            print(f"\nSAX Processing Summary:")
             sax_results = self.results['sax_results']
             if sax_results:
-                print(f"  Processed samples: {len(sax_results)}")
-                print(f"  Average sequence length: {sum(len(r.get('final_code', '')) for r in sax_results) / len(sax_results):.0f}")
+                print(f"\nSAX Feature Extraction:")
+                print(f"  Total samples with SAX codes: {len(sax_results)}")
+                # Show example from first sample
+                if sax_results[0].get('sax_codes'):
+                    print("  Example SAX codes (first sample):")
+                    for lead, code in list(sax_results[0]['sax_codes'].items())[:3]:
+                        print(f"    {lead}: {code[:30]}{'...' if len(code) > 30 else ''}")
 
 
 if __name__ == "__main__":

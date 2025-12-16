@@ -269,7 +269,6 @@ class ECGClinicalReportDataset(Dataset):
                         "canonical_answer": answer_text,
                     }
                 else:
-                    print("Using LLAMA instruct mode")
                     # Construct LLaMA 3.2 chat template with ECG integration
                     # System message for ECG analysis task - optimized for concise medical findings
                     system_message = "An electrocardiogram analysis and question answering tool"
@@ -642,7 +641,7 @@ def get_clinical_report_dataloader(
         dataset=dataset,
         subset_size=subset_size,
         balance_categories=balance_categories,
-        category_column=config.category_column,
+        category_column=getattr(config, 'category_column', 'prompt_category'),
         seed=sampling_seed,
     )
     return DataLoader(

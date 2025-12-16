@@ -92,6 +92,7 @@ class LLMFinetuningRunner(BaseRunner):
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
         start_epoch: int = 1,
+        test_dataloader: DataLoader | None = None,
     ):
         """
         Args:

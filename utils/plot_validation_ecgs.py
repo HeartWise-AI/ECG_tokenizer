@@ -19,7 +19,10 @@ import pandas as pd
 sys.path.append('/volume/ECG_tokenizer/DeepECG_Preprocess')
 sys.path.append('/volume/ECG_tokenizer/DeepECG_Preprocess/ecg_plotter')
 
-from ecg_plotter.core import NPYECGPlotter
+try:
+    from ecg_plotter.core import NPYECGPlotter
+except ImportError:  # pragma: no cover - optional dependency
+    NPYECGPlotter = None  # type: ignore[misc,assignment]
 
 try:
     from rouge_score import rouge_scorer

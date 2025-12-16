@@ -6,8 +6,8 @@ that integrates with the ECG_tokenizer infrastructure.
 
 Main components:
 - ClassicalECGBaseline: Main pipeline class
-- ClassicalFeatureExtractor: Feature extraction methods
 - ClassicalBaselineConfig: Configuration management
+- SAXConfig, SAXExtractor, SAXBaseline: SAX-based feature extraction
 
 Example usage:
     from classical_baseline import ClassicalECGBaseline, ClassicalBaselineConfig
@@ -19,9 +19,10 @@ Example usage:
 
 from .classical_baseline import (
     ClassicalECGBaseline,
-    ClassicalFeatureExtractor, 
-    ClassicalECGClassifier,
-    ClassicalBaselineConfig
+    ClassicalBaselineConfig,
+    SAXConfig,
+    SAXExtractor,
+    SAXBaseline
 )
 
 from .config import (
@@ -39,9 +40,10 @@ __description__ = "Classical signal processing baseline for ECG analysis"
 
 __all__ = [
     'ClassicalECGBaseline',
-    'ClassicalFeatureExtractor',
-    'ClassicalECGClassifier', 
     'ClassicalBaselineConfig',
+    'SAXConfig',
+    'SAXExtractor',
+    'SAXBaseline',
     'load_config',
     'save_config',
     'get_dataset_paths',
