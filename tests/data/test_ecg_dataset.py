@@ -130,7 +130,8 @@ class TestECGDataset:
                 expected_waveform_length=2500,
                 num_leads=12,
                 normalize_waveforms=True,
-                lead_stats=mock_lead_stats
+                lead_stats=mock_lead_stats,
+                signal_path_column='waveform_path'
             )
             
             result = dataset[0]
@@ -161,7 +162,8 @@ class TestECGDataset:
                 parquet_file="dummy.parquet",
                 expected_waveform_length=2500,
                 num_leads=12,
-                normalize_waveforms=False
+                normalize_waveforms=False,
+                signal_path_column='waveform_path'
             )
             
             result = dataset[0]
@@ -193,7 +195,8 @@ class TestECGDataset:
                 parquet_file="dummy.parquet",
                 expected_waveform_length=2500,  # Expect 2500, but first signal is 1000
                 num_leads=12,
-                normalize_waveforms=False
+                normalize_waveforms=False,
+                signal_path_column='waveform_path'
             )
             
             # The first signal has wrong shape, so it should skip to the second item

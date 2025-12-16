@@ -101,19 +101,19 @@ class TestSchedulers(unittest.TestCase):
     def test_scheduler_is_per_iteration(self):
         # Test step scheduler (should be per epoch)
         config = MagicMock(spec=HeartWiseConfig)
-        config.scheduler_name = "step"
+        config.scheduler_type = "step"
         self.assertFalse(scheduler_is_per_iteration(config))
         
         # Test cosine scheduler (should be per iteration)
-        config.scheduler_name = "cosine"
+        config.scheduler_type = "cosine"
         self.assertTrue(scheduler_is_per_iteration(config))
         
         # Test cosine_warm_restart scheduler (should be per iteration)
-        config.scheduler_name = "cosine_warm_restart"
+        config.scheduler_type = "cosine_warm_restart"
         self.assertTrue(scheduler_is_per_iteration(config))
         
         # Test with mixed case
-        config.scheduler_name = "COSINE"
+        config.scheduler_type = "COSINE"
         self.assertTrue(scheduler_is_per_iteration(config))
         
         # Test with no scheduler defined

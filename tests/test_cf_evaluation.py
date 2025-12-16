@@ -99,8 +99,8 @@ def test_cf_dataset_has_six_records_per_ecg(tmp_path):
         np.save(tmp_path / p, sig)
 
     records = create_cf_multicategory_dataset(df, split_name="test")
-    # 2 ECGs × 6 categories
-    assert len(records) == 12
+    # 2 ECGs × 5 categories (OTHER category is excluded)
+    assert len(records) == 10
     # Check a known ground-truth
     rhythm = [r for r in records if r["category"] == "RHYTHM" and r["ecg_id"] == os.path.basename(df.loc[0, "waveform_path_psa"])][0]
     assert rhythm["ground_truth_answer"] in rhythm["candidate_answers"]
