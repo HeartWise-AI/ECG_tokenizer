@@ -231,6 +231,25 @@ class LLMFinetuningProject(BaseProject):
         if processor is not None:
             self.config.processor = processor  # type: ignore[attr-defined]
         
+        # Validate num_codebooks_kept is explicitly set (prevents silent default to all codebooks)
+        num_codebooks_kept = getattr(self.config, 'num_codebooks_kept', None)
+        if num_codebooks_kept is None:
+            raise ValueError(
+                "CRITICAL: 'num_codebooks_kept' is not defined in config! "
+                "This MUST be explicitly set to avoid defaulting to all codebooks (8) "
+                "which will cause stage1 checkpoint loading to fail silently. "
+                "Add 'num_codebooks_kept: 1' (or desired value) to your config YAML."
+            )
+        codebook_offset = getattr(self.config, 'codebook_offset', None)
+        if codebook_offset is None:
+            raise ValueError(
+                "CRITICAL: 'codebook_offset' is not defined in config! "
+                "This MUST be explicitly set. Use 'codebook_offset: -1' to select the last codebook, "
+                "or 'codebook_offset: 0' to start from the first codebook."
+            )
+
+        print(f"[LLM Finetuning] Using num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}")
+
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
             encoder_name=encoder_name, 
@@ -270,6 +289,8 @@ class LLMFinetuningProject(BaseProject):
             bridge_mix_residual=getattr(self.config, 'bridge_mix_residual', None),
             bridge_add_modality_embed=getattr(self.config, 'bridge_add_modality_embed', None),
             bridge_add_cls_token=getattr(self.config, 'bridge_add_cls_token', None),
+            num_codebooks_kept=num_codebooks_kept,
+            codebook_offset=codebook_offset,
             use_lora=self.config.use_lora,
             lora_config=lora_config,
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),

@@ -116,3 +116,7 @@ num_ecg_tokens: !!int 128
 # Attention visualization
 enable_attention_visualization: !!bool true # Enable cross-modal attention logging
 attention_log_frequency: !!int 100 # Log attention every N training steps
+
+# Codebook selection (REQUIRED)
+num_codebooks_kept: 8
+codebook_offset: 0

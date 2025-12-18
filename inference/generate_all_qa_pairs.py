@@ -76,11 +76,23 @@ def load_model(checkpoint_path: str, device: torch.device):
     decoder_mode = config.decoder_mode if isinstance(config.decoder_mode, DecoderMode) else DecoderMode(config.decoder_mode)
     num_visual_tokens = getattr(config, "num_query_tokens", getattr(config, "num_visual_tokens", None))
     
-    # Get num_codebooks_kept from config (prefer yaml_config, fall back to checkpoint config)
-    # This is critical for matching the bridge shape (e.g., 1CB vs 8CB models)
+    # Get num_codebooks_kept - MUST match checkpoint architecture to load weights correctly
+    # Infer from checkpoint tensor shapes since config may not match actual trained architecture
     num_codebooks_kept = _cfg_get(yaml_config, "num_codebooks_kept", None)
     if num_codebooks_kept is None:
         num_codebooks_kept = _cfg_get(config, "num_codebooks_kept", None)
+
+    # CRITICAL: Check actual checkpoint tensor shapes - mix_gate.0.weight is [hidden, hidden*num_codebooks]
+    checkpoint_state_dict = checkpoint_data["model_state_dict"]
+    mix_gate_key = "decoder.bridge.mix_gate.0.weight"
+    if mix_gate_key in checkpoint_state_dict:
+        mix_gate_shape = checkpoint_state_dict[mix_gate_key].shape
+        hidden_dim = mix_gate_shape[0]
+        inferred_codebooks = mix_gate_shape[1] // hidden_dim
+        if num_codebooks_kept is None or num_codebooks_kept != inferred_codebooks:
+            print(f"   OVERRIDE: Config num_codebooks_kept={num_codebooks_kept} but checkpoint has {inferred_codebooks}")
+            num_codebooks_kept = inferred_codebooks
+
     codebook_offset = _cfg_get(yaml_config, "codebook_offset", _cfg_get(config, "codebook_offset", 0))
     
     # Log the bridge configuration being used
@@ -184,8 +196,7 @@ def generate_answer(
     
     generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
     generation_kwargs.setdefault("max_new_tokens", 96)
-    generation_kwargs.setdefault("do_sample", False)
-    generation_kwargs.setdefault("temperature", 0.0)
+    # Use stochastic sampling (matching validation behavior) - no do_sample/temperature override
     generation_kwargs.setdefault("no_repeat_ngram_size", 5)
     generation_kwargs.setdefault("repetition_penalty", 1.1)
     generation_kwargs["eos_token_id"] = eos_ids

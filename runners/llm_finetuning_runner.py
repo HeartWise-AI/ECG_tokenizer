@@ -238,6 +238,7 @@ class LLMFinetuningRunner(BaseRunner):
         """Build generation kwargs for validation generations."""
         generation_kwargs = dict(getattr(self.config, "default_generation_kwargs", {}) or {})
         generation_kwargs.setdefault("max_new_tokens", 96)
+        # Use stochastic sampling (default HF behavior) - produces better quality outputs
         generation_kwargs.setdefault("no_repeat_ngram_size", 5)
         generation_kwargs.setdefault("repetition_penalty", 1.1)
         

@@ -60,3 +60,7 @@ metrics:
   - !!str "rouge"
   - !!str "bleu"
   - !!str "meteor"
+
+# Codebook selection (REQUIRED - prevents silent stage1 loading failures)
+num_codebooks_kept: 8  # Use all 8 codebooks
+codebook_offset: 0     # Start from first codebook

@@ -112,3 +112,7 @@ num_ecg_tokens: !!int 48
 # Attention visualization
 enable_attention_visualization: !!bool false # Disabled for quick test
 attention_log_frequency: !!int 10
+
+# Codebook selection (REQUIRED)
+num_codebooks_kept: 8
+codebook_offset: 0
