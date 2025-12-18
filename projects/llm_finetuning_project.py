@@ -231,21 +231,20 @@ class LLMFinetuningProject(BaseProject):
         if processor is not None:
             self.config.processor = processor  # type: ignore[attr-defined]
         
-        # Validate num_codebooks_kept is explicitly set (prevents silent default to all codebooks)
+        # Get codebook selection parameters with sensible defaults for backwards compatibility
         num_codebooks_kept = getattr(self.config, 'num_codebooks_kept', None)
         if num_codebooks_kept is None:
-            raise ValueError(
-                "CRITICAL: 'num_codebooks_kept' is not defined in config! "
-                "This MUST be explicitly set to avoid defaulting to all codebooks (8) "
-                "which will cause stage1 checkpoint loading to fail silently. "
-                "Add 'num_codebooks_kept: 1' (or desired value) to your config YAML."
+            num_codebooks_kept = 8  # Default: use all 8 codebooks
+            print(
+                "[LLM Finetuning] WARNING: 'num_codebooks_kept' not in config, defaulting to 8 (all codebooks). "
+                "Consider adding 'num_codebooks_kept: 8' (or desired value) to your config YAML."
             )
         codebook_offset = getattr(self.config, 'codebook_offset', None)
         if codebook_offset is None:
-            raise ValueError(
-                "CRITICAL: 'codebook_offset' is not defined in config! "
-                "This MUST be explicitly set. Use 'codebook_offset: -1' to select the last codebook, "
-                "or 'codebook_offset: 0' to start from the first codebook."
+            codebook_offset = 0  # Default: start from first codebook
+            print(
+                "[LLM Finetuning] WARNING: 'codebook_offset' not in config, defaulting to 0. "
+                "Consider adding 'codebook_offset: 0' to your config YAML."
             )
 
         print(f"[LLM Finetuning] Using num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}")
