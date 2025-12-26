@@ -372,6 +372,11 @@ class LLMFinetuningProject(BaseProject):
         if self._uses_qformer_bridge() or prefix_tuning_enabled:
             num_ecg_tokens = 0
 
+        # Get sample weight column for weighted sampling (minority class upsampling)
+        sample_weight_col = None
+        if getattr(self.config, 'use_weighted_sampling', False):
+            sample_weight_col = getattr(self.config, 'sample_weight_column', 'sample_weight')
+
         # Get the dataloaders
         train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
             dataset_path=self.config.train_dataset_path,
@@ -384,7 +389,7 @@ class LLMFinetuningProject(BaseProject):
             num_workers=self.config.num_workers,
             num_replicas=self.config.world_size,
             rank=self.config.device,
-            shuffle=True, 
+            shuffle=True,
             pin_memory=True,
             instruct_mode=instruct_flag,
             # Use 0 placeholders when using Q-Former (or prefix tuning).
@@ -397,9 +402,10 @@ class LLMFinetuningProject(BaseProject):
             pattern_columns=getattr(self.config, 'pattern_label_columns', None),
             subset_size=None,
             balance_categories=False,
-            sampling_seed=None,
+            sampling_seed=getattr(self.config, 'seed', 42),
             medgemma_prompt_style=medgemma_prompt_style,
             debug_print_example=debug_print_example,
+            sample_weight_column=sample_weight_col,
         )
         
         validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(

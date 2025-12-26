@@ -1,11 +1,10 @@
-# MedGemma champion configuration with 1 codebook bridge (1CB) and WEIGHTED SAMPLING.
-# Stage 1 checkpoint: BEST_1CB_QFORMER_MEDGEMMA_i3zxhxj8_20251115-170156
+# MedGemma champion configuration with WEIGHTED SAMPLING for minority class upsampling.
+# Uses 8 codebooks (8CB) with 10 Q-Former layers for fine-grained ECG features.
 #
 # Key difference from base config:
 # - Uses weighted dataset with sample_weight column
 # - Enables WeightedDistributedSampler for minority class upsampling
 # - Keeps full 7.27M training samples (no downsampling)
-# - Uses 1CB Q-Former (6 layers) for simpler ECG representation
 
 pipeline_project: "ECG_Tokenizer_LLM_Finetuning"
 model_name: "ECG_Tokenizer_Wrapper"
@@ -52,8 +51,8 @@ num_warmup_percent: 0.256 # 5000 steps / 19531 total steps ≈ 25.6%
 # Restart parameters (kept for config schema compatibility)
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
-# Warm-start bridge from Stage-1 (1CB Q-Former checkpoint)
-stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_1CB_QFORMER_MEDGEMMA_i3zxhxj8_20251115-170156/checkpoints/stage1_last_epoch_006.pt"
+# Warm-start bridge from Stage-1 (8CB Q-Former checkpoint)
+stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1/BEST_QFORMER_MEDGEMMA_j4bb0w33_20251113-141927/checkpoints/stage1_last_epoch_010.pt"
 decoder_mode: "llm"
 decoder_name: "MedGemma_Decoder"
 tokenizer_name: "google/medgemma-4b-it"
@@ -66,24 +65,23 @@ huggingface_model_name: "google/medgemma-4b-it"
 # Use MedGemma chat template with <start_of_turn>/<end_of_turn> and <start_of_image>
 medgemma_prompt_style: true
 # Bridge configuration (Instruction-aware Q-Former for instruction tuning)
-# Parameters matched to Stage-1 checkpoint i3zxhxj8
 bridge_name: "InstructionAwareECGQFormerBridge"
 bridge_mid_dim: 768 # match Stage-1 hidden size
 bridge_num_heads: 12 # match Stage-1 heads
 bridge_dropout: 0.1
 bridge_num_special_tokens: 4
 num_query_tokens: 32 # Q-Former query tokens (replaces bridge_num_visual_tokens)
-bridge_qformer_layers: 6 # match Stage-1 bridge_num_layers
+bridge_qformer_layers: 10 # match Stage-1 layer count
 bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
 bridge_codebook_dropout: 0.0 # match Stage-1
-bridge_cross_every: 2 # match Stage-1 cross_every
+bridge_cross_every: 2 # match Stage-1 cross-attention frequency
 instruction_dropout: 0.2
 use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
-# Codebook selection (match Stage-1 i3zxhxj8 - 1 codebook)
-num_codebooks_kept: 1
+# Codebook selection (match Stage-1 j4bb0w33 - 8 codebooks)
+num_codebooks_kept: 8
 codebook_offset: -1
 num_quantizers: 8
 ecg_codebook_size: 512
@@ -91,7 +89,7 @@ llm_input_embedding_size: 2560
 # LoRA configuration
 use_lora: true
 lora_r: 32
-lora_alpha: 64 # Reduced from 64 for stable training (α/r = 1.0)
+lora_alpha: 64
 lora_dropout: 0.05
 lora_top_k_layers: 12
 lora_target_modules:
@@ -101,7 +99,7 @@ lora_target_modules:
   - o_proj
 lora_bias: "none"
 # ============================================================
-# WEIGHTED SAMPLING CONFIGURATION
+# WEIGHTED SAMPLING CONFIGURATION (NEW)
 # ============================================================
 # Use the weighted dataset with sample_weight column for minority class upsampling
 train_dataset_path: "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k_weighted.parquet"

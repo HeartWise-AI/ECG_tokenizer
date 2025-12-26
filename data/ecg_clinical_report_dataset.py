@@ -680,13 +680,23 @@ def get_distributed_clinical_report_dataloader(
     sampling_seed: Optional[int] = None,
     medgemma_prompt_style: bool = False,
     debug_print_example: bool = False,
+    sample_weight_column: Optional[str] = None,
 ):
+    """
+    Create a distributed DataLoader for ECG clinical report training.
+
+    Args:
+        sample_weight_column: Optional column name containing per-sample weights
+            for weighted sampling. When provided, enables minority class upsampling
+            using WeightedDistributedSampler instead of standard DistributedSampler.
+        ... (other args documented elsewhere)
+    """
     dataset: ECGClinicalReportDataset = ECGClinicalReportDataset(
-        dataset_path=dataset_path, 
+        dataset_path=dataset_path,
         signal_path_column=signal_path_column,
         ecg_waveform_length=ecg_waveform_length,
         ecg_num_leads=ecg_num_leads,
-        tokenizer=tokenizer, 
+        tokenizer=tokenizer,
         max_length=max_token_length,
         instruct_mode=instruct_mode,
         num_ecg_tokens=num_ecg_tokens,
@@ -699,6 +709,21 @@ def get_distributed_clinical_report_dataloader(
         medgemma_prompt_style=medgemma_prompt_style,
         debug_print_example=debug_print_example,
     )
+
+    # Extract sample weights before any subsetting
+    sample_weights = None
+    if sample_weight_column and sample_weight_column in dataset.df.columns:
+        sample_weights = dataset.df[sample_weight_column].values.tolist()
+        if rank == 0:
+            import logging
+            logging.info(
+                f"Weighted sampling enabled: {sum(w > 1.0 for w in sample_weights):,} "
+                f"samples with weight > 1.0 (mean weight: {sum(sample_weights)/len(sample_weights):.3f})"
+            )
+            # Debug: print value counts for sample weights
+            weight_counts = dataset.df[sample_weight_column].value_counts().sort_index()
+            logging.info(f"Sample weight value counts:\n{weight_counts.to_string()}")
+
     dataset = _maybe_subset_dataset(
         dataset=dataset,
         subset_size=subset_size,
@@ -706,15 +731,26 @@ def get_distributed_clinical_report_dataloader(
         category_column=category_column,
         seed=sampling_seed,
     )
+
+    # If dataset was subsetted, we need to extract the subset weights
+    if sample_weights is not None and subset_size is not None and subset_size > 0:
+        # If subsetting was applied, the dataset is now a Subset
+        # We need to get weights for only the selected indices
+        from torch.utils.data import Subset
+        if isinstance(dataset, Subset):
+            sample_weights = [sample_weights[i] for i in dataset.indices]
+
     return DistributedUtils.get_distributed_dataloader(
         dataset=dataset,
-        batch_size=batch_size, 
-        num_workers=num_workers, 
-        pin_memory=pin_memory, 
-        num_replicas=num_replicas, 
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        num_replicas=num_replicas,
         rank=rank,
         shuffle=shuffle,
-        collate_fn=custom_collate_fn
+        collate_fn=custom_collate_fn,
+        sample_weights=sample_weights,
+        weighted_sampling_seed=sampling_seed or 42,
     )
 
 

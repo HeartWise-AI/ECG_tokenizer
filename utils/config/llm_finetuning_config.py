@@ -111,10 +111,14 @@ class LLMFinetuningConfig(HeartWiseConfig):
     
     # Dataset column configuration (with defaults)
     prompt_column: str = "prompt"              # Input question/prompt column
-    answer_column: str = "generated_answer"    # Expected output/answer column  
+    answer_column: str = "generated_answer"    # Expected output/answer column
     category_column: str = "prompt_category"   # For per-category metrics
     pattern_label_columns: Tuple[str, ...] = field(default_factory=tuple)  # Multilabel ECG targets
     pattern_loss_weight: float = 0.3
+
+    # Weighted sampling for minority class upsampling
+    use_weighted_sampling: bool = False        # Enable WeightedRandomSampler for training
+    sample_weight_column: str = "sample_weight"  # Column containing per-sample weights
     # Optional BCE pos_weight for auxiliary pattern head (float or list of floats)
     pattern_bce_pos_weight: Optional[Any] = None
     
