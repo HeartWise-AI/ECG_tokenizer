@@ -323,10 +323,12 @@ class ECGClinicalReportDataset(Dataset):
                         add_generation_prompt=False
                     ))
 
-                if self.debug_print_example and not self._debug_example_printed:
-                    print("=== Debug: MedGemma CF sample ===")
+                do_debug = self.debug_print_example and not self._debug_example_printed
+                if do_debug:
+                    print("=== Debug: Prompt template ===")
+                    print(prompt_template_text)
+                    print("=== Debug: Full template ===")
                     print(full_template_text)
-                    self._debug_example_printed = True
                 
                 # Tokenize both
                 prompt_encoding = self._pt_tokenizer.encode_plus(
@@ -342,6 +344,25 @@ class ECGClinicalReportDataset(Dataset):
 
                 prompt_ids = prompt_encoding.input_ids
                 full_ids = full_encoding.input_ids
+
+                if do_debug:
+                    image_token_id = None
+                    try:
+                        image_token_id = self._pt_tokenizer.convert_tokens_to_ids("<start_of_image>")
+                    except Exception:
+                        image_token_id = None
+                    if isinstance(image_token_id, (list, tuple)):
+                        image_token_id = image_token_id[0] if image_token_id else None
+                    image_pos = None
+                    if image_token_id is not None:
+                        try:
+                            image_pos = full_ids.index(int(image_token_id))
+                        except ValueError:
+                            image_pos = None
+                    print(
+                        f"=== Debug: <start_of_image> token id: {image_token_id}, pos in full_ids: {image_pos} ==="
+                    )
+                    self._debug_example_printed = True
 
                 # Ensure assistant turn terminates with <eos> for stable stopping behavior.
                 # Some templates/tokenizers may omit or place EOT beyond truncation; enforce it here.

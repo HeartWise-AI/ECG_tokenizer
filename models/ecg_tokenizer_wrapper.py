@@ -934,6 +934,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         pattern_loss_weight: Optional[float] = None,
         pattern_label_count: Optional[int] = None,
         pattern_bce_pos_weight: Optional[Any] = None,
+        debug_ecg_injection: bool = False,
     ):
         """
         Args:
@@ -1075,6 +1076,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_mix_residual': bridge_mix_residual,
                         'bridge_add_modality_embed': bridge_add_modality_embed,
                         'bridge_add_cls_token': bridge_add_cls_token,
+                        'debug_ecg_injection': debug_ecg_injection,
                     })
                     # Drop explicit None values for Q-Former-only fields to prevent int/float(None) casts
                     for k in (

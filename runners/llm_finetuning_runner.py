@@ -88,6 +88,7 @@ class LLMFinetuningRunner(BaseRunner):
         validation_dataloader: DataLoader,
         wandb_wrapper: WandbWrapper | None = None,
         train_dataloader: DataLoader | None = None,
+        phase1_train_dataloader: DataLoader | None = None,
         optimizer: AdamW | None = None,
         scheduler: LRScheduler | None = None,
         scaler: GradScaler | None = None,
@@ -101,6 +102,7 @@ class LLMFinetuningRunner(BaseRunner):
             validation_dataloader: DataLoader for validation
             wandb_wrapper: WandbWrapper for logging
             train_dataloader: DataLoader for training
+            phase1_train_dataloader: Optional DataLoader for phase1 subset training
             optimizer: Optimizer for the model
             scheduler: Scheduler for the optimizer
             scaler: Scaler for the optimizer
@@ -109,6 +111,8 @@ class LLMFinetuningRunner(BaseRunner):
         self.model: ECG_Tokenizer_Wrapper = model
         self.config: LLMFinetuningConfig = config
         self.wandb_wrapper: WandbWrapper | None = wandb_wrapper
+        self.full_train_dataloader: DataLoader | None = train_dataloader
+        self.phase1_train_dataloader: DataLoader | None = phase1_train_dataloader
         self.train_dataloader: DataLoader | None = train_dataloader
         self.validation_dataloader: DataLoader | None = validation_dataloader
         self.test_dataloader: DataLoader | None = test_dataloader
@@ -233,6 +237,16 @@ class LLMFinetuningRunner(BaseRunner):
                     print("   - Continuing with existing optimizer configuration")
                     print("   - Monitoring for improved performance")
                     print("="*80 + "\n")
+
+        self._set_phase_train_dataloader(self.current_phase)
+
+    def _set_phase_train_dataloader(self, phase: str | None) -> None:
+        if self.full_train_dataloader is None:
+            return
+        if phase == 'phase1' and self.phase1_train_dataloader is not None:
+            self.train_dataloader = self.phase1_train_dataloader
+        else:
+            self.train_dataloader = self.full_train_dataloader
 
     def _build_generation_kwargs(self, tokenizer=None) -> dict:
         """Build generation kwargs for validation generations."""
@@ -3111,9 +3125,15 @@ class LLMFinetuningRunner(BaseRunner):
             
             # Get num_ecg_tokens for proper decoding offset
             # Q-Former uses num_query_tokens, projection bridge uses num_ecg_tokens
-            num_ecg_tokens = int(getattr(self.config, 'num_query_tokens', 0))
+            num_ecg_tokens = getattr(self.config, 'num_query_tokens', 0)
+            if num_ecg_tokens is None:
+                num_ecg_tokens = 0
+            num_ecg_tokens = int(num_ecg_tokens)
             if num_ecg_tokens == 0:
-                num_ecg_tokens = int(getattr(self.config, 'num_ecg_tokens', 0))
+                num_ecg_tokens = getattr(self.config, 'num_ecg_tokens', 0)
+                if num_ecg_tokens is None:
+                    num_ecg_tokens = 0
+                num_ecg_tokens = int(num_ecg_tokens)
             
             LLM_metrics: dict[str, Union[float, list[str]]] = registered_metrics.compute_score(
                 gen_ids,

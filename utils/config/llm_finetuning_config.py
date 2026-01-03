@@ -128,6 +128,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     medgemma_prompt_style: bool = False
     # Optional one-time debug print of a formatted sample at startup
     debug_print_example: bool = False
+    # Debug: assert/log ECG injection after <start_of_image>
+    debug_ecg_injection: bool = False
 
     # Prefix tuning toggle (with default)
     prefix_tuning: bool = False

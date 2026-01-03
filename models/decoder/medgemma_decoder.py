@@ -117,6 +117,8 @@ class MedGemmaDecoder(nn.Module):
         self._stage1_checkpoint_used = False
         self.stage1_metadata: Dict[str, Any] = {}
         self._stage1_config_path: Optional[Path] = None
+        self.debug_ecg_injection = bool(unused_kwargs.pop("debug_ecg_injection", False))
+        self._debug_ecg_injection_logged = False
         if stage1_checkpoint_path:
             self._stage1_config_path = self._infer_stage1_config_path(stage1_checkpoint_path)
             self.stage1_metadata = self._inspect_stage1_metadata(stage1_checkpoint_path)
@@ -1464,6 +1466,11 @@ class MedGemmaDecoder(nn.Module):
             if ecg_emb.dim() == 1:
                 ecg_emb = ecg_emb.unsqueeze(0)
             ecg_len = ecg_emb.size(0)
+            if self.debug_ecg_injection and not self._debug_ecg_injection_logged:
+                print(
+                    f"[ECG Injection] after <start_of_image>: batch={b}, img_pos={img_pos}, ecg_len={ecg_len}"
+                )
+                self._debug_ecg_injection_logged = True
             filler_ids = torch.full((ecg_len,), pad_id, device=device, dtype=ids_b.dtype)
             filler_mask = torch.ones(ecg_len, device=device, dtype=mask_b.dtype)
             filler_emb = ecg_emb
@@ -1742,6 +1749,14 @@ class MedGemmaDecoder(nn.Module):
             ecg_embeddings=prefix_embeddings,
             embed_layer=embed_layer,
         )
+
+        if self.debug_ecg_injection:
+            start_img_id = self._start_image_token_id()
+            if start_img_id is not None and (text_input_ids == start_img_id).any().item():
+                if merged is None:
+                    raise ValueError(
+                        "ECG injection debug: <start_of_image> present but injection failed in forward()."
+                    )
 
         if merged is not None:
             inputs_embeds, attn_mask, input_ids, prepared_labels = merged
@@ -2085,6 +2100,14 @@ class MedGemmaDecoder(nn.Module):
             ecg_embeddings=ecg_embeddings,
             embed_layer=embed_layer,
         )
+
+        if self.debug_ecg_injection:
+            start_img_id = self._start_image_token_id()
+            if start_img_id is not None and (prompt_input_ids == start_img_id).any().item():
+                if merged is None:
+                    raise ValueError(
+                        "ECG injection debug: <start_of_image> present but injection failed in generation path."
+                    )
 
         if merged is not None:
             inputs_embeds, attention_mask, _, _ = merged

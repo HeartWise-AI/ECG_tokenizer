@@ -3,7 +3,7 @@ import torch
 from typing import Any, Optional, Tuple
 from types import SimpleNamespace
 from collections import deque
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.optim.optimizer import Optimizer
 try:
     from torch.amp import GradScaler as _TorchGradScaler  # type: ignore
@@ -26,7 +26,11 @@ from utils.wandb_wrapper import WandbWrapper
 from utils.config import LLMFinetuningConfig, ECGTokenizerTrainingConfig
 from projects.base_project import BaseProject
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
-from data.ecg_clinical_report_dataset import get_distributed_clinical_report_dataloader
+from data.ecg_clinical_report_dataset import (
+    get_distributed_clinical_report_dataloader,
+    custom_collate_fn,
+    _maybe_subset_dataset,
+)
 
 # Add the config to the safe globals
 torch.serialization.add_safe_globals([LLMFinetuningConfig])
@@ -248,6 +252,12 @@ class LLMFinetuningProject(BaseProject):
             )
 
         print(f"[LLM Finetuning] Using num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}")
+        bridge_name = str(getattr(self.config, "bridge_name", ""))
+        if "ProjectionBridge" in bridge_name:
+            print(
+                f"[LLM Finetuning] Bridge={bridge_name} uses fused quantized features; "
+                f"tokenizer has num_quantizers={num_quantizers} codebooks."
+            )
 
         # Initialize the tokenizer with the appropriate configuration
         ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
@@ -288,6 +298,7 @@ class LLMFinetuningProject(BaseProject):
             bridge_mix_residual=getattr(self.config, 'bridge_mix_residual', None),
             bridge_add_modality_embed=getattr(self.config, 'bridge_add_modality_embed', None),
             bridge_add_cls_token=getattr(self.config, 'bridge_add_cls_token', None),
+            debug_ecg_injection=getattr(self.config, 'debug_ecg_injection', False),
             num_codebooks_kept=num_codebooks_kept,
             codebook_offset=codebook_offset,
             use_lora=self.config.use_lora,
@@ -437,6 +448,54 @@ class LLMFinetuningProject(BaseProject):
             debug_print_example=debug_print_example,
         )
 
+        phase1_train_dataloader: DataLoader | None = None
+        phase1_subset_size = phase1_cfg.get('train_subset_size')
+        phase1_subset_ratio = phase1_cfg.get('train_subset_ratio')
+        if phase1_subset_size is None and phase1_subset_ratio is not None:
+            try:
+                ratio = float(phase1_subset_ratio)
+            except (TypeError, ValueError):
+                ratio = 0.0
+            if ratio > 1.0:
+                ratio = ratio / 100.0
+            if 0.0 < ratio < 1.0:
+                phase1_subset_size = max(1, int(len(train_dataloader.dataset) * ratio))
+
+        if phase1_subset_size is not None:
+            total_train_size = len(train_dataloader.dataset)
+            phase1_subset_size = int(phase1_subset_size)
+            if 0 < phase1_subset_size < total_train_size:
+                subset_dataset = _maybe_subset_dataset(
+                    dataset=train_dataloader.dataset,
+                    subset_size=phase1_subset_size,
+                    balance_categories=bool(phase1_cfg.get('train_subset_balance_categories', False)),
+                    category_column=category_col,
+                    seed=getattr(self.config, 'seed', 42),
+                )
+                sample_weights = None
+                if sample_weight_col and hasattr(train_dataloader.dataset, 'df'):
+                    sample_weights = train_dataloader.dataset.df[sample_weight_col].values.tolist()
+                    if isinstance(train_dataloader.dataset, Subset):
+                        sample_weights = [sample_weights[i] for i in train_dataloader.dataset.indices]
+                    if isinstance(subset_dataset, Subset):
+                        sample_weights = [sample_weights[i] for i in subset_dataset.indices]
+                phase1_train_dataloader = DistributedUtils.get_distributed_dataloader(
+                    dataset=subset_dataset,
+                    batch_size=self.config.batch_size,
+                    num_workers=self.config.num_workers,
+                    pin_memory=True,
+                    num_replicas=self.config.world_size,
+                    rank=self.config.device,
+                    shuffle=True,
+                    collate_fn=custom_collate_fn,
+                    sample_weights=sample_weights,
+                    weighted_sampling_seed=getattr(self.config, 'seed', 42),
+                )
+                if self.config.is_ref_device:
+                    print(
+                        f"[LLM Finetuning] Phase1 train subset: {len(subset_dataset):,}/{total_train_size:,} samples"
+                    )
+
         # Wrap the model in DDP
         ecg_tokenizer = DistributedUtils.DDP(
             ecg_tokenizer,
@@ -523,6 +582,7 @@ class LLMFinetuningProject(BaseProject):
             "scaler": scaler,
             "model": ecg_tokenizer,
             "train_dataloader": train_dataloader,
+            "phase1_train_dataloader": phase1_train_dataloader,
             "validation_dataloader": validation_dataloader,
             "start_epoch": max(1, start_epoch)
         }
@@ -987,6 +1047,7 @@ class LLMFinetuningProject(BaseProject):
             llm_input_embedding_size=llm_input_embedding_size,
             tokenizer=infer_tokenizer,
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+            debug_ecg_injection=getattr(self.config, 'debug_ecg_injection', False),
             prefix_tuning=getattr(pretrained_config, 'prefix_tuning', getattr(self.config, 'prefix_tuning', False)),
             bridge_qformer_layers=getattr(pretrained_config, 'bridge_qformer_layers', getattr(self.config, 'bridge_qformer_layers', None)),
             bridge_text_hidden_size=getattr(pretrained_config, 'bridge_text_hidden_size', getattr(self.config, 'bridge_text_hidden_size', None)),
