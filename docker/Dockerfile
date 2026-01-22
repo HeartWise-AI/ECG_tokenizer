@@ -25,7 +25,8 @@ RUN mkdir -p ${APP_HOME}/inputs \
     ${APP_HOME}/outputs \
     ${APP_HOME}/ecg_signals \
     ${APP_HOME}/checkpoints \
-    ${APP_HOME}/config
+    ${APP_HOME}/config \
+    ${APP_HOME}/preprocessing
 
 # Copy requirements and install Python dependencies
 COPY docker/requirements.txt ${APP_HOME}/requirements.txt
@@ -50,10 +51,10 @@ COPY config/ ${APP_HOME}/config/
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh
 COPY docker/heartwise.config ${APP_HOME}/heartwise.config
-COPY docker/run_pipeline.sh ${APP_HOME}/run_pipeline.sh
+COPY docker/run_pipeline.bash ${APP_HOME}/run_pipeline.bash
 
 # Make scripts executable
-RUN chmod +x ${APP_HOME}/entrypoint.sh ${APP_HOME}/run_pipeline.sh
+RUN chmod +x ${APP_HOME}/entrypoint.sh ${APP_HOME}/run_pipeline.bash
 
 # Set Python path
 ENV PYTHONPATH="${APP_HOME}:${PYTHONPATH}"

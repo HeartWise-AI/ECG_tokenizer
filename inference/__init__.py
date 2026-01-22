@@ -11,13 +11,10 @@ Architecture:
 from inference.pipeline_config import PipelineConfig
 from inference.pipeline_args import PipelineArgs
 from inference.ecg_pipeline import ECGInferencePipeline, ECGDataset
-from inference.psa_normalizer import PSANormalizer, create_psa_normalizer
 
 __all__ = [
     "PipelineConfig",
     "PipelineArgs",
     "ECGInferencePipeline",
-    "ECGDataset",
-    "PSANormalizer",
-    "create_psa_normalizer",
+    "ECGDataset"
 ]

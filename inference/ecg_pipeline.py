@@ -34,162 +34,91 @@ os.environ.setdefault("RANK", "0")
 os.environ.setdefault("WORLD_SIZE", "1")
 
 from inference.pipeline_config import PipelineConfig
+from inference.files_handler import ECGFileHandler
 from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 from utils.metrics.ecg_metrics import compute_metrics
-from utils.constants import ECG_PATTERNS, PTBXL_POWER_RATIO
+from utils.constants import ECG_PATTERNS, PTBXL_POWER_RATIO, ECG_FILE_NAME_COLUMN, DIAGNOSIS_COLUMN
 
 
 class ECGDataset(Dataset):
     """
     Dataset for ECG inference that loads signals from disk.
     
-    Only loads the minimal required columns:
-    - waveform_path: Path to ECG signal file
-    - report: Text report for the ECG
-    - waveform_name: Identifier for the ECG (optional)
-    
-    Use this when signals are already preprocessed on disk.
+    Standard columns (following DeepECG_Docker pattern):
+    - diagnosis: Text report/diagnosis for BERT classification
+    - ecg_path: Absolute/relative path to ECG file
     """
     
     def __init__(
         self,
         parquet_path: str,
-        waveform_path_column: str = "waveform_path",
-        report_column: str = "report",
-        waveform_name_column: str = "waveform_name"
+        ecg_signals_path: str = "/app/ecg_signals"
     ):
         self.df = pd.read_parquet(parquet_path)
-        self.waveform_path_column = waveform_path_column
-        self.report_column = report_column
-        self.waveform_name_column = waveform_name_column
+        self.ecg_signals_path = ecg_signals_path
         
-        self.waveform_paths = self.df[waveform_path_column].tolist() if waveform_path_column in self.df.columns else []
-        self.reports = self.df[report_column].tolist() if report_column in self.df.columns else []
-        
-        if waveform_name_column in self.df.columns:
-            self.waveform_names = self.df[waveform_name_column].tolist()
+        # Use standardized column names
+        if 'ecg_path' in self.df.columns:
+            self.ecg_paths = self.df['ecg_path'].tolist()
         else:
-            self.waveform_names = [f"ecg_{i}" for i in range(len(self.df))]
+            self.ecg_paths = []
+        
+        # Diagnosis (text reports)
+        self.diagnoses = self.df[DIAGNOSIS_COLUMN].tolist() if DIAGNOSIS_COLUMN in self.df.columns else []
+        
+        # ECG file names as identifiers
+        if 'ecg_path' in self.df.columns:
+            self.ecg_names = [Path(p).name if p else f"ecg_{i}" for i, p in enumerate(self.ecg_paths)]
+        else:
+            self.ecg_names = [f"ecg_{i}" for i in range(len(self.df))]
         
         print(f"Loaded {len(self.df)} samples from {parquet_path}")
-        print(f"  - Waveform paths: {len([p for p in self.waveform_paths if p])} non-empty")
-        print(f"  - Reports: {len([r for r in self.reports if r])} non-empty")
+        print(f"  - ECG paths: {len([p for p in self.ecg_paths if p])} non-empty")
+        print(f"  - Diagnoses: {len([r for r in self.diagnoses if r])} non-empty")
     
     def __len__(self) -> int:
         return len(self.df)
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        waveform_path = self.waveform_paths[idx] if idx < len(self.waveform_paths) else ""
-        report = self.reports[idx] if idx < len(self.reports) else ""
-        waveform_name = self.waveform_names[idx] if idx < len(self.waveform_names) else f"ecg_{idx}"
+        ecg_path = self.ecg_paths[idx] if idx < len(self.ecg_paths) else ""
+        diagnosis = self.diagnoses[idx] if idx < len(self.diagnoses) else ""
+        ecg_name = self.ecg_names[idx] if idx < len(self.ecg_names) else f"ecg_{idx}"
         
         waveform = None
         
-        if waveform_path and os.path.exists(waveform_path):
+        if ecg_path and os.path.exists(ecg_path):
             try:
+                # Handle preprocessed .base64 files
+                if ecg_path.endswith('.base64'):
+                    waveform = ECGFileHandler.load_ecg_signal(ecg_path)
+                    # ECGFileHandler returns (2500, 12), transpose to (12, 2500)
+                    if waveform.shape == (2500, 12):
+                        waveform = waveform.T
                 # Handle WFDB files (.hea extension)
-                if waveform_path.endswith('.hea'):
+                elif ecg_path.endswith('.hea'):
                     import wfdb
-                    # Remove .hea extension for wfdb.rdrecord
-                    record_path = waveform_path[:-4]
+                    record_path = ecg_path[:-4]
                     record = wfdb.rdrecord(record_path)
                     waveform = record.p_signal  # Shape: (2500, 12)
-                    # Transpose to (12, 2500) for consistency
                     if waveform.shape == (2500, 12):
                         waveform = waveform.T
                 # Handle NPY files
                 else:
-                    waveform = np.load(waveform_path)
+                    waveform = np.load(ecg_path)
                     if waveform.ndim == 3:
                         waveform = waveform.squeeze(-1)
                     if waveform.shape[0] != 12:
                         waveform = waveform.T
             except Exception as e:
-                print(f"Error loading waveform {waveform_path}: {e}")
+                print(f"Error loading waveform {ecg_path}: {e}")
                 waveform = None
         
         return {
             "idx": idx,
             "waveform": waveform,
-            "waveform_path": waveform_path,
-            "report": report,
-            "waveform_name": waveform_name,
-        }
-
-
-class ECGDatasetInMemory(Dataset):
-    """
-    Dataset for ECG inference that uses preprocessed signals stored in RAM.
-    
-    This is more efficient for inference as it:
-    - Avoids disk I/O during iteration
-    - Uses signals preprocessed in-memory (no disk storage overhead)
-    """
-    
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        waveform_path_column: str = "waveform_path",
-        report_column: str = "report",
-        waveform_name_column: str = "waveform_name"
-    ):
-        self.df = df
-        self.waveform_path_column = waveform_path_column
-        self.report_column = report_column
-        self.waveform_name_column = waveform_name_column
-        
-        # Check if preprocessed signals are available in memory
-        self.has_preprocessed = 'preprocessed_signal' in df.columns
-        
-        self.waveform_paths = df[waveform_path_column].tolist() if waveform_path_column in df.columns else []
-        self.reports = df[report_column].tolist() if report_column in df.columns else []
-        
-        if waveform_name_column in df.columns:
-            self.waveform_names = df[waveform_name_column].tolist()
-        else:
-            self.waveform_names = [f"ecg_{i}" for i in range(len(df))]
-        
-        # Store preprocessed signals as list for fast indexing
-        if self.has_preprocessed:
-            self.preprocessed_signals = df['preprocessed_signal'].tolist()
-        else:
-            self.preprocessed_signals = None
-        
-        print(f"Created in-memory dataset with {len(df)} samples")
-        print(f"  - Using preprocessed signals from RAM: {self.has_preprocessed}")
-        print(f"  - Reports: {len([r for r in self.reports if r])} non-empty")
-    
-    def __len__(self) -> int:
-        return len(self.df)
-    
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        waveform_path = self.waveform_paths[idx] if idx < len(self.waveform_paths) else ""
-        report = self.reports[idx] if idx < len(self.reports) else ""
-        waveform_name = self.waveform_names[idx] if idx < len(self.waveform_names) else f"ecg_{idx}"
-        
-        waveform = None
-        
-        # Use preprocessed signal from RAM (fast!)
-        if self.has_preprocessed and self.preprocessed_signals is not None:
-            waveform = self.preprocessed_signals[idx]
-        # Fallback: load from disk
-        elif waveform_path and os.path.exists(waveform_path):
-            try:
-                waveform = np.load(waveform_path)
-                if waveform.ndim == 3:
-                    waveform = waveform.squeeze(-1)
-                if waveform.shape[0] != 12:
-                    waveform = waveform.T
-            except Exception as e:
-                print(f"Error loading waveform {waveform_path}: {e}")
-                waveform = None
-        
-        return {
-            "idx": idx,
-            "waveform": waveform,
-            "waveform_path": waveform_path,
-            "report": report,
-            "waveform_name": waveform_name,
+            "ecg_path": ecg_path,
+            "diagnosis": diagnosis,
+            "ecg_name": ecg_name,
         }
 
 
@@ -277,121 +206,147 @@ class ECGInferencePipeline:
         if self.config.efficientnet_checkpoint:
             self._load_efficientnet_classifier()
     
-    def _preprocess_in_memory(self, df: pd.DataFrame) -> pd.DataFrame:
+    def save_and_preprocess_data(
+        self, 
+        df: pd.DataFrame, 
+        preprocessing_folder: str,
+        preprocessing_n_workers: int = 16
+    ) -> pd.DataFrame:
         """
-        Preprocess raw ECG signals in memory using ECGSignalProcessor.
+        Preprocess ECG signals and save to disk as .base64 files.
         
-        This applies:
-        1. Spectral power scaling (to match PTBXL reference)
-        2. Dynamic peak detection and removal
+        Following DeepECG_Docker pattern for preprocessing mode.
         
-        No disk writes - signals are stored in RAM as DataFrame column.
+        Standard columns used:
+            - diagnosis: Text report/diagnosis
+            - ecg_path: Absolute/relative path to ECG file
         
         Args:
-            df: Input DataFrame with waveform paths.
+            df: Input DataFrame with ecg_file_name column
+            preprocessing_folder: Directory to save preprocessed .base64 files
+            preprocessing_n_workers: Number of workers for parallel processing
             
         Returns:
-            DataFrame with 'preprocessed_signal' column containing numpy arrays.
+            DataFrame with updated ecg_path pointing to .base64 files
         """
         print("\n" + "="*60)
-        print("Preprocessing ECG Signals (In-Memory)")
+        print("Preprocessing ECG Signals (Disk Storage)")
         print("="*60)
         
-        waveform_col = self.config.waveform_path_column
-        print(f"Loading {len(df)} waveforms into memory...")
+        os.makedirs(preprocessing_folder, exist_ok=True)
         
-        # Load all waveforms from disk into RAM
-        ecgs = []
-        valid_indices = []
+        ecg_signals_path = self.config.ecg_signals_path
+        print(f"ECG signals path: {ecg_signals_path}")
+        print(f"Loading {len(df)} waveforms...")
         
-        for idx, row in tqdm(df.iterrows(), total=len(df), desc="Loading signals"):
-            waveform_path = row.get(waveform_col, "")
-            if not waveform_path or not os.path.exists(waveform_path):
+        batch_size = 10000
+        total_batches = (len(df) + batch_size - 1) // batch_size
+        processed_df = pd.DataFrame()
+        
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min((batch_idx + 1) * batch_size, len(df))
+            
+            print(f"\nProcessing batch {batch_idx + 1}/{total_batches}")
+            print(f"Batch size: {end_idx - start_idx} records")
+            
+            batch_df = df.iloc[start_idx:end_idx].copy()
+            ecgs = []
+            
+            for index, row in tqdm(batch_df.iterrows(), total=len(batch_df), desc="Loading signals"):
+                # Use ecg_path directly (DeepECG_Docker pattern)
+                ecg_path = row.get("ecg_path")
+                if not ecg_path:
+                    continue
+                
+                if not os.path.exists(ecg_path):
+                    continue
+                
+                try:
+                    # Handle WFDB files (.hea extension)
+                    if ecg_path.endswith('.hea'):
+                        import wfdb
+                        record_path = ecg_path[:-4]
+                        record = wfdb.rdrecord(record_path)
+                        lead_array = record.p_signal
+                    # Handle NPY files
+                    else:
+                        lead_array = np.load(ecg_path)
+                    
+                    if np.isnan(lead_array).any():
+                        continue
+                    
+                    file_id = os.path.basename(ecg_path).replace(".npy", "").replace(".hea", "")
+                    
+                    # Shape corrections - ensure (2500, 12) format
+                    if lead_array.shape[-1] == 1:
+                        lead_array = lead_array.squeeze(-1)
+                    if lead_array.shape[0] == 12:
+                        lead_array = lead_array.transpose(1, 0)
+                    
+                    # Handle different lengths
+                    if lead_array.shape[0] != 2500:
+                        if lead_array.shape[0] < 2500:
+                            print(f"Warning: Skipping {file_id} - signal length {lead_array.shape[0]} < 2500")
+                            continue
+                        else:
+                            step = lead_array.shape[0] // 2500
+                            lead_array = lead_array[::step, :][:2500, :]
+                    
+                    if lead_array.shape[1] != 12:
+                        print(f"Warning: Skipping {file_id} - incorrect number of leads: {lead_array.shape[1]}")
+                        continue
+                    
+                    new_path = os.path.join(preprocessing_folder, f"{file_id}.base64")
+                    batch_df.at[index, 'ecg_path'] = new_path
+                    ecgs.append([new_path, lead_array])
+                    
+                except Exception as e:
+                    print(f"Error processing file {ecg_path}: {str(e)}")
+                    continue
+            
+            if len(ecgs) == 0:
+                print(f"Warning: No valid signals in batch {batch_idx + 1}")
                 continue
             
-            try:
-                # Handle WFDB files (.hea extension)
-                if waveform_path.endswith('.hea'):
-                    import wfdb
-                    # Remove .hea extension for wfdb.rdrecord
-                    record_path = waveform_path[:-4]
-                    record = wfdb.rdrecord(record_path)
-                    lead_array = record.p_signal  # Shape: (2500, 12)
-                # Handle NPY files
-                else:
-                    lead_array = np.load(waveform_path)
+            ecg_signals_df = pd.DataFrame(ecgs, columns=['ecg_path', 'ecg_signal'])
+            
+            # Apply PSA normalization if processor is available
+            if self.ecg_signal_processor is not None:
+                print("Scaling ECG signals...")
+                scaled_df = self.ecg_signal_processor.scale_ecg_signals(
+                    df=ecg_signals_df,
+                    power_ratio=PTBXL_POWER_RATIO
+                )
                 
-                if np.isnan(lead_array).any():
-                    continue
-                
-                # Shape corrections
-                if lead_array.shape[-1] == 1:
-                    lead_array = lead_array.squeeze(-1)
-                if lead_array.shape[0] == 12:
-                    lead_array = lead_array.transpose(1, 0)
-                
-                # Handle different lengths
-                if lead_array.shape[0] != 2500:
-                    if lead_array.shape[0] < 2500:
-                        continue
-                    else:
-                        step = lead_array.shape[0] // 2500
-                        lead_array = lead_array[::step, :][:2500, :]
-                
-                if lead_array.shape[1] != 12:
-                    continue
-                
-                ecgs.append(lead_array)
-                valid_indices.append(idx)
-                
-            except Exception as e:
-                print(f"Warning: Error loading {waveform_path}: {e}")
-                continue
+                print("Processing ECG signals...")
+                cleaned_df = self.ecg_signal_processor.clean_and_process_ecg_leads(
+                    df=scaled_df,
+                    max_workers=preprocessing_n_workers
+                )
+            else:
+                cleaned_df = ecg_signals_df
+            
+            # Save processed signals as .base64 files
+            print("Saving processed signals...")
+            for _, row in tqdm(cleaned_df.iterrows(), total=len(cleaned_df), desc="Saving signals"):
+                ECGFileHandler.save_ecg_signal(
+                    ecg_signal=row['ecg_signal'],
+                    filename=row['ecg_path']
+                )
+            
+            processed_df = pd.concat([processed_df, batch_df], ignore_index=True)
+            
+            del ecg_signals_df, cleaned_df
         
-        if not ecgs:
-            print("Warning: No valid waveforms found. Returning original DataFrame.")
-            return df
-        
-        print(f"Loaded {len(ecgs)} valid waveforms into RAM")
-        
-        # Create temporary DataFrame for ECGSignalProcessor
-        ecg_signals_df = pd.DataFrame({
-            'ecg_path': [f"mem_{i}" for i in range(len(ecgs))],
-            'ecg_signal': ecgs
-        })
-        
-        # Step 1: Scale ECG signals to match PTBXL spectral power
-        print("\nStep 1: Scaling ECG signals to match reference spectral power...")
-        scaled_df = self.ecg_signal_processor.scale_ecg_signals(
-            df=ecg_signals_df,
-            power_ratio=PTBXL_POWER_RATIO
-        )
-        
-        # Step 2: Clean and process ECG leads (dynamic peak detection + removal)
-        print("\nStep 2: Cleaning and processing ECG leads...")
-        cleaned_df = self.ecg_signal_processor.clean_and_process_ecg_leads(
-            df=scaled_df,
-            max_workers=self.config.num_workers
-        )
-        
-        # Add preprocessed signals to original DataFrame (in RAM, no disk write)
-        df_valid = df.iloc[valid_indices].copy()
-        
-        # Transpose signals to (12, 2500) format for model input
-        preprocessed_signals = []
-        for signal in cleaned_df['ecg_signal'].tolist():
-            if signal.shape[0] == 2500 and signal.shape[1] == 12:
-                signal = signal.T  # (2500, 12) -> (12, 2500)
-            preprocessed_signals.append(signal)
-        
-        df_valid['preprocessed_signal'] = preprocessed_signals
+        if len(processed_df) == 0:
+            raise ValueError("No data was successfully processed")
         
         print(f"\nPreprocessing complete!")
-        print(f"  Preprocessed signals: {len(preprocessed_signals)} (stored in RAM)")
-        print(f"  Disk writes: 0 bytes")
+        print(f"  Processed {len(processed_df)} files to {preprocessing_folder}")
         print("="*60 + "\n")
         
-        return df_valid
+        return processed_df
     
     def _load_bert_classifier(self) -> None:
         """Load BERT classifier for 77-class report classification."""
@@ -865,9 +820,9 @@ class ECGInferencePipeline:
         waveforms = batch_data.get("waveforms")
         batch = batch_data.get("batch", [])
         
-        # Step 1: Run BERT FIRST on text reports (GROUND TRUTH)
-        reports = [item.get("report", "") for item in batch]
-        bert_results = self.run_bert_classification(reports)
+        # Step 1: Run BERT FIRST on text diagnoses (GROUND TRUTH)
+        diagnoses = [item.get("diagnosis", "") for item in batch]
+        bert_results = self.run_bert_classification(diagnoses)
         
         # Step 2: Extract embeddings from signals
         tokenizer_embeddings = []
@@ -901,9 +856,9 @@ class ECGInferencePipeline:
         # Step 4: Assemble results
         for i, item in enumerate(batch):
             result = {
-                "waveform_name": item.get("waveform_name", ""),
-                "waveform_path": item.get("waveform_path", ""),
-                "original_report": item.get("report", ""),
+                "ecg_name": item.get("ecg_name", ""),
+                "ecg_path": item.get("ecg_path", ""),
+                "diagnosis": item.get("diagnosis", ""),
             }
             
             # Store BERT classification for ground truth generation (not in final JSON)
@@ -920,8 +875,8 @@ class ECGInferencePipeline:
             
             # Generate QA pairs
             qa_pairs = self.generate_qa_pairs(
-                report=item.get("report", ""),
-                waveform_name=item.get("waveform_name", "")
+                report=item.get("diagnosis", ""),
+                waveform_name=item.get("ecg_name", "")
             )
             result["qa_results"] = [
                 {
@@ -952,27 +907,10 @@ class ECGInferencePipeline:
         print(f"Device: {self.device}")
         print(f"{'='*60}\n")
         
-        # Load raw parquet
-        df = pd.read_parquet(self.config.input_parquet)
-        
-        # Preprocess signals in memory (no disk writes)
-        if self.config.apply_psa_normalization and self.ecg_signal_processor is not None:
-            df = self._preprocess_in_memory(df)
-            # Create in-memory dataset
-            dataset = ECGDatasetInMemory(
-                df=df,
-                waveform_path_column=self.config.waveform_path_column,
-                report_column=self.config.report_column,
-                waveform_name_column=self.config.waveform_name_column
-            )
-        else:
-            # No preprocessing - load directly from disk
-            dataset = ECGDataset(
-                parquet_path=self.config.input_parquet,
-                waveform_path_column=self.config.waveform_path_column,
-                report_column=self.config.report_column,
-                waveform_name_column=self.config.waveform_name_column
-            )
+        dataset = ECGDataset(
+            parquet_path=self.config.input_parquet,
+            ecg_signals_path=self.config.ecg_signals_path
+        )
         
         dataloader = DataLoader(
             dataset,
@@ -998,9 +936,9 @@ class ECGInferencePipeline:
         cleaned_results = []
         for result in all_results:
             cleaned = {
-                "waveform_name": result.get("waveform_name", ""),
-                "waveform_path": result.get("waveform_path", ""),
-                "original_report": result.get("original_report", ""),
+                "ecg_name": result.get("ecg_name", ""),
+                "ecg_path": result.get("ecg_path", ""),
+                "diagnosis": result.get("diagnosis", ""),
                 "tokenizer_embeddings": result.get("tokenizer_embeddings", {}),
                 "qa_results": result.get("qa_results", []),
             }

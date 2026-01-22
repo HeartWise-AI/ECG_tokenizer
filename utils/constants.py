@@ -1,3 +1,22 @@
+# =============================================================================
+# STANDARD INPUT COLUMN NAMES (for Docker inference pipeline)
+# =============================================================================
+# These are the required column names for input CSV/Parquet files.
+# Following DeepECG_Docker pattern for standardized input format.
+
+# Required columns
+ECG_FILE_NAME_COLUMN = "ecg_file_name"  # ECG signal filename (joined with ecg_signals_path)
+DIAGNOSIS_COLUMN = "diagnosis"          # Text report/diagnosis for BERT classification
+
+# Pipeline execution modes
+class Mode:
+    FULL_RUN = "full_run"
+    ANALYSIS = "analysis"
+    PREPROCESSING = "preprocessing"
+
+# =============================================================================
+# ECG LEAD CONFIGURATION
+# =============================================================================
 
 standard_lead_order = [
     "I", 

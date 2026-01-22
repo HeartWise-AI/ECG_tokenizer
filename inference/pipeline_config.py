@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 Pipeline configuration for ECG Tokenizer Docker inference.
+
+Standard input columns (following DeepECG_Docker pattern):
+    - diagnosis: Text report/diagnosis for BERT classification
+    - ecg_path: Absolute/relative path to ECG file
 """
 
 from dataclasses import dataclass, field
@@ -10,6 +14,14 @@ import os
 import shutil
 import yaml
 import json
+
+import sys
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from utils.constants import ECG_FILE_NAME_COLUMN, DIAGNOSIS_COLUMN
 
 
 def resolve_checkpoint_path(path: Optional[str], repo_root: Optional[str] = None) -> Optional[str]:
@@ -119,12 +131,16 @@ class PipelineConfig:
     apply_psa_normalization: bool = True
     psa_region: str = "NA"
     
-    # Column names in input parquet (minimal required columns)
-    # Only waveform_path, report, waveform_name are expected
-    # NO diagnostic label columns are expected
-    waveform_path_column: str = "waveform_path"
-    report_column: str = "report"
-    waveform_name_column: str = "waveform_name"
+    # ECG signals path (where raw ECG files are located)
+    # ecg_file_name column values will be joined with this path
+    ecg_signals_path: str = "/app/ecg_signals"
+    
+    # Standard column names (fixed, following DeepECG_Docker pattern)
+    # These are not configurable - input files must have:
+    #   - diagnosis: Text report/diagnosis
+    #   - ecg_path: Absolute/relative path to ECG file
+    ecg_file_name_column: str = ECG_FILE_NAME_COLUMN
+    diagnosis_column: str = DIAGNOSIS_COLUMN
     
     # Ground truth settings
     # BERT predictions from text serve as ground truth for signal classification

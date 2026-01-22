@@ -28,6 +28,8 @@ services:
       - ./outputs:/app/outputs
       # Raw ECG signals (read-only)
       - ./ecg_signals:/app/ecg_signals:ro
+      # Preprocessed signals
+      - ./preprocessing:/app/preprocessing
       # Model checkpoints (read-only)
       - ./checkpoints:/app/checkpoints:ro
       # Configuration files (read-only)
@@ -57,6 +59,7 @@ services:
       - ./inputs:/app/inputs
       - ./outputs:/app/outputs
       - ./ecg_signals:/app/ecg_signals:ro
+      - ./preprocessing:/app/preprocessing
       - ./checkpoints:/app/checkpoints:ro
       - ./config:/app/config:ro
     
@@ -73,5 +76,6 @@ volumes:
   inputs:
   outputs:
   ecg_signals:
+  preprocessing:
   checkpoints:
   config:

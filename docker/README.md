@@ -1,6 +1,6 @@
 # ECG Tokenizer Docker Pipeline
 
-Docker-based inference pipeline for ECG tokenization and classification, following the [DeepECG_Docker](https://github.com/HeartWise-AI/DeepECG_Docker) architecture pattern.
+Docker-based inference pipeline for DeepECG-Tok
 
 ## Architecture
 
@@ -8,15 +8,16 @@ The pipeline uses **BERT predictions from text reports as ground truth** for eva
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│             INFERENCE PIPELINE FLOW (in progress)               │
+│                    INFERENCE PIPELINE FLOW                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  INPUT: Parquet (waveform_path, report, waveform_name)          │
+│  INPUT: CSV/Parquet (ecg_path, diagnosis)                       │
 │                           │                                     │
 │            ┌──────────────┴──────────────┐                      │
 │            ▼                              ▼                     │
 │    ┌──────────────┐              ┌──────────────────┐           │
-│    │ Text Reports │              │  Raw Waveforms   │           │
+│    │   diagnosis  │              │    ecg_path      │           │
+│    │  (text)      │              │  (signal file)   │           │
 │    └──────────────┘              └──────────────────┘           │
 │            │                              │                     │
 │            ▼                              ▼                     │
@@ -45,7 +46,7 @@ The pipeline uses **BERT predictions from text reports as ground truth** for eva
 │            └──────────────────────────────┘                     │ 
 │                           │                                     │
 │                           ▼                                     │
-│  OUTPUT: JSON (metrics, embeddings, QA) + Parquet (GT labels)   │
+│  OUTPUT: JSON (metrics, embeddings, QA) + Parquet (preprocessed)│
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -67,15 +68,17 @@ The pipeline uses **BERT predictions from text reports as ground truth** for eva
 
 ## Input Requirements
 
-Input parquet files require only **THREE columns**:
+Input CSV/Parquet files require **TWO columns** (following DeepECG_Docker pattern):
 
 | Column | Description |
 |--------|-------------|
-| `waveform_path` | Path to ECG signal file (.npy or .hea) |
-| `report` | Text report for the ECG |
-| `waveform_name` | Unique identifier (optional, defaults to index) |
+| `ecg_path` | Absolute/relative path to ECG signal file |
+| `diagnosis` | Text report/diagnosis for BERT classification |
 
 **No diagnostic label columns are required.** Ground truth is generated from BERT.
+
+The `ecg_path` column should contain the full path (or a path relative to where you run the pipeline).
+The `--input` file can be either CSV or Parquet.
 
 ## Quick Start
 
@@ -93,13 +96,13 @@ docker run --gpus all \
     -v /volume/ECG_tokenizer/output/MHI:/app/inputs \
     -v /volume/ECG_tokenizer/docker/outputs:/app/outputs \
     -v /volume/ECG_tokenizer/checkpoints:/app/checkpoints:ro \
+    -v /path/to/ecg/signals:/app/ecg_signals:ro \
     ecg-tokenizer \
     --mode full_run \
-    --input /app/inputs/mimic_5k_test_robert.parquet \
+    --input /app/inputs/data.parquet \
     --output /app/outputs/results.json \
     --device cuda:0 \
     --batch-size 32 \
-    --waveform-path-column waveform_path_psa \
     --bert-checkpoint /app/checkpoints/mimic_mhi_bert \
     --tokenizer-checkpoint /app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt \
     --efficientnet-checkpoint /app/checkpoints/ECG_Tokenizer_Linear_Probing/ECG_Tokenizer_Linear_Probing/5zg01bx6_20250824-041452/checkpoint_epoch_10.pt
@@ -112,13 +115,13 @@ docker run \
     -v /volume/ECG_tokenizer/output/MHI:/app/inputs \
     -v /volume/ECG_tokenizer/docker/outputs:/app/outputs \
     -v /volume/ECG_tokenizer/checkpoints:/app/checkpoints:ro \
+    -v /path/to/ecg/signals:/app/ecg_signals:ro \
     ecg-tokenizer \
     --mode full_run \
-    --input /app/inputs/mimic_5k_test_robert.parquet \
+    --input /app/inputs/data.parquet \
     --output /app/outputs/results.json \
     --device cpu \
-    --batch-size 8 \
-    --waveform-path-column waveform_path_psa
+    --batch-size 8
 ```
 
 ### 4. Using Docker Compose
@@ -136,15 +139,26 @@ docker-compose up ecg_tokenizer_cpu
 ## Running Without Docker (Development)
 
 ```bash
+cd /volume/ECG_tokenizer/docker
+
+# Using run_pipeline.bash (recommended)
+source run_pipeline.bash \
+    --mode full_run \
+    --input_file /path/to/data.csv
+```
+
+Or directly with Python:
+
+```bash
 cd /volume/ECG_tokenizer
 source .venv/bin/activate
 
 python inference/main.py \
-    --input /volume/ECG_tokenizer/output/MHI/mimic_5k_test_robert.parquet \
+    --mode full_run \
+    --input /path/to/data.parquet \
     --output /volume/ECG_tokenizer/docker/results.json \
     --device cuda:0 \
     --batch-size 32 \
-    --waveform-path-column waveform_path_psa \
     --bert-checkpoint /volume/ECG_tokenizer/checkpoints/mimic_mhi_bert \
     --tokenizer-checkpoint /volume/ECG_tokenizer/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt \
     --efficientnet-checkpoint /volume/ECG_tokenizer/checkpoints/ECG_Tokenizer_Linear_Probing/ECG_Tokenizer_Linear_Probing/5zg01bx6_20250824-041452/checkpoint_epoch_10.pt
@@ -155,16 +169,16 @@ python inference/main.py \
 | Option | Description |
 |--------|-------------|
 | `--mode MODE` | Pipeline mode: `full_run` (default), `analysis`, `preprocessing` |
-| `--input FILE` | Input parquet file path |
+| `--input FILE` | Input CSV/Parquet file path |
 | `--output FILE` | Output JSON file path |
 | `--device DEVICE` | Device: `cuda:0`, `cpu` |
 | `--batch-size N` | Batch size for processing |
-| `--waveform-path-column COL` | Column name for waveform paths |
 | `--bert-checkpoint PATH` | Path to BERT classifier checkpoint |
 | `--tokenizer-checkpoint PATH` | Path to ECG tokenizer checkpoint |
 | `--efficientnet-checkpoint PATH` | Path to EfficientNet classifier checkpoint |
 | `--no-psa` | Skip PSA normalization |
 | `--with-llm-judge` | Run LLM-as-a-Judge evaluation |
+| `--dataset-name NAME` | Optional dataset name for preprocessing outputs |
 
 ## Checkpoint Paths
 
@@ -178,16 +192,43 @@ python inference/main.py \
 
 | Scenario | Flags |
 |----------|-------|
-| Data is already PSA-normalized | `--waveform-path-column waveform_path_psa --no-psa` |
-| Data is raw, needs preprocessing | `--waveform-path-column waveform_path` (PSA applied by default) |
+| Data is already PSA-normalized | `--no-psa` |
+| Data is raw, needs preprocessing | PSA applied by default in `preprocessing`/`full_run` |
 | Skip all preprocessing | `--no-psa` |
+
+## Pipeline Modes
+
+The pipeline supports three execution modes (following DeepECG_Docker pattern):
+
+| Mode | Description |
+|------|-------------|
+| `preprocessing` | Load raw signals, apply PSA normalization, save as `.base64` files |
+| `analysis` | Load preprocessed `.base64` files, run BERT/EfficientNet, compute metrics |
+| `full_run` | Run both preprocessing and analysis in sequence |
+
+### Running Preprocessing Only
+```bash
+docker run --gpus all \
+    -v ./inputs:/app/inputs \
+    -v ./preprocessing:/app/preprocessing \
+    ecg-tokenizer --mode preprocessing --input /app/inputs/data.parquet --dataset-name mimic
+```
+
+### Running Analysis Only (on preprocessed data)
+```bash
+docker run --gpus all \
+    -v ./preprocessing:/app/preprocessing \
+    -v ./outputs:/app/outputs \
+    ecg-tokenizer --mode analysis --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
+```
 
 ## Volume Mounts (Docker)
 
 | Mount | Description |
 |-------|-------------|
-| `/app/inputs` | Input parquet files |
+| `/app/inputs` | Input CSV/Parquet files |
 | `/app/outputs` | Output results (JSON, CSV) |
+| `/app/preprocessing` | Preprocessed `.base64` signal files |
 | `/app/ecg_signals` | Raw ECG signal files (read-only) |
 | `/app/checkpoints` | Model checkpoints (read-only) |
 | `/app/config` | Configuration files (read-only) |
@@ -197,29 +238,42 @@ python inference/main.py \
 Configuration via `heartwise.config` (key: value format):
 
 ```yaml
-# Execution mode
+# Execution mode: preprocessing, analysis, full_run
 mode: full_run
 
 # Device settings
 device: cuda:0
 batch_size: 32
 
-# Input columns
-waveform_path_column: waveform_path_psa
-report_column: report
-waveform_name_column: waveform_name
+# Input columns (fixed)
+# Required: ecg_path, diagnosis
 
 # Model checkpoints
 bert_checkpoint: /app/checkpoints/mimic_mhi_bert
 tokenizer_checkpoint: /app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt
 efficientnet_checkpoint: /app/checkpoints/ECG_Tokenizer_Linear_Probing/.../checkpoint_epoch_10.pt
 
-# Preprocessing
-apply_psa_normalization: false  # Set true if using raw waveforms
+# Preprocessing (following DeepECG_Docker pattern)
+apply_psa_normalization: true  # Set true if using raw waveforms
+preprocessing_folder: /app/preprocessing
+preprocessing_n_workers: 16
+dataset_name: mimic
 
 # Classification settings
 num_classes: 77
 classification_threshold: 0.5
+```
+
+## Bash Runner Script
+
+For running inside the container, use `run_pipeline.bash` (following DeepECG_Docker pattern):
+
+```bash
+# Inside container
+source run_pipeline.bash --mode full_run --input_file data.csv
+
+# Or with specific mode
+source run_pipeline.bash --mode preprocessing --input_file data.parquet
 ```
 
 ## Output Structure
@@ -236,9 +290,8 @@ classification_threshold: 0.5
   },
   "results": [
     {
-      "waveform_name": "12345.npy",
-      "waveform_path": "/path/to/waveform.npy",
-      "original_report": "Atrial fibrillation...",
+      "ecg_path": "/path/to/waveform.npy",
+      "diagnosis": "Atrial fibrillation...",
       "tokenizer_embeddings": {
         "quantized_shape": [128, 82],
         "indices_shape": [128, 8],
@@ -272,6 +325,10 @@ classification_threshold: 0.5
 }
 ```
 
+Preprocessing writes a parquet file to `output_dir` named
+`<YYYYMMDD_HHMMSS>[_<dataset>]_preprocessed_data.parquet` and saves `.base64`
+signals under `<preprocessing_folder>/<YYYYMMDD_HHMMSS>[_<dataset>]_preprocessing/`.
+
 ## Classification Metrics
 
 For each diagnostic category (RHYTHM, CONDUCTION, etc.) and 77 classes:
@@ -293,13 +350,14 @@ ECG_tokenizer/
 │   ├── docker-compose.yaml
 │   ├── heartwise.config
 │   ├── entrypoint.sh
+│   ├── run_pipeline.bash    # Bash runner (DeepECG_Docker pattern)
 │   └── README.md
 ├── inference/
 │   ├── main.py              # Entry point
 │   ├── pipeline_args.py     # Argument parsing
 │   ├── pipeline_config.py   # Configuration
 │   ├── ecg_pipeline.py      # Main pipeline logic
-│   ├── psa_normalizer.py    # PSA normalization
+│   ├── files_handler.py     # ECGFileHandler for .base64 files
 │   └── llm_judge_wrapper.py # LLM Judge integration
 ├── models/
 │   ├── ecg_tokenizer_wrapper.py
@@ -308,6 +366,7 @@ ECG_tokenizer/
 │   ├── decoder/
 │   └── bridge/
 ├── utils/
+│   ├── preprocessing/ecg_signal_processor.py  # PSA normalization
 │   └── metrics/ecg_metrics.py
 └── checkpoints/
 ```

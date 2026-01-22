@@ -27,7 +27,7 @@ class PipelineArgs:
     input_parquet: str = "/app/inputs/data.parquet"
     output_json: str = "/app/outputs/results.json"
     output_dir: str = "/app/outputs"
-    ecg_signals_root: str = "/app/ecg_signals"
+    ecg_signals_path: str = "/app/ecg_signals"  # Path where ecg_file_name values are joined
     checkpoints_dir: str = "/app/checkpoints"
     
     # Model checkpoints
@@ -45,15 +45,16 @@ class PipelineArgs:
     batch_size: int = 32
     num_workers: int = 8
     
-    # Column names (minimal required columns)
-    waveform_path_column: str = "waveform_path"
-    report_column: str = "report"
-    waveform_name_column: str = "waveform_name"
+    # Standard column names (fixed - not configurable)
+    # Input files must have: ecg_file_name, diagnosis
     
     # Preprocessing
     apply_psa_normalization: bool = True
     psa_region: str = "NA"
     psa_lead_stats_path: Optional[str] = None
+    preprocessing_folder: str = "/app/preprocessing"
+    preprocessing_n_workers: int = 16
+    dataset_name: Optional[str] = None
     
     # Classification
     num_classes: int = 77
@@ -238,16 +239,11 @@ class PipelineArgs:
             help="Number of data loader workers"
         )
         
-        # Column names
+        # ECG signals path
         parser.add_argument(
-            "--waveform-path-column",
+            "--ecg-signals-path",
             type=str,
-            help="Column name for waveform paths"
-        )
-        parser.add_argument(
-            "--report-column",
-            type=str,
-            help="Column name for text reports"
+            help="Path where ECG signal files are located (ecg_file_name values joined with this)"
         )
         
         # Preprocessing
@@ -260,6 +256,21 @@ class PipelineArgs:
             "--psa-region",
             type=str,
             help="PSA normalization region"
+        )
+        parser.add_argument(
+            "--preprocessing-folder",
+            type=str,
+            help="Folder to save preprocessed .base64 files"
+        )
+        parser.add_argument(
+            "--preprocessing-n-workers",
+            type=int,
+            help="Number of workers for preprocessing"
+        )
+        parser.add_argument(
+            "--dataset-name",
+            type=str,
+            help="Optional dataset name to embed in preprocessing folder and parquet name"
         )
         
         # Classification
@@ -356,14 +367,18 @@ class PipelineArgs:
             instance.batch_size = args.batch_size
         if args.num_workers:
             instance.num_workers = args.num_workers
-        if args.waveform_path_column:
-            instance.waveform_path_column = args.waveform_path_column
-        if args.report_column:
-            instance.report_column = args.report_column
+        if args.ecg_signals_path:
+            instance.ecg_signals_path = args.ecg_signals_path
         if args.no_psa:
             instance.apply_psa_normalization = False
         if args.psa_region:
             instance.psa_region = args.psa_region
+        if args.preprocessing_folder:
+            instance.preprocessing_folder = args.preprocessing_folder
+        if args.preprocessing_n_workers:
+            instance.preprocessing_n_workers = args.preprocessing_n_workers
+        if args.dataset_name:
+            instance.dataset_name = args.dataset_name
         if args.threshold:
             instance.classification_threshold = args.threshold
             instance.bert_threshold = args.threshold
@@ -388,7 +403,7 @@ class PipelineArgs:
             "input_parquet": self.input_parquet,
             "output_json": self.output_json,
             "output_dir": self.output_dir,
-            "ecg_signals_root": self.ecg_signals_root,
+            "ecg_signals_path": self.ecg_signals_path,
             "bert_checkpoint": self.bert_checkpoint,
             "tokenizer_checkpoint": self.tokenizer_checkpoint,
             "efficientnet_checkpoint": self.efficientnet_checkpoint,
@@ -398,11 +413,10 @@ class PipelineArgs:
             "cpu_fallback": self.cpu_fallback,
             "batch_size": self.batch_size,
             "num_workers": self.num_workers,
-            "waveform_path_column": self.waveform_path_column,
-            "report_column": self.report_column,
-            "waveform_name_column": self.waveform_name_column,
             "apply_psa_normalization": self.apply_psa_normalization,
             "psa_region": self.psa_region,
+            "preprocessing_folder": self.preprocessing_folder,
+            "preprocessing_n_workers": self.preprocessing_n_workers,
             "num_classes": self.num_classes,
             "classification_threshold": self.classification_threshold,
             "use_bert_as_ground_truth": self.use_bert_as_ground_truth,
