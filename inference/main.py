@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 from inference.pipeline_config import PipelineConfig
 from inference.pipeline_args import PipelineArgs
 from inference.files_handler import load_df, save_df
-from utils.constants import ECG_FILE_NAME_COLUMN, DIAGNOSIS_COLUMN, Mode
+from utils.constants import DIAGNOSIS_COLUMN, ECG_PATTERNS, Mode
 
 
 def setup_directories(args: PipelineArgs) -> None:
@@ -196,6 +196,19 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> pd.DataFrame:
         preprocessing_folder=args.preprocessing_folder,
         preprocessing_n_workers=args.preprocessing_n_workers
     )
+
+    # Add BERT 77-class predictions to the preprocessed parquet
+    diagnoses = processed_df[DIAGNOSIS_COLUMN].tolist()
+    bert_results = pipeline.run_bert_classification(diagnoses)
+    bert_rows = []
+    for result in bert_results:
+        preds = result.get("predictions", [])
+        if preds and len(preds) == len(ECG_PATTERNS):
+            bert_rows.append(preds)
+        else:
+            bert_rows.append([0] * len(ECG_PATTERNS))
+    bert_df = pd.DataFrame(bert_rows, columns=ECG_PATTERNS)
+    processed_df = pd.concat([processed_df.reset_index(drop=True), bert_df], axis=1)
     
     # Save processed DataFrame with updated paths
     output_parquet = Path(args.output_dir) / f"{prefix}_preprocessed_data.parquet"
