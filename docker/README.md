@@ -11,12 +11,12 @@ The pipeline uses **BERT predictions from text reports as ground truth** for eva
 │                    INFERENCE PIPELINE FLOW                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  INPUT: CSV/Parquet (ecg_path, diagnosis)                       │
+│  INPUT: CSV/Parquet (ecg_path, reports)                       │
 │                           │                                     │
 │            ┌──────────────┴──────────────┐                      │
 │            ▼                              ▼                     │
 │    ┌──────────────┐              ┌──────────────────┐           │
-│    │   diagnosis  │              │    ecg_path      │           │
+│    │   reports  │              │    ecg_path      │           │
 │    │  (text)      │              │  (signal file)   │           │
 │    └──────────────┘              └──────────────────┘           │
 │            │                              │                     │
@@ -73,7 +73,7 @@ Input CSV/Parquet files require **TWO columns** (following DeepECG_Docker patter
 | Column | Description |
 |--------|-------------|
 | `ecg_path` | Absolute/relative path to ECG signal file |
-| `diagnosis` | Text report/diagnosis for BERT classification |
+| `reports` | Text reports for BERT classification |
 
 **No diagnostic label columns are required.** Ground truth is generated from BERT.
 
@@ -168,7 +168,7 @@ python inference/main.py \
 
 | Option | Description |
 |--------|-------------|
-| `--mode MODE` | Pipeline mode: `full_run` (default), `analysis`, `preprocessing` |
+| `--mode MODE` | Pipeline mode: `full_run` (default), `analysis`, `preprocessing`, `run_bert_classification`, `run_efficientnet` |
 | `--input FILE` | Input CSV/Parquet file path |
 | `--output FILE` | Output JSON file path |
 | `--device DEVICE` | Device: `cuda:0`, `cpu` |
@@ -179,6 +179,7 @@ python inference/main.py \
 | `--no-psa` | Skip PSA normalization |
 | `--with-llm-judge` | Run LLM-as-a-Judge evaluation |
 | `--dataset-name NAME` | Optional dataset name for preprocessing outputs |
+| `--bert-base-config FILE` | BERT base config yaml (for run_bert_classification/analysis) |
 
 ## Checkpoint Paths
 
@@ -198,13 +199,15 @@ python inference/main.py \
 
 ## Pipeline Modes
 
-The pipeline supports three execution modes (following DeepECG_Docker pattern):
+The pipeline supports the following execution modes:
 
 | Mode | Description |
 |------|-------------|
 | `preprocessing` | Load raw signals, apply PSA normalization, save as `.base64` files |
-| `analysis` | Load preprocessed `.base64` files, run BERT/EfficientNet, compute metrics |
-| `full_run` | Run both preprocessing and analysis in sequence |
+| `run_bert_classification` | Run BERT on `reports` and write 77-class columns into the parquet |
+| `run_efficientnet` | Run EfficientNet on signals only (uses existing BERT columns if present) |
+| `analysis` | Run BERT then EfficientNet (no preprocessing) |
+| `full_run` | Run preprocessing -> BERT -> EfficientNet |
 
 ### Running Preprocessing Only
 ```bash
@@ -214,7 +217,25 @@ docker run --gpus all \
     ecg-tokenizer --mode preprocessing --input /app/inputs/data.parquet --dataset-name mimic
 ```
 
-### Running Analysis Only (on preprocessed data)
+### Running BERT Only (on preprocessed data)
+```bash
+docker run --gpus all \
+    -v ./preprocessing:/app/preprocessing \
+    -v ./outputs:/app/outputs \
+    ecg-tokenizer --mode run_bert_classification --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
+```
+This also writes a probabilities CSV alongside the parquet:
+`<preprocessed_parquet>.bert_probabilities.csv`
+
+### Running EfficientNet Only (on preprocessed data)
+```bash
+docker run --gpus all \
+    -v ./preprocessing:/app/preprocessing \
+    -v ./outputs:/app/outputs \
+    ecg-tokenizer --mode run_efficientnet --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
+```
+
+### Running Analysis (BERT + EfficientNet, no preprocessing)
 ```bash
 docker run --gpus all \
     -v ./preprocessing:/app/preprocessing \
@@ -238,7 +259,7 @@ docker run --gpus all \
 Configuration via `heartwise.config` (key: value format):
 
 ```yaml
-# Execution mode: preprocessing, analysis, full_run
+# Execution mode: preprocessing, run_bert_classification, run_efficientnet, analysis, full_run
 mode: full_run
 
 # Device settings
@@ -246,7 +267,7 @@ device: cuda:0
 batch_size: 32
 
 # Input columns (fixed)
-# Required: ecg_path, diagnosis
+# Required: ecg_path, reports
 
 # Model checkpoints
 bert_checkpoint: /app/checkpoints/mimic_mhi_bert
@@ -272,8 +293,10 @@ For running inside the container, use `run_pipeline.bash` (following DeepECG_Doc
 # Inside container
 source run_pipeline.bash --mode full_run --input_file data.csv
 
-# Or with specific mode
+# Or with specific modes
 source run_pipeline.bash --mode preprocessing --input_file data.parquet
+source run_pipeline.bash --mode run_bert_classification --input_file preprocessed_data.parquet
+source run_pipeline.bash --mode run_efficientnet --input_file preprocessed_data.parquet
 ```
 
 ## Output Structure
@@ -291,7 +314,7 @@ source run_pipeline.bash --mode preprocessing --input_file data.parquet
   "results": [
     {
       "ecg_path": "/path/to/waveform.npy",
-      "diagnosis": "Atrial fibrillation...",
+      "reports": "Atrial fibrillation...",
       "tokenizer_embeddings": {
         "quantized_shape": [128, 82],
         "indices_shape": [128, 8],
@@ -328,6 +351,8 @@ source run_pipeline.bash --mode preprocessing --input_file data.parquet
 Preprocessing writes a parquet file to `output_dir` named
 `<YYYYMMDD_HHMMSS>[_<dataset>]_preprocessed_data.parquet` and saves `.base64`
 signals under `<preprocessing_folder>/<YYYYMMDD_HHMMSS>[_<dataset>]_preprocessing/`.
+BERT classification overwrites the same parquet with 77 class columns and writes
+a probabilities CSV: `<preprocessed_parquet>.bert_probabilities.csv`.
 
 ## Classification Metrics
 

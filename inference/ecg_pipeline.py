@@ -45,7 +45,7 @@ class ECGDataset(Dataset):
     Dataset for ECG inference that loads signals from disk.
     
     Standard columns (following DeepECG_Docker pattern):
-    - diagnosis: Text report/diagnosis for BERT classification
+    - reports: Text reports for BERT classification
     - ecg_path: Absolute/relative path to ECG file
     """
     
@@ -63,8 +63,14 @@ class ECGDataset(Dataset):
         else:
             self.ecg_paths = []
         
-        # Diagnosis (text reports)
+        # Reports (text)
         self.diagnoses = self.df[DIAGNOSIS_COLUMN].tolist() if DIAGNOSIS_COLUMN in self.df.columns else []
+        
+        # Optional precomputed BERT labels
+        if all(pattern in self.df.columns for pattern in ECG_PATTERNS):
+            self.bert_labels = self.df[ECG_PATTERNS].astype(int).values.tolist()
+        else:
+            self.bert_labels = None
         
         # ECG file names as identifiers
         if 'ecg_path' in self.df.columns:
@@ -83,6 +89,7 @@ class ECGDataset(Dataset):
         ecg_path = self.ecg_paths[idx] if idx < len(self.ecg_paths) else ""
         diagnosis = self.diagnoses[idx] if idx < len(self.diagnoses) else ""
         ecg_name = self.ecg_names[idx] if idx < len(self.ecg_names) else f"ecg_{idx}"
+        bert_labels = self.bert_labels[idx] if self.bert_labels is not None else None
         
         waveform = None
         
@@ -117,7 +124,8 @@ class ECGDataset(Dataset):
             "idx": idx,
             "waveform": waveform,
             "ecg_path": ecg_path,
-            "diagnosis": diagnosis,
+            "reports": diagnosis,
+            "bert_labels": bert_labels,
             "ecg_name": ecg_name,
         }
 
@@ -197,7 +205,8 @@ class ECGInferencePipeline:
             print("  ECG signal processor initialized")
         
         # BERT classifier (for ground truth labels from text)
-        self._load_bert_classifier()
+        if self.config.use_bert_as_ground_truth:
+            self._load_bert_classifier()
         
         # ECG tokenizer (for embeddings)
         self._load_ecg_tokenizer()
@@ -218,7 +227,7 @@ class ECGInferencePipeline:
         Following DeepECG_Docker pattern for preprocessing mode.
         
         Standard columns used:
-            - diagnosis: Text report/diagnosis
+            - reports: Text reports for BERT classification
             - ecg_path: Absolute/relative path to ECG file
         
         Args:
@@ -820,9 +829,20 @@ class ECGInferencePipeline:
         waveforms = batch_data.get("waveforms")
         batch = batch_data.get("batch", [])
         
-        # Step 1: Run BERT FIRST on text diagnoses (GROUND TRUTH)
-        diagnoses = [item.get("diagnosis", "") for item in batch]
-        bert_results = self.run_bert_classification(diagnoses)
+        # Step 1: BERT ground truth (either compute or use precomputed labels)
+        bert_results = []
+        if self.config.use_bert_as_ground_truth:
+            reports = [item.get("reports", "") for item in batch]
+            bert_results = self.run_bert_classification(reports)
+        else:
+            for item in batch:
+                labels = item.get("bert_labels")
+                if labels is None or len(labels) != len(ECG_PATTERNS):
+                    bert_results.append({"predictions": [], "probabilities": []})
+                else:
+                    preds = [int(v) for v in labels]
+                    probs = [float(v) for v in labels]
+                    bert_results.append({"predictions": preds, "probabilities": probs})
         
         # Step 2: Extract embeddings from signals
         tokenizer_embeddings = []
@@ -858,7 +878,7 @@ class ECGInferencePipeline:
             result = {
                 "ecg_name": item.get("ecg_name", ""),
                 "ecg_path": item.get("ecg_path", ""),
-                "diagnosis": item.get("diagnosis", ""),
+                "reports": item.get("reports", ""),
             }
             
             # Store BERT classification for ground truth generation (not in final JSON)
@@ -875,7 +895,7 @@ class ECGInferencePipeline:
             
             # Generate QA pairs
             qa_pairs = self.generate_qa_pairs(
-                report=item.get("diagnosis", ""),
+                report=item.get("reports", ""),
                 waveform_name=item.get("ecg_name", "")
             )
             result["qa_results"] = [
@@ -938,7 +958,7 @@ class ECGInferencePipeline:
             cleaned = {
                 "ecg_name": result.get("ecg_name", ""),
                 "ecg_path": result.get("ecg_path", ""),
-                "diagnosis": result.get("diagnosis", ""),
+                "reports": result.get("reports", ""),
                 "tokenizer_embeddings": result.get("tokenizer_embeddings", {}),
                 "qa_results": result.get("qa_results", []),
             }

@@ -10,7 +10,7 @@ Usage:
     python inference/main.py --config heartwise.config
 
 Required Input Columns:
-    - diagnosis: Text report/diagnosis for BERT classification
+    - reports: Text reports for BERT classification
     - ecg_path: Absolute/relative path to ECG file (authoritative)
 """
 
@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 from inference.pipeline_config import PipelineConfig
 from inference.pipeline_args import PipelineArgs
 from inference.files_handler import load_df, save_df
-from utils.constants import DIAGNOSIS_COLUMN, ECG_PATTERNS, Mode
+from utils.constants import DIAGNOSIS_COLUMN, Mode
 
 
 def setup_directories(args: PipelineArgs) -> None:
@@ -53,7 +53,7 @@ def validate_input(args: PipelineArgs) -> pd.DataFrame:
     Validate and load input file (CSV or Parquet).
     
     Required columns (standardized like DeepECG_Docker):
-        - diagnosis: Text report/diagnosis for BERT classification
+        - reports: Text reports for BERT classification
         - ecg_path: Absolute/relative path to ECG file
     
     Args:
@@ -79,15 +79,15 @@ def validate_input(args: PipelineArgs) -> pd.DataFrame:
     if DIAGNOSIS_COLUMN not in df.columns or "ecg_path" not in df.columns:
         available = list(df.columns)[:15]
         raise ValueError(
-            "Missing required columns. Expected 'diagnosis' and 'ecg_path'. "
+            f"Missing required columns. Expected '{DIAGNOSIS_COLUMN}' and 'ecg_path'. "
             f"Available columns (first 15): {available}"
         )
     
-    # Remove rows with empty diagnosis
-    missing_diagnosis_count = df[DIAGNOSIS_COLUMN].isna().sum()
-    if missing_diagnosis_count > 0:
+    # Remove rows with empty reports
+    missing_reports_count = df[DIAGNOSIS_COLUMN].isna().sum()
+    if missing_reports_count > 0:
         df = df.dropna(subset=[DIAGNOSIS_COLUMN]).reset_index(drop=True)
-        print(f"  Removed {missing_diagnosis_count} rows with empty '{DIAGNOSIS_COLUMN}' column")
+        print(f"  Removed {missing_reports_count} rows with empty '{DIAGNOSIS_COLUMN}' column")
     
     print(f"  Valid samples: {len(df)}")
     
@@ -142,7 +142,7 @@ def run_analysis(args: PipelineArgs, df: pd.DataFrame) -> Dict[str, Any]:
     return results
 
 
-def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> pd.DataFrame:
+def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> Path:
     """
     Run preprocessing to save signals as .base64 files.
     
@@ -153,7 +153,7 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> pd.DataFrame:
         df: Input DataFrame.
         
     Returns:
-        DataFrame with updated paths pointing to .base64 files.
+        Path to the saved preprocessed parquet.
     """
     from inference.ecg_pipeline import ECGInferencePipeline
     
@@ -197,49 +197,27 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> pd.DataFrame:
         preprocessing_n_workers=args.preprocessing_n_workers
     )
 
-    # Add BERT 77-class predictions to the preprocessed parquet
-    diagnoses = processed_df[DIAGNOSIS_COLUMN].tolist()
-    bert_results = pipeline.run_bert_classification(diagnoses)
-    bert_rows = []
-    for result in bert_results:
-        preds = result.get("predictions", [])
-        if preds and len(preds) == len(ECG_PATTERNS):
-            bert_rows.append(preds)
-        else:
-            bert_rows.append([0] * len(ECG_PATTERNS))
-    bert_df = pd.DataFrame(bert_rows, columns=ECG_PATTERNS)
-    processed_df = pd.concat([processed_df.reset_index(drop=True), bert_df], axis=1)
+    # Reports column already standardized; no rename needed
     
     # Save processed DataFrame with updated paths
     output_parquet = Path(args.output_dir) / f"{prefix}_preprocessed_data.parquet"
     save_df(processed_df, str(output_parquet))
     print(f"Preprocessed DataFrame saved to {output_parquet}")
     
-    return processed_df
+    return output_parquet
 
 
-def update_paths_for_analysis(df: pd.DataFrame, args: PipelineArgs) -> pd.DataFrame:
-    """
-    Update DataFrame paths to point to preprocessed .base64 files.
-    
-    Args:
-        df: Input DataFrame.
-        args: Pipeline arguments.
-        
-    Returns:
-        DataFrame with updated ecg_path column.
-    """
-    preprocessing_folder = args.preprocessing_folder
-    
-    def get_base64_path(ecg_path):
-        if not ecg_path:
-            return ecg_path
-        file_id = Path(ecg_path).stem
-        return str(Path(preprocessing_folder) / f"{file_id}.base64")
-    
-    df = df.copy()
-    df["ecg_path"] = df["ecg_path"].apply(get_base64_path)
-    return df
+def run_bert_classification(args: PipelineArgs) -> None:
+    """Run BERT 77-class classification and write labels into the input parquet."""
+    from inference.run_bert_subprocess import run_bert_on_parquet
+    run_bert_on_parquet(
+        input_parquet=args.input_parquet,
+        output_parquet=None,
+        base_config=args.bert_base_config,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        device=args.device,
+    )
 
 
 def save_results(
@@ -361,17 +339,35 @@ def main(args: PipelineArgs) -> None:
     if mode == Mode.PREPROCESSING:
         run_preprocessing(args, df)
         return
-    
-    if mode == Mode.FULL_RUN:
-        # Full run: preprocessing + analysis
-        run_preprocessing(args, df)
-        # Update waveform paths to point to preprocessed files
-        df = update_paths_for_analysis(df, args)
-    
-    if mode in (Mode.ANALYSIS, Mode.FULL_RUN):
+
+    if mode == Mode.RUN_BERT_CLASSIFICATION:
+        run_bert_classification(args)
+        return
+
+    if mode == Mode.RUN_EFFICIENTNET:
+        args.use_bert_as_ground_truth = False
         results = run_analysis(args, df)
         save_results(results, args.output_json, args.output_dir)
         print_summary(results)
+        return
+    
+    if mode == Mode.ANALYSIS:
+        run_bert_classification(args)
+        args.use_bert_as_ground_truth = False
+        results = run_analysis(args, df)
+        save_results(results, args.output_json, args.output_dir)
+        print_summary(results)
+        return
+    
+    if mode == Mode.FULL_RUN:
+        preprocessed_parquet = run_preprocessing(args, df)
+        args.input_parquet = str(preprocessed_parquet)
+        run_bert_classification(args)
+        args.use_bert_as_ground_truth = False
+        results = run_analysis(args, df)
+        save_results(results, args.output_json, args.output_dir)
+        print_summary(results)
+        return
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ class PipelineArgs:
     """Pipeline arguments with defaults matching DeepECG_Docker patterns."""
     
     # Mode
-    mode: str = "full_run"  # preprocessing, analysis, full_run
+    mode: str = "full_run"  # preprocessing, run_bert_classification, run_efficientnet, analysis, full_run
     
     # Paths
     input_parquet: str = "/app/inputs/data.parquet"
@@ -46,7 +46,7 @@ class PipelineArgs:
     num_workers: int = 8
     
     # Standard column names (fixed - not configurable)
-    # Input files must have: ecg_file_name, diagnosis
+    # Input files must have: ecg_path, reports
     
     # Preprocessing
     apply_psa_normalization: bool = True
@@ -55,6 +55,7 @@ class PipelineArgs:
     preprocessing_folder: str = "/app/preprocessing"
     preprocessing_n_workers: int = 16
     dataset_name: Optional[str] = None
+    bert_base_config: str = "config/bert_classifier/base_config.yaml"
     
     # Classification
     num_classes: int = 77
@@ -165,7 +166,7 @@ class PipelineArgs:
         parser.add_argument(
             "--mode",
             type=str,
-            choices=["preprocessing", "analysis", "full_run"],
+            choices=["preprocessing", "run_bert_classification", "run_efficientnet", "analysis", "full_run"],
             help="Pipeline execution mode"
         )
         
@@ -271,6 +272,11 @@ class PipelineArgs:
             "--dataset-name",
             type=str,
             help="Optional dataset name to embed in preprocessing folder and parquet name"
+        )
+        parser.add_argument(
+            "--bert-base-config",
+            type=str,
+            help="BERT base config yaml (for run_bert_classification/analysis)"
         )
         
         # Classification
@@ -379,6 +385,8 @@ class PipelineArgs:
             instance.preprocessing_n_workers = args.preprocessing_n_workers
         if args.dataset_name:
             instance.dataset_name = args.dataset_name
+        if args.bert_base_config:
+            instance.bert_base_config = args.bert_base_config
         if args.threshold:
             instance.classification_threshold = args.threshold
             instance.bert_threshold = args.threshold

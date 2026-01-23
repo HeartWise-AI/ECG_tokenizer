@@ -3,7 +3,7 @@
 Pipeline configuration for ECG Tokenizer Docker inference.
 
 Standard input columns (following DeepECG_Docker pattern):
-    - diagnosis: Text report/diagnosis for BERT classification
+    - reports: Text reports for BERT classification
     - ecg_path: Absolute/relative path to ECG file
 """
 
@@ -137,7 +137,7 @@ class PipelineConfig:
     
     # Standard column names (fixed, following DeepECG_Docker pattern)
     # These are not configurable - input files must have:
-    #   - diagnosis: Text report/diagnosis
+    #   - reports: Text reports for BERT classification
     #   - ecg_path: Absolute/relative path to ECG file
     ecg_file_name_column: str = ECG_FILE_NAME_COLUMN
     diagnosis_column: str = DIAGNOSIS_COLUMN
