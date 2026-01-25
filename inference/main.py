@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
 from inference.pipeline_config import PipelineConfig
 from inference.pipeline_args import PipelineArgs
 from inference.files_handler import load_df, save_df
-from utils.constants import DIAGNOSIS_COLUMN, Mode
+from utils.constants import DIAGNOSIS_COLUMN
 
 
 def setup_directories(args: PipelineArgs) -> None:
@@ -137,7 +137,7 @@ def run_analysis(args: PipelineArgs, df: pd.DataFrame) -> Dict[str, Any]:
     
     # Run pipeline
     pipeline = ECGInferencePipeline(config)
-    results = pipeline.run_pipeline()
+    results = pipeline.run_pipeline(efficientnet_output=args.efficientnet_output)
     
     return results
 
@@ -158,7 +158,7 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> Path:
     from inference.ecg_pipeline import ECGInferencePipeline
     
     print("\n" + "=" * 60)
-    print("Running Preprocessing Mode")
+    print("Running Preprocessing")
     print("=" * 60)
     print(f"ECG Signals Path: {args.ecg_signals_path}")
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -200,24 +200,28 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> Path:
     # Reports column already standardized; no rename needed
     
     # Save processed DataFrame with updated paths
-    output_parquet = Path(args.output_dir) / f"{prefix}_preprocessed_data.parquet"
+    if args.preprocessing_output:
+        output_parquet = Path(args.preprocessing_output)
+    else:
+        output_parquet = Path(args.output_dir) / f"{prefix}_preprocessed_data.parquet"
     save_df(processed_df, str(output_parquet))
     print(f"Preprocessed DataFrame saved to {output_parquet}")
     
     return output_parquet
 
 
-def run_bert_classification(args: PipelineArgs) -> None:
+def run_bert_classification(args: PipelineArgs, input_parquet: str, output_parquet: Optional[str] = None) -> str:
     """Run BERT 77-class classification and write labels into the input parquet."""
     from inference.run_bert_subprocess import run_bert_on_parquet
     run_bert_on_parquet(
-        input_parquet=args.input_parquet,
-        output_parquet=None,
+        input_parquet=input_parquet,
+        output_parquet=output_parquet,
         base_config=args.bert_base_config,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         device=args.device,
     )
+    return output_parquet or input_parquet
 
 
 def save_results(
@@ -316,12 +320,9 @@ def main(args: PipelineArgs) -> None:
     Args:
         args: Pipeline arguments parsed from config/CLI.
     """
-    mode = args.mode if args.mode else Mode.FULL_RUN
-    
     print("=" * 60)
     print("ECG Tokenizer Inference Pipeline")
     print("=" * 60)
-    print(f"Mode: {mode}")
     print(f"Input: {args.input_parquet}")
     print(f"Output: {args.output_json}")
     print(f"Device: {args.device}")
@@ -332,49 +333,70 @@ def main(args: PipelineArgs) -> None:
     # Setup directories
     setup_directories(args)
     
-    # Validate and load input
-    df = validate_input(args)
+    # Resolve intermediate paths
+    if not args.preprocessing_output:
+        args.preprocessing_output = str(Path(args.output_dir) / "preprocessed.parquet")
+    if not args.bert_output:
+        # default overwrite same parquet
+        args.bert_output = args.preprocessing_output
+    if not args.efficientnet_output:
+        args.efficientnet_output = args.bert_output
+    if not args.embeddings_output:
+        args.embeddings_output = args.efficientnet_output
     
-    # Run based on mode
-    if mode == Mode.PREPROCESSING:
-        run_preprocessing(args, df)
-        return
-
-    if mode == Mode.RUN_BERT_CLASSIFICATION:
-        run_bert_classification(args)
-        return
-
-    if mode == Mode.RUN_EFFICIENTNET:
-        args.use_bert_as_ground_truth = False
-        results = run_analysis(args, df)
+    # Step 0: load initial input (only needed if running preprocessing)
+    df_input = None
+    if args.use_preprocessing:
+        df_input = validate_input(args)
+    
+    # Step 1: preprocessing
+    if args.use_preprocessing:
+        preprocessed_parquet = run_preprocessing(args, df_input)
+    else:
+        preprocessed_parquet = Path(args.preprocessing_output)
+        if not preprocessed_parquet.exists():
+            raise FileNotFoundError(
+                f"use_preprocessing=False but {preprocessed_parquet} not found. "
+                "Run with use_preprocessing=True first."
+            )
+    current_parquet = str(preprocessed_parquet)
+    
+    # Step 2: BERT classification
+    if args.use_bert_classification:
+        current_parquet = run_bert_classification(
+            args,
+            input_parquet=current_parquet,
+            output_parquet=args.bert_output,
+        )
+    else:
+        if not Path(args.bert_output).exists():
+            raise FileNotFoundError(
+                f"use_bert_classification=False but {args.bert_output} not found. "
+                "Run with use_bert_classification=True first."
+            )
+        current_parquet = args.bert_output
+    
+    # Step 3: EfficientNet (uses cached BERT labels)
+    args.input_parquet = current_parquet
+    args.use_bert_as_ground_truth = False
+    results = None
+    if args.use_efficientnet_classification:
+        results = run_analysis(args, validate_input(args))
         save_results(results, args.output_json, args.output_dir)
         print_summary(results)
-        return
+    else:
+        if not Path(args.efficientnet_output).exists():
+            raise FileNotFoundError(
+                f"use_efficientnet_classification=False but {args.efficientnet_output} not found."
+            )
     
-    if mode == Mode.ANALYSIS:
-        run_bert_classification(args)
-        args.use_bert_as_ground_truth = False
-        results = run_analysis(args, df)
-        save_results(results, args.output_json, args.output_dir)
-        print_summary(results)
-        return
-    
-    if mode == Mode.FULL_RUN:
-        preprocessed_parquet = run_preprocessing(args, df)
-        args.input_parquet = str(preprocessed_parquet)
-        run_bert_classification(args)
-        args.use_bert_as_ground_truth = False
-        results = run_analysis(args, df)
-        save_results(results, args.output_json, args.output_dir)
-        print_summary(results)
-        return
+    # Tokenizer embeddings are handled inside analysis; caching not implemented separately.
 
 
 if __name__ == "__main__":
     args = PipelineArgs.parse_arguments()
     
     print("\nConfiguration Summary:")
-    print(f"  Mode: {args.mode}")
     print(f"  Input: {args.input_parquet}")
     print(f"  Output: {args.output_json}")
     print(f"  ECG Signals Path: {args.ecg_signals_path}")

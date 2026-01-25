@@ -125,6 +125,11 @@ class HeartWiseParser:
         checkpoint_group.add_argument('--project', type=parse_optional_str)
         checkpoint_group.add_argument('--entity', type=parse_optional_str)
         checkpoint_group.add_argument('--name', type=parse_optional_str)
+
+        # Inference parameters
+        inference_group = parser.add_argument_group('Inference')
+        inference_group.add_argument('--inference_dataset_path', type=str)
+        inference_group.add_argument('--inference_checkpoint_path', type=str)
         
         # Parse arguments
         args: argparse.Namespace = parser.parse_args()

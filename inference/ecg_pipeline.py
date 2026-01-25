@@ -37,7 +37,7 @@ from inference.pipeline_config import PipelineConfig
 from inference.files_handler import ECGFileHandler
 from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 from utils.metrics.ecg_metrics import compute_metrics
-from utils.constants import ECG_PATTERNS, PTBXL_POWER_RATIO, ECG_FILE_NAME_COLUMN, DIAGNOSIS_COLUMN
+from utils.constants import ECG_PATTERNS, PTBXL_POWER_RATIO, DIAGNOSIS_COLUMN
 
 
 class ECGDataset(Dataset):
@@ -222,7 +222,7 @@ class ECGInferencePipeline:
         preprocessing_n_workers: int = 16
     ) -> pd.DataFrame:
         """
-        Preprocess ECG signals and save to disk as .base64 files.
+        Preprocess ECG signals and save to disk as .npy files.
         
         Following DeepECG_Docker pattern for preprocessing mode.
         
@@ -231,12 +231,12 @@ class ECGInferencePipeline:
             - ecg_path: Absolute/relative path to ECG file
         
         Args:
-            df: Input DataFrame with ecg_file_name column
-            preprocessing_folder: Directory to save preprocessed .base64 files
+            df: Input DataFrame with ecg_path column
+            preprocessing_folder: Directory to save preprocessed .npy files
             preprocessing_n_workers: Number of workers for parallel processing
             
         Returns:
-            DataFrame with updated ecg_path pointing to .base64 files
+            DataFrame with updated ecg_path pointing to .npy files
         """
         print("\n" + "="*60)
         print("Preprocessing ECG Signals (Disk Storage)")
@@ -306,7 +306,7 @@ class ECGInferencePipeline:
                         print(f"Warning: Skipping {file_id} - incorrect number of leads: {lead_array.shape[1]}")
                         continue
                     
-                    new_path = os.path.join(preprocessing_folder, f"{file_id}.base64")
+                    new_path = os.path.join(preprocessing_folder, f"{file_id}.npy")
                     batch_df.at[index, 'ecg_path'] = new_path
                     ecgs.append([new_path, lead_array])
                     
@@ -336,13 +336,16 @@ class ECGInferencePipeline:
             else:
                 cleaned_df = ecg_signals_df
             
-            # Save processed signals as .base64 files
+            # Save processed signals as .npy files (smaller and pickle-safe for downstream loaders)
             print("Saving processed signals...")
             for _, row in tqdm(cleaned_df.iterrows(), total=len(cleaned_df), desc="Saving signals"):
+                npy_path = os.path.splitext(row['ecg_path'])[0] + ".npy"
                 ECGFileHandler.save_ecg_signal(
                     ecg_signal=row['ecg_signal'],
-                    filename=row['ecg_path']
+                    filename=npy_path
                 )
+                # keep the path update in the batch dataframe for later concat
+                batch_df.at[row.name, 'ecg_path'] = npy_path
             
             processed_df = pd.concat([processed_df, batch_df], ignore_index=True)
             
@@ -738,6 +741,33 @@ class ECGInferencePipeline:
             
         except Exception as e:
             print(f"Warning: Could not save ground truth parquet: {e}")
+
+    def _save_efficientnet_parquet(self, all_results: List[Dict[str, Any]], output_path: str) -> None:
+        """
+        Save EfficientNet probabilities to parquet.
+
+        Args:
+            all_results: List of result dictionaries with EfficientNet classifications.
+            output_path: Destination parquet path.
+        """
+        try:
+            df_original = pd.read_parquet(self.config.input_parquet)
+            eff_data = {pattern: [] for pattern in ECG_PATTERNS}
+            for result in all_results:
+                eff = result.get("efficientnet_classification", {})
+                probs = eff.get("probabilities", [])
+                if probs and len(probs) == len(ECG_PATTERNS):
+                    for i, pattern in enumerate(ECG_PATTERNS):
+                        eff_data[pattern].append(probs[i])
+                else:
+                    for pattern in ECG_PATTERNS:
+                        eff_data[pattern].append(0.0)
+            for pattern in ECG_PATTERNS:
+                df_original[pattern] = eff_data[pattern]
+            df_original.to_parquet(output_path)
+            print(f"\nEfficientNet probabilities saved to: {output_path}")
+        except Exception as e:
+            print(f"Warning: Could not save EfficientNet parquet: {e}")
     
     def _compute_signal_vs_text_metrics(
         self,
@@ -912,7 +942,7 @@ class ECGInferencePipeline:
         
         return results
     
-    def run_pipeline(self) -> Dict[str, Any]:
+    def run_pipeline(self, efficientnet_output: Optional[str] = None) -> Dict[str, Any]:
         """
         Run the complete inference pipeline.
         
@@ -951,6 +981,9 @@ class ECGInferencePipeline:
         
         # Save BERT predictions as ground truth columns in output parquet
         self._save_ground_truth_parquet(all_results)
+        # Save EfficientNet probabilities if path provided
+        if efficientnet_output:
+            self._save_efficientnet_parquet(all_results, efficientnet_output)
         
         # Clean results: remove classification predictions (keep only metrics)
         cleaned_results = []

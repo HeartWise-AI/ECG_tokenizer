@@ -21,7 +21,7 @@ REPO_ROOT = SCRIPT_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from utils.constants import ECG_FILE_NAME_COLUMN, DIAGNOSIS_COLUMN
+from utils.constants import DIAGNOSIS_COLUMN
 
 
 def resolve_checkpoint_path(path: Optional[str], repo_root: Optional[str] = None) -> Optional[str]:
@@ -101,6 +101,12 @@ class PipelineConfig:
     output_json: str
     output_dir: str = "/app/outputs"
     
+    # Step flags
+    use_preprocessing: bool = True
+    use_bert_classification: bool = True
+    use_efficientnet_classification: bool = True
+    use_tokenizer_embeddings: bool = True
+    
     # Model checkpoint paths
     bert_checkpoint: str = "/app/checkpoints/mimic_mhi_bert"
     tokenizer_checkpoint: str = "/app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt"
@@ -135,11 +141,7 @@ class PipelineConfig:
     # ecg_file_name column values will be joined with this path
     ecg_signals_path: str = "/app/ecg_signals"
     
-    # Standard column names (fixed, following DeepECG_Docker pattern)
-    # These are not configurable - input files must have:
-    #   - reports: Text reports for BERT classification
-    #   - ecg_path: Absolute/relative path to ECG file
-    ecg_file_name_column: str = ECG_FILE_NAME_COLUMN
+    # Standard column names (fixed)
     diagnosis_column: str = DIAGNOSIS_COLUMN
     
     # Ground truth settings
@@ -173,6 +175,12 @@ class PipelineConfig:
     run_llm_judge: bool = True
     llm_judge_config_path: Optional[str] = None
     
+    # Intermediate outputs
+    preprocessing_output: Optional[str] = None
+    bert_output: Optional[str] = None
+    efficientnet_output: Optional[str] = None
+    embeddings_output: Optional[str] = None
+
     # Logging
     verbose: bool = True
     log_every_n_batches: int = 10

@@ -20,8 +20,11 @@ from typing import List, Optional, Any
 class PipelineArgs:
     """Pipeline arguments with defaults matching DeepECG_Docker patterns."""
     
-    # Mode
-    mode: str = "full_run"  # preprocessing, run_bert_classification, run_efficientnet, analysis, full_run
+    # Step flags
+    use_preprocessing: bool = True
+    use_bert_classification: bool = True
+    use_efficientnet_classification: bool = True
+    use_tokenizer_embeddings: bool = True
     
     # Paths
     input_parquet: str = "/app/inputs/data.parquet"
@@ -56,6 +59,12 @@ class PipelineArgs:
     preprocessing_n_workers: int = 16
     dataset_name: Optional[str] = None
     bert_base_config: str = "config/bert_classifier/base_config.yaml"
+    
+    # Intermediate outputs
+    preprocessing_output: Optional[str] = None
+    bert_output: Optional[str] = None
+    efficientnet_output: Optional[str] = None
+    embeddings_output: Optional[str] = None
     
     # Classification
     num_classes: int = 77
@@ -162,13 +171,22 @@ class PipelineArgs:
             help="Path to configuration file"
         )
         
-        # Mode
-        parser.add_argument(
-            "--mode",
-            type=str,
-            choices=["preprocessing", "run_bert_classification", "run_efficientnet", "analysis", "full_run"],
-            help="Pipeline execution mode"
-        )
+        # Step flags
+        parser.add_argument("--use-preprocessing", dest="use_preprocessing", action="store_true", help="Run preprocessing")
+        parser.add_argument("--no-preprocessing", dest="use_preprocessing", action="store_false", help="Skip preprocessing (load cache)")
+        parser.set_defaults(use_preprocessing=None)
+        
+        parser.add_argument("--use-bert-classification", dest="use_bert_classification", action="store_true", help="Run BERT classification")
+        parser.add_argument("--no-bert-classification", dest="use_bert_classification", action="store_false", help="Skip BERT (load cache)")
+        parser.set_defaults(use_bert_classification=None)
+        
+        parser.add_argument("--use-efficientnet-classification", dest="use_efficientnet_classification", action="store_true", help="Run EfficientNet classification")
+        parser.add_argument("--no-efficientnet-classification", dest="use_efficientnet_classification", action="store_false", help="Skip EfficientNet (load cache)")
+        parser.set_defaults(use_efficientnet_classification=None)
+        
+        parser.add_argument("--use-tokenizer-embeddings", dest="use_tokenizer_embeddings", action="store_true", help="Run tokenizer embeddings extraction")
+        parser.add_argument("--no-tokenizer-embeddings", dest="use_tokenizer_embeddings", action="store_false", help="Skip tokenizer embeddings (load cache)")
+        parser.set_defaults(use_tokenizer_embeddings=None)
         
         # Paths
         parser.add_argument(
@@ -278,6 +296,26 @@ class PipelineArgs:
             type=str,
             help="BERT base config yaml (for run_bert_classification/analysis)"
         )
+        parser.add_argument(
+            "--preprocessing-output",
+            type=str,
+            help="Path to cached preprocessing parquet"
+        )
+        parser.add_argument(
+            "--bert-output",
+            type=str,
+            help="Path to cached BERT labels parquet"
+        )
+        parser.add_argument(
+            "--efficientnet-output",
+            type=str,
+            help="Path to cached EfficientNet parquet"
+        )
+        parser.add_argument(
+            "--embeddings-output",
+            type=str,
+            help="Path to cached embeddings parquet"
+        )
         
         # Classification
         parser.add_argument(
@@ -347,8 +385,6 @@ class PipelineArgs:
                 setattr(instance, field_name, value)
         
         # Apply command-line overrides
-        if args.mode:
-            instance.mode = args.mode
         if args.input_parquet:
             instance.input_parquet = args.input_parquet
         if args.output_json:
@@ -387,6 +423,24 @@ class PipelineArgs:
             instance.dataset_name = args.dataset_name
         if args.bert_base_config:
             instance.bert_base_config = args.bert_base_config
+        if args.preprocessing_output:
+            instance.preprocessing_output = args.preprocessing_output
+        if args.bert_output:
+            instance.bert_output = args.bert_output
+        if args.efficientnet_output:
+            instance.efficientnet_output = args.efficientnet_output
+        if args.embeddings_output:
+            instance.embeddings_output = args.embeddings_output
+
+        # Override flags if provided
+        if args.use_preprocessing is not None:
+            instance.use_preprocessing = args.use_preprocessing
+        if args.use_bert_classification is not None:
+            instance.use_bert_classification = args.use_bert_classification
+        if args.use_efficientnet_classification is not None:
+            instance.use_efficientnet_classification = args.use_efficientnet_classification
+        if args.use_tokenizer_embeddings is not None:
+            instance.use_tokenizer_embeddings = args.use_tokenizer_embeddings
         if args.threshold:
             instance.classification_threshold = args.threshold
             instance.bert_threshold = args.threshold

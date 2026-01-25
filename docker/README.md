@@ -60,11 +60,11 @@ The pipeline uses **BERT predictions from text reports as ground truth** for eva
 | BERT Classifier | 77-class text classification (GROUND TRUTH) | ✅ Working |
 | ECG Tokenizer | Embedding extraction (Encoder + Quantizer) | ✅ Working |
 | EfficientNet | 77-class signal classification (EVALUATED) | ✅ Working |
-| QA Generation | Question-answer pairs from reports | ⏳ In progress |
+| QA Generation | Question-answer pairs from reports | ⏳ In progress (disabled by default) |
 | Classification Metrics | Signal vs Text AUC, F1, AUPRC | ✅ Working |
-| GPT2 Report Generation | Generate reports from embeddings | ⏳ In progress |
-| MedGemma Answers | Generate QA answers | ⏳ In progress |
-| LLM-as-a-Judge | Evaluate generated text | ⏳ In progress |
+| GPT2 Report Generation | Generate reports from embeddings | ⏳ In progress (disabled) |
+| MedGemma Answers | Generate QA answers | ⏳ In progress (disabled) |
+| LLM-as-a-Judge | Evaluate generated text | ⏳ In progress (disabled) |
 
 ## Input Requirements
 
@@ -98,7 +98,6 @@ docker run --gpus all \
     -v /volume/ECG_tokenizer/checkpoints:/app/checkpoints:ro \
     -v /path/to/ecg/signals:/app/ecg_signals:ro \
     ecg-tokenizer \
-    --mode full_run \
     --input /app/inputs/data.parquet \
     --output /app/outputs/results.json \
     --device cuda:0 \
@@ -117,7 +116,6 @@ docker run \
     -v /volume/ECG_tokenizer/checkpoints:/app/checkpoints:ro \
     -v /path/to/ecg/signals:/app/ecg_signals:ro \
     ecg-tokenizer \
-    --mode full_run \
     --input /app/inputs/data.parquet \
     --output /app/outputs/results.json \
     --device cpu \
@@ -129,10 +127,10 @@ docker run \
 ```bash
 cd /volume/ECG_tokenizer/docker
 
-# GPU mode
+# GPU example
 docker-compose up ecg_tokenizer
 
-# CPU mode
+# CPU example
 docker-compose up ecg_tokenizer_cpu
 ```
 
@@ -141,10 +139,8 @@ docker-compose up ecg_tokenizer_cpu
 ```bash
 cd /volume/ECG_tokenizer/docker
 
-# Using run_pipeline.bash (recommended)
-source run_pipeline.bash \
-    --mode full_run \
-    --input_file /path/to/data.csv
+# Using run_pipeline.bash (flag-based; all steps default to on)
+source run_pipeline.bash --input_file /path/to/data.csv
 ```
 
 Or directly with Python:
@@ -154,7 +150,6 @@ cd /volume/ECG_tokenizer
 source .venv/bin/activate
 
 python inference/main.py \
-    --mode full_run \
     --input /path/to/data.parquet \
     --output /volume/ECG_tokenizer/docker/results.json \
     --device cuda:0 \
@@ -168,7 +163,6 @@ python inference/main.py \
 
 | Option | Description |
 |--------|-------------|
-| `--mode MODE` | Pipeline mode: `full_run` (default), `analysis`, `preprocessing`, `run_bert_classification`, `run_efficientnet` |
 | `--input FILE` | Input CSV/Parquet file path |
 | `--output FILE` | Output JSON file path |
 | `--device DEVICE` | Device: `cuda:0`, `cpu` |
@@ -177,9 +171,14 @@ python inference/main.py \
 | `--tokenizer-checkpoint PATH` | Path to ECG tokenizer checkpoint |
 | `--efficientnet-checkpoint PATH` | Path to EfficientNet classifier checkpoint |
 | `--no-psa` | Skip PSA normalization |
-| `--with-llm-judge` | Run LLM-as-a-Judge evaluation |
 | `--dataset-name NAME` | Optional dataset name for preprocessing outputs |
-| `--bert-base-config FILE` | BERT base config yaml (for run_bert_classification/analysis) |
+| `--bert-base-config FILE` | BERT base config yaml |
+| `--efficientnet-base-config FILE` | EfficientNet base config yaml (runner.sh) |
+| `--efficientnet-selected-gpus LIST` | GPU list for EfficientNet runner (e.g., `0` or `0,1`) |
+| `--efficientnet-use-wandb BOOL` | Whether EfficientNet runner logs to wandb |
+| `--no-preprocessing` | Skip preprocessing (load cached parquet) |
+| `--no-bert` | Skip BERT classification (load cached parquet) |
+| `--no-efficientnet` | Skip EfficientNet classification |
 
 ## Checkpoint Paths
 
@@ -197,50 +196,39 @@ python inference/main.py \
 | Data is raw, needs preprocessing | PSA applied by default in `preprocessing`/`full_run` |
 | Skip all preprocessing | `--no-psa` |
 
-## Pipeline Modes
+## Pipeline Flow (flag-based)
 
-The pipeline supports the following execution modes:
+All steps default to ON. Use flags to skip and load cached artifacts.
 
-| Mode | Description |
-|------|-------------|
-| `preprocessing` | Load raw signals, apply PSA normalization, save as `.base64` files |
-| `run_bert_classification` | Run BERT on `reports` and write 77-class columns into the parquet |
-| `run_efficientnet` | Run EfficientNet on signals only (uses existing BERT columns if present) |
-| `analysis` | Run BERT then EfficientNet (no preprocessing) |
-| `full_run` | Run preprocessing -> BERT -> EfficientNet |
+| Step | On by default | Skip flag | Output |
+|------|---------------|-----------|--------|
+| Preprocessing | yes | `--no-preprocessing` | `<output_dir>/preprocessed.parquet` + `.npy` signals |
+| BERT (77-class) | yes | `--no-bert` | Overwrites parquet with 77 class columns; writes `<parquet>.bert_probabilities.csv` |
+| EfficientNet | yes | `--no-efficientnet` | Results JSON + summary CSV |
 
-### Running Preprocessing Only
+Example: run everything (default)
 ```bash
-docker run --gpus all \
-    -v ./inputs:/app/inputs \
-    -v ./preprocessing:/app/preprocessing \
-    ecg-tokenizer --mode preprocessing --input /app/inputs/data.parquet --dataset-name mimic
+source run_pipeline.bash --input_file data.parquet
 ```
 
-### Running BERT Only (on preprocessed data)
+Skip preprocessing (reuse cached parquet)
 ```bash
-docker run --gpus all \
-    -v ./preprocessing:/app/preprocessing \
-    -v ./outputs:/app/outputs \
-    ecg-tokenizer --mode run_bert_classification --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
-```
-This also writes a probabilities CSV alongside the parquet:
-`<preprocessed_parquet>.bert_probabilities.csv`
-
-### Running EfficientNet Only (on preprocessed data)
-```bash
-docker run --gpus all \
-    -v ./preprocessing:/app/preprocessing \
-    -v ./outputs:/app/outputs \
-    ecg-tokenizer --mode run_efficientnet --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
+source run_pipeline.bash --no-preprocessing --input_file preprocessed.parquet
 ```
 
-### Running Analysis (BERT + EfficientNet, no preprocessing)
+Skip BERT (use cached labels in parquet)
 ```bash
-docker run --gpus all \
-    -v ./preprocessing:/app/preprocessing \
-    -v ./outputs:/app/outputs \
-    ecg-tokenizer --mode analysis --input /app/inputs/20260101_123456_mimic_preprocessed_data.parquet
+source run_pipeline.bash --no-bert --input_file preprocessed_with_bert.parquet
+```
+
+Skip EfficientNet (keep BERT-only outputs)
+```bash
+source run_pipeline.bash --no-efficientnet --input_file preprocessed_with_bert.parquet
+```
+
+Skip EfficientNet (only preprocess + BERT)
+```bash
+source run_pipeline.bash --no-efficientnet --input_file data.parquet
 ```
 
 ## Volume Mounts (Docker)
@@ -259,23 +247,31 @@ docker run --gpus all \
 Configuration via `heartwise.config` (key: value format):
 
 ```yaml
-# Execution mode: preprocessing, run_bert_classification, run_efficientnet, analysis, full_run
-mode: full_run
+use_preprocessing: true
+use_bert_classification: true
+use_efficientnet_classification: true
+use_tokenizer_embeddings: true
+enable_report_generation: false
 
-# Device settings
 device: cuda:0
 batch_size: 32
+input_parquet: /app/inputs/data.parquet
+output_json: /app/outputs/results.json
+output_dir: /app/outputs
 
-# Input columns (fixed)
-# Required: ecg_path, reports
+# Intermediate outputs (defaults shown)
+preprocessing_output: /app/outputs/preprocessed.parquet
+bert_output: /app/outputs/preprocessed.parquet    # BERT overwrites parquet
+efficientnet_output: /app/outputs/preprocessed.parquet
+embeddings_output: /app/outputs/preprocessed.parquet
 
 # Model checkpoints
 bert_checkpoint: /app/checkpoints/mimic_mhi_bert
 tokenizer_checkpoint: /app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt
 efficientnet_checkpoint: /app/checkpoints/ECG_Tokenizer_Linear_Probing/.../checkpoint_epoch_10.pt
 
-# Preprocessing (following DeepECG_Docker pattern)
-apply_psa_normalization: true  # Set true if using raw waveforms
+# Preprocessing
+apply_psa_normalization: true
 preprocessing_folder: /app/preprocessing
 preprocessing_n_workers: 16
 dataset_name: mimic
@@ -291,12 +287,9 @@ For running inside the container, use `run_pipeline.bash` (following DeepECG_Doc
 
 ```bash
 # Inside container
-source run_pipeline.bash --mode full_run --input_file data.csv
-
-# Or with specific modes
-source run_pipeline.bash --mode preprocessing --input_file data.parquet
-source run_pipeline.bash --mode run_bert_classification --input_file preprocessed_data.parquet
-source run_pipeline.bash --mode run_efficientnet --input_file preprocessed_data.parquet
+source run_pipeline.bash --input_file data.csv
+# Skip preprocessing (use cached parquet)
+source run_pipeline.bash --no-preprocessing --input_file preprocessed.parquet
 ```
 
 ## Output Structure

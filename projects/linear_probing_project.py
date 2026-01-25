@@ -198,10 +198,82 @@ class ECGTokenizerLinearProbing(BaseProject):
     def _setup_inference_objects(self)->dict[str, Any]:
         """Setup objects for inference mode.
         
-        Raises:
-            NotImplementedError: Inference not implemented for linear probing
-        """        
-        raise NotImplementedError("Inference is not implemented for this project")
+        Loads the trained linear-probing checkpoint and prepares a
+        distributed dataloader for evaluation.
+        """
+        # Resolve paths
+        dataset_path = getattr(self.config, "inference_dataset_path", None) or self.config.validation_dataset_path
+        if dataset_path is None:
+            raise ValueError("Inference dataset path is not set. Provide inference_dataset_path or validation_dataset_path.")
+        
+        checkpoint_path = getattr(self.config, "inference_checkpoint_path", None)
+        if checkpoint_path is None:
+            raise ValueError("inference_checkpoint_path must be provided for inference mode.")
+        
+        # Load pretrained tokenizer checkpoint to recover architecture details
+        pretrained_state = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        pretrained_config = pretrained_state["config"]
+
+        ecg_tokenizer: ECG_Tokenizer_Wrapper = ModelRegistry.get(self.config.model_name)(
+            encoder_name=pretrained_config.encoder_name,
+            quantizer_name=pretrained_config.quantizer_name,
+            decoder_name=self.config.decoder_name,
+            num_quantizers=pretrained_config.num_quantizers,
+            codebook_size=pretrained_config.codebook_size,
+            decoder_mode=self.config.decoder_mode,
+            num_classes=self.config.num_classes,
+        ).to(self.config.device)
+        # ensure downstream code sees correct codebook size
+        self.config.codebook_size = pretrained_config.codebook_size
+
+        # Load linear probing weights
+        lp_state = self._load_checkpoint(checkpoint_path)
+        model_state_dict = lp_state.get("model_state_dict", lp_state)
+        ecg_tokenizer.load_state_dict(model_state_dict, strict=False)
+        ecg_tokenizer.eval()
+
+        # Wrap in DDP for consistency with rest of codebase
+        ecg_tokenizer = DistributedUtils.DDP(
+            ecg_tokenizer,
+            device_ids=[self.config.device]
+        )
+
+        # Build inference dataloader (no shuffling)
+        inference_dataloader: DataLoader = get_distributed_ecg_tokenizer_classifier_dataloader(
+            parquet_file=dataset_path,
+            expected_waveform_length=self.config.waveform_length,
+            num_leads=self.config.num_leads,
+            normalize_waveforms=self.config.normalize_waveforms,
+            lead_stats=self.config.lead_stats,
+            signal_path_column=self.config.signal_path_column,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            num_replicas=self.config.world_size,
+            rank=self.config.device,
+            shuffle=False,
+            pin_memory=True,
+            shuffle_rows=False,
+            shuffle_seed=getattr(self.config, "seed", 42)
+        )
+
+        return {
+            "ecg_tokenizer": ecg_tokenizer,
+            # runner expects both to be set; reuse same loader
+            "validation_dataloader": inference_dataloader,
+            "train_dataloader": inference_dataloader,
+        }
+
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """
+        Reuse inference setup for validation mode.
+        """
+        return self._setup_inference_objects()
+
+    def _setup_test_objects(self)->dict[str, Any]:
+        """
+        Reuse inference setup for test mode.
+        """
+        return self._setup_inference_objects()
     
     def _setup_extraction_objects(self)->dict[str, Any]:
         """Setup objects for extraction mode.

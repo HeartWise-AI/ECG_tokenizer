@@ -5,16 +5,7 @@
 # Following DeepECG_Docker pattern for standardized input format.
 
 # Required columns
-ECG_FILE_NAME_COLUMN = "ecg_file_name"  # ECG signal filename (joined with ecg_signals_path)
 DIAGNOSIS_COLUMN = "reports"            # Text reports for BERT classification
-
-# Pipeline execution modes
-class Mode:
-    FULL_RUN = "full_run"
-    ANALYSIS = "analysis"
-    PREPROCESSING = "preprocessing"
-    RUN_BERT_CLASSIFICATION = "run_bert_classification"
-    RUN_EFFICIENTNET = "run_efficientnet"
 
 # =============================================================================
 # ECG LEAD CONFIGURATION

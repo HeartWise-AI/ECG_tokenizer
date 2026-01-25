@@ -588,9 +588,25 @@ class ECGTokenizerRunner(BaseRunner):
 
     def inference(self):
         """
-        Inference is not implemented for the ECGTokenizerRunner.
+        Run inference by reusing the validation path.
         """
-        raise NotImplementedError("Inference not implemented for ECGTokenizerRunner")
+        if self.validation_dataloader is None:
+            raise ValueError("Validation dataloader is not set for inference.")
+
+        # Ensure model is in eval mode
+        self.ecg_tokenizer.eval()
+
+        # Reuse validation epoch logic (epoch index 0 for logging)
+        metrics = self._run_epoch(
+            mode=RunMode.VALIDATE,
+            epoch=0
+        )
+
+        # Log metrics on ref device
+        if self.wandb_wrapper and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            self.wandb_wrapper.log({f"Inference/{k}": v for k, v in metrics.items()})
+
+        return metrics
 
     def validate(self):
         """
