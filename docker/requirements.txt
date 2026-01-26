@@ -7,9 +7,9 @@ fastparquet>=2024.11.0
 iterative-stratification>=0.1.9
 matplotlib>=3.9.2
 nltk>=3.9.1
-pandas>=2.2.3
+pandas==2.1.4
 peft>=0.7.0
-pyarrow>=19.0.0
+pyarrow==15.0.0
 pytest>=8.3.5
 pytest-cov>=6.1.1
 rouge-score>=0.1.2
@@ -21,7 +21,7 @@ tqdm>=4.66.5
 transformers>=4.46.2
 vector-quantize-pytorch>=1.21.8
 wandb>=0.18.3
-wfdb>=4.3.0
+wfdb==4.1.2
 xmltodict>=0.12.0
 pywavelets>=1.1.0
 sacrebleu>=2.5.1
