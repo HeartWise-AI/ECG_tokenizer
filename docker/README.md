@@ -57,16 +57,29 @@ docker run --rm \
   --device cpu
 ```
 
-### BERT only (use cached preprocessed parquet)
+### BERT only (skip preprocessing)
+The BERT step accepts **both CSV and Parquet** files as input. Use this when you don't need ECG signal preprocessing:
+
 ```bash
-docker run --rm \
+# Using a CSV file directly
+docker run --gpus all --rm \
   -v $(pwd)/inputs:/app/inputs \
   -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/preprocessing:/app/preprocessing \
+  -v $(pwd)/checkpoints:/app/checkpoints \
   tokenizer_inference \
   --step bert \
-  --input /app/inputs/preprocessed.parquet
+  --input /app/inputs/my_data.csv
+
+# Or using a preprocessed parquet from a previous run
+docker run --gpus all --rm \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/checkpoints:/app/checkpoints \
+  tokenizer_inference \
+  --step bert \
+  --input /app/outputs/preprocessed.parquet
 ```
+
+**Requirements:** Input file must have a `reports` column containing the text reports.
 
 ## Run examples
 ### Full run (preprocess + BERT) on GPU
@@ -92,7 +105,7 @@ source docker/run_pipeline.bash --step preprocess --input_file docker/harvard_em
 | Flag | Description |
 |------|-------------|
 | `--step {preprocess,bert,all}` | Choose stages to run (default `all`). |
-| `--input PATH` | Input CSV/Parquet (needs `ecg_path`, `reports`). |
+| `--input PATH` | Input CSV/Parquet. For `preprocess`/`all`: needs `ecg_path` and `reports`. For `bert` only: needs `reports`. |
 | `--output-dir PATH` | Output directory (default `/app/outputs`). |
 | `--ecg-signals-path PATH` | Base directory for ECG files; use if `ecg_path` is relative. |
 | `--device DEVICE` | `cuda:0` or `cpu` (or `--cpu`). |

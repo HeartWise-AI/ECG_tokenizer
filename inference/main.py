@@ -158,33 +158,38 @@ def main(args: PipelineArgs) -> None:
     # Resolve intermediate paths
     if not args.preprocessing_output:
         args.preprocessing_output = str(Path(args.output_dir) / "preprocessed.parquet")
-    if not args.bert_output:
-        # default overwrite same parquet
-        args.bert_output = args.preprocessing_output
     
     # Step 0/1: preprocessing
-    current_parquet = args.input_parquet
+    current_file = args.input_parquet
     if args.use_preprocessing:
         df_input = validate_input(args)
         preprocessed_parquet = run_preprocessing(args, df_input)
-        current_parquet = str(preprocessed_parquet)
+        current_file = str(preprocessed_parquet)
+    elif args.use_bert_classification:
+        # BERT-only mode: use input file directly (CSV or parquet)
+        current_file = args.input_parquet
     else:
         if not Path(args.preprocessing_output).exists():
             raise FileNotFoundError(
                 f"Preprocessing skipped but {args.preprocessing_output} not found. "
                 "Run with --run-step preprocess first."
             )
-        current_parquet = args.preprocessing_output
+        current_file = args.preprocessing_output
+    
+    # Set default BERT output path based on input file
+    if not args.bert_output:
+        input_stem = Path(current_file).stem
+        args.bert_output = str(Path(args.output_dir) / f"{input_stem}_bert_output.parquet")
     
     # Step 2: BERT classification (only if requested)
     if args.use_bert_classification:
-        current_parquet = run_bert_classification(
+        current_file = run_bert_classification(
             args,
-            input_parquet=current_parquet,
+            input_parquet=current_file,
             output_parquet=args.bert_output,
         )
     else:
-        current_parquet = args.bert_output
+        current_file = args.bert_output
     
     # Step 3: EfficientNet runs externally via scripts/runner.sh
 

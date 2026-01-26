@@ -2,13 +2,12 @@
 """
 Run BERT 77-class classification as a standalone subprocess stage.
 
-This script expects a preprocessed parquet containing:
-  - ecg_path
-  - reports
+This script accepts either CSV or Parquet input containing:
+  - reports (required): Text reports for classification
 
 It creates a temporary CSV with predicted_report/reference_report (both from reports),
 runs batched BERT inference using the existing dataloader utilities, and writes
-class columns (ECG_PATTERNS) back into the parquet.
+class columns (ECG_PATTERNS) to a parquet file.
 """
 
 import os
@@ -28,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from utils.config.heartwise_config import HeartWiseConfig
 from utils.huggingface_wrapper import HuggingFaceWrapper
-from utils.files_handler import load_api_keys
+from utils.files_handler import load_api_keys, load_df
 from utils.registry import ModelRegistry
 from utils.constants import ECG_PATTERNS, BERT_THRESHOLDS
 from data.bert_clinical_report_dataset import get_distributed_clinical_report_dataloader
@@ -36,8 +35,8 @@ from data.bert_clinical_report_dataset import get_distributed_clinical_report_da
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BERT 77-class subprocess")
-    parser.add_argument("--input-parquet", required=True, help="Preprocessed parquet with ecg_path and reports")
-    parser.add_argument("--output-parquet", default=None, help="Output parquet path (default: overwrite input)")
+    parser.add_argument("--input-parquet", required=True, help="Input CSV or Parquet file with 'reports' column")
+    parser.add_argument("--output-parquet", default=None, help="Output parquet path (default: input path with .parquet extension)")
     parser.add_argument("--base-config", default="config/bert_classifier/base_config.yaml", help="BERT base config")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--num-workers", type=int, default=None, help="Override num_workers")
@@ -68,13 +67,13 @@ def run_bert_on_parquet(
     os.environ.setdefault("WORLD_SIZE", "1")
 
     input_path = Path(input_parquet)
-    output_path = Path(output_parquet) if output_parquet else input_path
+    output_path = Path(output_parquet) if output_parquet else input_path.with_suffix(".parquet")
     if not input_path.exists():
-        raise FileNotFoundError(f"Input parquet not found: {input_path}")
+        raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    df = pd.read_parquet(input_path)
+    df = load_df(str(input_path))
     if "reports" not in df.columns:
-        raise ValueError("Input parquet must contain a 'reports' column")
+        raise ValueError("Input file must contain a 'reports' column")
 
     # Build temporary CSV for the BERT dataloader
     bert_csv_path = output_path.with_suffix(".bert_input.csv")
