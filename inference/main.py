@@ -197,7 +197,6 @@ if __name__ == "__main__":
     print(f"  ECG Signals Path: {args.ecg_signals_path}")
     print(f"  Device: {args.device}")
     print(f"  Batch Size: {args.batch_size}")
-    print(f"  PSA Normalization: {args.apply_psa_normalization}")
     print(f"  Required Columns: {DIAGNOSIS_COLUMN}, ecg_path")
     
     main(args)

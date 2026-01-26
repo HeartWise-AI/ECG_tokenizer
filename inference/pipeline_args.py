@@ -46,9 +46,6 @@ class PipelineArgs:
     # Input files must have: ecg_path, reports
     
     # Preprocessing
-    apply_psa_normalization: bool = True
-    psa_region: str = "NA"
-    psa_lead_stats_path: Optional[str] = None
     preprocessing_folder: str = "/app/preprocessing"
     preprocessing_n_workers: int = 16
     dataset_name: Optional[str] = None
@@ -60,9 +57,6 @@ class PipelineArgs:
     
     # Classification
     num_classes: int = 77
-    classification_threshold: float = 0.5
-    use_bert_as_ground_truth: bool = True
-    bert_threshold: float = 0.5
     
     # Output
     verbose: bool = True
@@ -211,16 +205,6 @@ class PipelineArgs:
         
         # Preprocessing
         parser.add_argument(
-            "--no-psa",
-            action="store_true",
-            help="Skip PSA normalization"
-        )
-        parser.add_argument(
-            "--psa-region",
-            type=str,
-            help="PSA normalization region"
-        )
-        parser.add_argument(
             "--preprocessing-folder",
             type=str,
             help="Folder to save preprocessed .base64 files"
@@ -249,18 +233,6 @@ class PipelineArgs:
             "--bert-output",
             type=str,
             help="Path to cached BERT labels parquet"
-        )
-        
-        # Classification
-        parser.add_argument(
-            "--threshold",
-            type=float,
-            help="Classification threshold"
-        )
-        parser.add_argument(
-            "--no-bert-gt",
-            action="store_true",
-            help="Don't use BERT as ground truth (use parquet columns if available)"
         )
         
         # Verbosity
@@ -318,10 +290,6 @@ class PipelineArgs:
             instance.num_workers = args.num_workers
         if args.ecg_signals_path:
             instance.ecg_signals_path = args.ecg_signals_path
-        if args.no_psa:
-            instance.apply_psa_normalization = False
-        if args.psa_region:
-            instance.psa_region = args.psa_region
         if args.preprocessing_folder:
             instance.preprocessing_folder = args.preprocessing_folder
         if args.preprocessing_n_workers:
@@ -347,11 +315,6 @@ class PipelineArgs:
         else:  # all
             instance.use_preprocessing = True
             instance.use_bert_classification = True
-        if args.threshold:
-            instance.classification_threshold = args.threshold
-            instance.bert_threshold = args.threshold
-        if args.no_bert_gt:
-            instance.use_bert_as_ground_truth = False
         if args.quiet:
             instance.verbose = False
         
@@ -368,13 +331,8 @@ class PipelineArgs:
             "device": self.device,
             "batch_size": self.batch_size,
             "num_workers": self.num_workers,
-            "apply_psa_normalization": self.apply_psa_normalization,
-            "psa_region": self.psa_region,
             "preprocessing_folder": self.preprocessing_folder,
             "preprocessing_n_workers": self.preprocessing_n_workers,
             "num_classes": self.num_classes,
-            "classification_threshold": self.classification_threshold,
-            "use_bert_as_ground_truth": self.use_bert_as_ground_truth,
-            "bert_threshold": self.bert_threshold,
             "verbose": self.verbose,
         }

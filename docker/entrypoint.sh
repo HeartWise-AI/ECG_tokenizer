@@ -39,6 +39,29 @@ Volume mounts (recommended):
   -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro
 
 Examples:
+  # Preprocess only
+  docker run --gpus all \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    -v $(pwd)/checkpoints:/app/checkpoints:ro \
+    tokenizer_inference \
+    --step preprocess \
+    --input /app/inputs/harvard_emory_subset_1k.csv \
+    --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
+
+  # BERT only, CPU
+  docker run \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    tokenizer_inference \
+    --step bert \
+    --input /app/inputs/preprocessed.parquet \
+    --device cpu
+
   # Full run (preprocess + BERT) on GPU
   docker run --gpus all \
     -v $(pwd)/inputs:/app/inputs \
@@ -51,16 +74,6 @@ Examples:
     --input /app/inputs/harvard_emory_subset_1k.csv \
     --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
 
-  # Preprocess only, CPU
-  docker run \
-    -v $(pwd)/inputs:/app/inputs \
-    -v $(pwd)/outputs:/app/outputs \
-    -v $(pwd)/preprocessing:/app/preprocessing \
-    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
-    tokenizer_inference \
-    --step preprocess \
-    --input /app/inputs/harvard_emory_subset_1k.csv \
-    --device cpu
 USAGE
   exit 0
 fi
