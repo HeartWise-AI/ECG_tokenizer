@@ -27,9 +27,6 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
     echo "  --num-workers N           Dataloader workers (default: 8)"
     echo "  --preprocessing-folder DIR  Where .npy signals are saved (default: /app/preprocessing)"
     echo "  --dataset-name NAME       Optional prefix for preprocessing outputs"
-    echo "  --bert-checkpoint PATH    BERT classifier checkpoint (read-only mount)"
-    echo "  --tokenizer-checkpoint PATH  ECG tokenizer checkpoint (read-only mount)"
-    echo "  --no-psa                  Disable PSA normalization during preprocessing"
     echo "  --help, -h                Show this help"
     echo ""
     echo "Volume mounts (recommended):"
@@ -41,17 +38,6 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
     echo ""
     echo "Examples:"
     cat <<'EXAMPLES'
-  # Full run (preprocess + BERT) on GPU
-  docker run --gpus all \
-    -v $(pwd)/inputs:/app/inputs \
-    -v $(pwd)/outputs:/app/outputs \
-    -v $(pwd)/preprocessing:/app/preprocessing \
-    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
-    -v $(pwd)/checkpoints:/app/checkpoints:ro \
-    tokenizer_inference \
-    --run-step all \
-    --input /app/inputs/harvard_emory_subset_1k.csv \
-    --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
 
   # Preprocess only, CPU
   docker run \
@@ -60,23 +46,32 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
     -v $(pwd)/preprocessing:/app/preprocessing \
     -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
     tokenizer_inference \
-    --run-step preprocess \
+    --step preprocess \
     --input /app/inputs/harvard_emory_subset_1k.csv \
     --device cpu
-EXAMPLES
-    exit 0
-fi
 
-# Check for required directories
-echo "Checking directories..."
-for dir in inputs outputs; do
-    if [ ! -d "${APP_HOME}/${dir}" ]; then
-        mkdir -p "${APP_HOME}/${dir}"
-        echo "  Created ${dir}/"
-    else
-        echo "  Found ${dir}/"
-    fi
-done
+  # BERT after preprocessing
+  docker run \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    tokenizer_inference \
+    --step bert \
+    --input /app/inputs/preprocessed.parquet \
+    --device cpu
+
+    # Full run (preprocess + BERT) on GPU
+    docker run --gpus all \
+        -v $(pwd)/inputs:/app/inputs \
+        -v $(pwd)/outputs:/app/outputs \
+        -v $(pwd)/preprocessing:/app/preprocessing \
+        -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+        -v $(pwd)/checkpoints:/app/checkpoints:ro \
+        tokenizer_inference \
+        --step all \
+        --input /app/inputs/harvard_emory_subset_1k.csv \
+        --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
 
 # Check for optional directories
 for dir in ecg_signals checkpoints config preprocessing; do
