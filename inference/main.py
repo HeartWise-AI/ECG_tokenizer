@@ -158,9 +158,6 @@ def main(args: PipelineArgs) -> None:
     # Resolve intermediate paths
     if not args.preprocessing_output:
         args.preprocessing_output = str(Path(args.output_dir) / "preprocessed.parquet")
-    if not args.bert_output:
-        # default overwrite same parquet
-        args.bert_output = args.preprocessing_output
     
     # Step 0/1: preprocessing
     current_parquet = args.input_parquet
@@ -168,6 +165,9 @@ def main(args: PipelineArgs) -> None:
         df_input = validate_input(args)
         preprocessed_parquet = run_preprocessing(args, df_input)
         current_parquet = str(preprocessed_parquet)
+        # checkpoint path for resume
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        (Path(args.output_dir) / "last_preprocessed_parquet.txt").write_text(current_parquet)
     else:
         if not Path(args.preprocessing_output).exists():
             raise FileNotFoundError(
@@ -178,11 +178,14 @@ def main(args: PipelineArgs) -> None:
     
     # Step 2: BERT classification (only if requested)
     if args.use_bert_classification:
+        if not args.bert_output:
+            args.bert_output = current_parquet
         current_parquet = run_bert_classification(
             args,
             input_parquet=current_parquet,
             output_parquet=args.bert_output,
         )
+        (Path(args.output_dir) / "last_bert_parquet.txt").write_text(current_parquet)
     else:
         current_parquet = args.bert_output
     
