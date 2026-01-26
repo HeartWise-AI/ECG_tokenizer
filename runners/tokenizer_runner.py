@@ -1,4 +1,5 @@
 import os
+import json
 import wandb
 import heapq
 import torch
@@ -333,6 +334,19 @@ class ECGTokenizerRunner(BaseRunner):
             for category in DEEPECG_CATEGORIES:
                 for metric_name in metrics_dict[category]:
                     gathered_metrics[f"{mode}/{category}_{metric_name}"] = metrics_dict[category][metric_name]
+
+            # Optionally save full metrics JSON when running inference without W&B
+            if (
+                not getattr(self.config, "use_wandb", False)
+                and getattr(self.config, "is_ref_device", True)
+                and getattr(self.config, "run_mode", RunMode.TRAIN) == RunMode.INFERENCE
+            ):
+                os.makedirs(self.config.output_dir, exist_ok=True)
+                metrics_path = os.path.join(self.config.output_dir, "inference_metrics.json")
+                with open(metrics_path, "w") as f:
+                    # Cast numpy types to native for JSON serialization
+                    json.dump(metrics_dict, f, indent=2, default=float)
+                print(f"[Inference] Saved metrics to {metrics_path}")
         
         # Plot and log best/worst reconstructions if wandb is initialized and we're on reference device
         # and we're in reconstruction mode

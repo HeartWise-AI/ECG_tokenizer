@@ -40,9 +40,8 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --no-preprocessing       Skip preprocessing (load cached parquet)"
-    echo "  --no-bert                Skip BERT classification (load cached parquet)"
-    echo "  --no-efficientnet        Skip EfficientNet classification"
+    echo "  --step [preprocess|bert|all]  Choose which step to run (default: all)"
+    echo "  --no-efficientnet        (deprecated) no-op; EfficientNet runs via scripts/runner.sh"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
@@ -79,7 +78,6 @@ device=$(get_param "device")
 batch_size=$(get_param "batch_size")
 num_workers=$(get_param "num_workers")
 input_parquet=$(get_param "input_parquet")
-output_json=$(get_param "output_json")
 output_dir=$(get_param "output_dir")
 ecg_signals_path=$(get_param "ecg_signals_path")
 preprocessing_folder=$(get_param "preprocessing_folder")
@@ -88,16 +86,11 @@ apply_psa_normalization=$(get_param "apply_psa_normalization")
 dataset_name=$(get_param "dataset_name")
 bert_checkpoint=$(get_param "bert_checkpoint")
 tokenizer_checkpoint=$(get_param "tokenizer_checkpoint")
-efficientnet_checkpoint=$(get_param "efficientnet_checkpoint")
-gpt2_checkpoint=$(get_param "gpt2_checkpoint")
-enable_report_generation=$(get_param "enable_report_generation")
 bert_base_config=$(get_param "bert_base_config")
-efficientnet_base_config=$(get_param "efficientnet_base_config")
-efficientnet_selected_gpus=$(get_param "efficientnet_selected_gpus")
-efficientnet_use_wandb=$(get_param "efficientnet_use_wandb")
+run_step="all"
 use_preprocessing=true
 use_bert_classification=true
-use_efficientnet_classification=true
+use_efficientnet_classification=false  # orchestrator no longer runs EfficientNet here
 
 # =============================================================================
 # PARSE COMMAND LINE ARGUMENTS
@@ -139,34 +132,14 @@ while [[ "$#" -gt 0 ]]; do
                 shift 2
             fi
             ;;
-        --no-preprocessing)
-            use_preprocessing=false
-            shift 1
-            ;;
-        --no-bert)
-            use_bert_classification=false
-            shift 1
-            ;;
-        --no-efficientnet)
-            use_efficientnet_classification=false
-            shift 1
-            ;;
-        --efficientnet-base-config)
+        --step)
             if [[ -n $2 && ! $2 =~ ^-- ]]; then
-                efficientnet_base_config="$2"
+                run_step="$2"
                 shift 2
-            fi
-            ;;
-        --efficientnet-selected-gpus)
-            if [[ -n $2 && ! $2 =~ ^-- ]]; then
-                efficientnet_selected_gpus="$2"
-                shift 2
-            fi
-            ;;
-        --efficientnet-use-wandb)
-            if [[ -n $2 && ! $2 =~ ^-- ]]; then
-                efficientnet_use_wandb="$2"
-                shift 2
+            else
+                echo "Error: --step requires one of preprocess|bert|all"
+                usage
+                return 1
             fi
             ;;
         --help|-h)
@@ -199,14 +172,11 @@ fi
 
 # Convert all /app/ paths to local paths when running outside Docker
 input_parquet=$(convert_path "$input_parquet")
-output_json=$(convert_path "$output_json")
 output_dir=$(convert_path "$output_dir")
 ecg_signals_path=$(convert_path "$ecg_signals_path")
 preprocessing_folder=$(convert_path "$preprocessing_folder")
 bert_checkpoint=$(convert_path "$bert_checkpoint")
 tokenizer_checkpoint=$(convert_path "$tokenizer_checkpoint")
-efficientnet_checkpoint=$(convert_path "$efficientnet_checkpoint")
-gpt2_checkpoint=$(convert_path "$gpt2_checkpoint")
 
 # Set defaults if not in config
 device=${device:-cuda:0}
@@ -226,10 +196,6 @@ build_args() {
     
     args="$args --input $input_parquet"
     
-    if [[ -n $output_json ]]; then
-        args="$args --output $output_json"
-    fi
-    
     if [[ -n $output_dir ]]; then
         args="$args --output-dir $output_dir"
     fi
@@ -240,16 +206,7 @@ build_args() {
     args="$args --ecg-signals-path $ecg_signals_path"
     args="$args --preprocessing-folder $preprocessing_folder"
     args="$args --preprocessing-n-workers $preprocessing_n_workers"
-    
-    if [[ "$use_preprocessing" == "false" ]]; then
-        args="$args --no-preprocessing"
-    fi
-    if [[ "$use_bert_classification" == "false" ]]; then
-        args="$args --no-bert-classification"
-    fi
-    if [[ "$use_efficientnet_classification" == "false" ]]; then
-        args="$args --no-efficientnet-classification"
-    fi
+    args="$args --run-step $run_step"
     
     if [[ -n $dataset_name ]]; then
         args="$args --dataset-name $dataset_name"
@@ -263,14 +220,6 @@ build_args() {
         args="$args --tokenizer-checkpoint $tokenizer_checkpoint"
     fi
     
-    if [[ -n $efficientnet_checkpoint ]]; then
-        args="$args --efficientnet-checkpoint $efficientnet_checkpoint"
-    fi
-    
-    if [[ -n $gpt2_checkpoint ]]; then
-        args="$args --gpt2-checkpoint $gpt2_checkpoint"
-    fi
-
     if [[ -n $bert_base_config ]]; then
         args="$args --bert-base-config $bert_base_config"
     fi
@@ -278,10 +227,6 @@ build_args() {
 if [[ "$apply_psa_normalization" == "false" ]]; then
     args="$args --no-psa"
 fi
-    
-    if [[ "$enable_report_generation" == "true" ]]; then
-        args="$args --enable-report-generation"
-    fi
     
     echo "$args"
 }
@@ -297,14 +242,11 @@ run_pipeline() {
     echo "  Device: $device"
     echo "  Batch Size: $batch_size"
     echo "  Input: $input_parquet"
-    echo "  Output: $output_json"
     echo "  Output Dir: $output_dir"
     echo "  ECG Signals Path: $ecg_signals_path"
     echo "  Preprocessing Folder: $preprocessing_folder"
     echo "  PSA Normalization: $apply_psa_normalization"
-    echo "  Use preprocessing: $use_preprocessing"
-    echo "  Use BERT: $use_bert_classification"
-    echo "  Use EfficientNet: $use_efficientnet_classification"
+    echo "  Run Step: $run_step"
     echo "------------------------------------------------------------"
     echo "Required Input Columns:"
     echo "  - ecg_path: ECG signal path"
@@ -320,14 +262,6 @@ run_pipeline() {
     
     python "$python_script" $args
 
-    # If EfficientNet is enabled, run it via runner.sh using configured base config
-    if [[ "$use_efficientnet_classification" == "true" ]]; then
-        eff_base_cfg=${efficientnet_base_config:-config/linear_probing/base_config.yaml}
-        eff_gpus=${efficientnet_selected_gpus:-0}
-        eff_wandb=${efficientnet_use_wandb:-false}
-        echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config $eff_base_cfg --selected_gpus $eff_gpus --use_wandb $eff_wandb --run_mode inference"
-        bash "${APP_ROOT}/scripts/runner.sh" --base_config "$eff_base_cfg" --selected_gpus "$eff_gpus" --use_wandb "$eff_wandb" --run_mode inference
-    fi
 }
 
 # Run

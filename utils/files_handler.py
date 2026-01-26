@@ -3,8 +3,16 @@ import csv
 import json
 import yaml
 import shutil
+from pathlib import Path
+from typing import Dict, Any, Optional
 
-from typing import Dict, Any
+import numpy as np
+import pandas as pd
+
+try:
+    import wfdb
+except ImportError:
+    wfdb = None
 
 
 def load_yaml(config_path: str) -> Dict[str, Any]:
@@ -12,6 +20,36 @@ def load_yaml(config_path: str) -> Dict[str, Any]:
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config
+
+
+# ---------------------------------------------------------------------
+# DataFrame helpers
+# ---------------------------------------------------------------------
+
+def load_df(path: str) -> pd.DataFrame:
+    """
+    Load a DataFrame from CSV or Parquet file.
+    """
+    if path.endswith('.csv'):
+        return pd.read_csv(path)
+    if path.endswith('.parquet'):
+        return pd.read_parquet(path)
+    raise ValueError("Unsupported file extension. Only .csv and .parquet are supported.")
+
+
+def save_df(df: pd.DataFrame, path: str) -> None:
+    """
+    Save a DataFrame to CSV or Parquet file.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if path.endswith('.csv'):
+        df.to_csv(path, index=False)
+    elif path.endswith('.parquet'):
+        df.to_parquet(path, index=False)
+    else:
+        raise ValueError("Unsupported file extension. Only .csv and .parquet are supported.")
 
 def generate_output_dir_name(
     config: dict[str, Any], 
@@ -133,3 +171,56 @@ def save_json(
         os.makedirs('/'.join(path.split('/')[:-1]))
     with open(path, 'w') as f:
         json.dump(data, f, indent=4)
+
+
+# ---------------------------------------------------------------------
+# ECG signal IO
+# ---------------------------------------------------------------------
+
+class ECGFileHandler:
+    """
+    Handler for ECG signal file operations.
+    
+    Supports:
+    - .npy: preferred storage
+    - .hea: WFDB header files (read-only)
+    """
+    
+    @staticmethod
+    def save_ecg_signal(ecg_signal: np.ndarray, filename: str) -> None:
+        """
+        Save ECG signal to .npy
+        """
+        parent_dir = os.path.dirname(filename)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir)
+        np.save(filename, ecg_signal.astype(np.float32))
+    
+    @staticmethod
+    def load_ecg_signal(filename: str) -> np.ndarray:
+        """
+        Load ECG signal from .npy or .hea (WFDB).
+        Returns shape (N, 12) float32.
+        """
+        filename = str(filename)
+        if filename.endswith('.hea'):
+            if wfdb is None:
+                raise ImportError("wfdb is required to read .hea files")
+            record_path = filename[:-4]
+            record = wfdb.rdrecord(record_path)
+            np_array = record.p_signal
+        else:
+            np_array = np.load(filename, allow_pickle=False)
+        writable_array = np.copy(np_array)
+        return writable_array.reshape(-1, 12)
+    
+    @staticmethod
+    def list_files(directory_path: str, extension: Optional[str] = None) -> list:
+        files = [
+            os.path.join(directory_path, f)
+            for f in os.listdir(directory_path)
+            if os.path.isfile(os.path.join(directory_path, f))
+        ]
+        if extension:
+            files = [f for f in files if f.endswith(extension)]
+        return files

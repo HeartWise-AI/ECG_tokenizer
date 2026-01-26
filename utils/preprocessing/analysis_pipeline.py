@@ -6,22 +6,40 @@ from tqdm import tqdm
 
 from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 from utils.constants import PTBXL_POWER_RATIO
+from utils.files_handler import ECGFileHandler
 
 class AnalysisPipeline:
     @staticmethod
-    def save_and_preprocess_data(df: pd.DataFrame, output_folder: str, preprocessing_folder: str, preprocessing_n_workers: int, swap_leads_fn=None, swap_lead1=None, swap_lead2=None) -> pd.DataFrame:
+    def save_and_preprocess_data(
+        df: pd.DataFrame,
+        output_folder: str,
+        preprocessing_folder: str,
+        preprocessing_n_workers: int,
+        swap_leads_fn=None,
+        swap_lead1=None,
+        swap_lead2=None,
+        path_column: str | None = None
+    ) -> pd.DataFrame:
         # Initialize ECG signal processor
         ecg_signal_processor = ECGSignalProcessor()
         
         # Ensure the preprocessing folder exists
         os.makedirs(preprocessing_folder, exist_ok=True)
         
-        # Find the column containing file paths
-        path_columns = [col for col in df.columns if 'path' in col.lower() or 'file' in col.lower()]
-        if not path_columns:
-            raise ValueError("No column with 'path' or 'file' in its name found in the dataframe")
-        
-        ecg_path_col = path_columns[0]  # Use the first matching column
+        # Resolve the ECG path column
+        if path_column and path_column in df.columns:
+            ecg_path_col = path_column
+        else:
+            path_columns = [col for col in df.columns if 'path' in col.lower() or 'file' in col.lower()]
+            if not path_columns:
+                raise ValueError("No column with 'path' or 'file' in its name found in the dataframe")
+            # prefer standardized names if present
+            for preferred in ['ecg_path', 'waveform_path_original', 'waveform_path_psa', 'ECG_path']:
+                if preferred in path_columns:
+                    ecg_path_col = preferred
+                    break
+            else:
+                ecg_path_col = path_columns[0]
         print(f"Detected path column: {ecg_path_col}")
         
         # Process in batches to manage memory
@@ -39,9 +57,9 @@ class AnalysisPipeline:
             try:
                 batch_df = df.iloc[start_idx:end_idx].copy()
                 ecgs = []
-                for index, row in tqdm(batch_df.iterrows(), total=len(batch_df), desc="Loading NPY files"):
+                for index, row in tqdm(batch_df.iterrows(), total=len(batch_df), desc="Loading signals"):
                     try:
-                        lead_array = np.load(row[ecg_path_col])
+                        lead_array = ECGFileHandler.load_ecg_signal(row[ecg_path_col])
                         if np.isnan(lead_array).any():
                             continue
                         

@@ -20,30 +20,24 @@ from typing import List, Optional, Any
 class PipelineArgs:
     """Pipeline arguments with defaults matching DeepECG_Docker patterns."""
     
-    # Step flags
+    # Step control
+    run_step: str = "all"  # preprocess | bert | all
     use_preprocessing: bool = True
     use_bert_classification: bool = True
-    use_efficientnet_classification: bool = True
-    use_tokenizer_embeddings: bool = True
     
     # Paths
     input_parquet: str = "/app/inputs/data.parquet"
-    output_json: str = "/app/outputs/results.json"
     output_dir: str = "/app/outputs"
     ecg_signals_path: str = "/app/ecg_signals"  # Path where ecg_file_name values are joined
     checkpoints_dir: str = "/app/checkpoints"
-    
-    # Model checkpoints
+
+    # Model checkpoints (only BERT + tokenizer are used here)
     bert_checkpoint: str = "/app/checkpoints/mimic_mhi_bert"
     tokenizer_checkpoint: str = "/app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt"
-    efficientnet_checkpoint: Optional[str] = None
-    gpt2_checkpoint: Optional[str] = None
-    medgemma_checkpoint: Optional[str] = None
-    
+
     # Device settings
     device: str = "cuda:0"
-    cpu_fallback: bool = True
-    
+
     # Processing settings
     batch_size: int = 32
     num_workers: int = 8
@@ -63,33 +57,12 @@ class PipelineArgs:
     # Intermediate outputs
     preprocessing_output: Optional[str] = None
     bert_output: Optional[str] = None
-    efficientnet_output: Optional[str] = None
-    embeddings_output: Optional[str] = None
     
     # Classification
     num_classes: int = 77
     classification_threshold: float = 0.5
     use_bert_as_ground_truth: bool = True
     bert_threshold: float = 0.5
-    
-    # Text generation (GPT2 report generation)
-    enable_report_generation: bool = False
-    max_report_length: int = 256
-    generation_temperature: float = 0.7
-    generation_top_p: float = 0.9
-    
-    # QA generation
-    max_prompts_per_ecg: int = 2
-    qa_categories: List[str] = field(default_factory=lambda: [
-        "RHYTHM", "CONDUCTION", "INFARCT_ISCHEMIA",
-        "CHAMBER_ENLARGEMENT", "PERICARDITIS", "OTHER"
-    ])
-    
-    # Evaluation
-    compute_classification_metrics: bool = True
-    compute_text_metrics: bool = True
-    run_llm_judge: bool = False
-    llm_judge_config_path: Optional[str] = None
     
     # Output
     verbose: bool = True
@@ -171,22 +144,13 @@ class PipelineArgs:
             help="Path to configuration file"
         )
         
-        # Step flags
-        parser.add_argument("--use-preprocessing", dest="use_preprocessing", action="store_true", help="Run preprocessing")
-        parser.add_argument("--no-preprocessing", dest="use_preprocessing", action="store_false", help="Skip preprocessing (load cache)")
-        parser.set_defaults(use_preprocessing=None)
-        
-        parser.add_argument("--use-bert-classification", dest="use_bert_classification", action="store_true", help="Run BERT classification")
-        parser.add_argument("--no-bert-classification", dest="use_bert_classification", action="store_false", help="Skip BERT (load cache)")
-        parser.set_defaults(use_bert_classification=None)
-        
-        parser.add_argument("--use-efficientnet-classification", dest="use_efficientnet_classification", action="store_true", help="Run EfficientNet classification")
-        parser.add_argument("--no-efficientnet-classification", dest="use_efficientnet_classification", action="store_false", help="Skip EfficientNet (load cache)")
-        parser.set_defaults(use_efficientnet_classification=None)
-        
-        parser.add_argument("--use-tokenizer-embeddings", dest="use_tokenizer_embeddings", action="store_true", help="Run tokenizer embeddings extraction")
-        parser.add_argument("--no-tokenizer-embeddings", dest="use_tokenizer_embeddings", action="store_false", help="Skip tokenizer embeddings (load cache)")
-        parser.set_defaults(use_tokenizer_embeddings=None)
+        # Step control
+        parser.add_argument(
+            "--run-step",
+            choices=["preprocess", "bert", "all"],
+            default="all",
+            help="Which step to run (preprocess only, bert only, or full preprocess+bert).",
+        )
         
         # Paths
         parser.add_argument(
@@ -194,12 +158,6 @@ class PipelineArgs:
             dest="input_parquet",
             type=str,
             help="Input parquet file path"
-        )
-        parser.add_argument(
-            "--output", "--output-json",
-            dest="output_json",
-            type=str,
-            help="Output JSON file path"
         )
         parser.add_argument(
             "--output-dir",
@@ -217,21 +175,6 @@ class PipelineArgs:
             "--tokenizer-checkpoint",
             type=str,
             help="Path to ECG tokenizer checkpoint"
-        )
-        parser.add_argument(
-            "--efficientnet-checkpoint",
-            type=str,
-            help="Path to EfficientNet classifier checkpoint"
-        )
-        parser.add_argument(
-            "--gpt2-checkpoint",
-            type=str,
-            help="Path to GPT2 report generation checkpoint"
-        )
-        parser.add_argument(
-            "--enable-report-generation",
-            action="store_true",
-            help="Enable GPT2-based report generation from ECG signals"
         )
         
         # Device
@@ -306,16 +249,6 @@ class PipelineArgs:
             type=str,
             help="Path to cached BERT labels parquet"
         )
-        parser.add_argument(
-            "--efficientnet-output",
-            type=str,
-            help="Path to cached EfficientNet parquet"
-        )
-        parser.add_argument(
-            "--embeddings-output",
-            type=str,
-            help="Path to cached embeddings parquet"
-        )
         
         # Classification
         parser.add_argument(
@@ -327,25 +260,6 @@ class PipelineArgs:
             "--no-bert-gt",
             action="store_true",
             help="Don't use BERT as ground truth (use parquet columns if available)"
-        )
-        
-        # Evaluation
-        parser.add_argument(
-            "--no-metrics",
-            action="store_true",
-            help="Skip metrics computation"
-        )
-        parser.add_argument(
-            "--with-llm-judge",
-            action="store_true",
-            help="Run LLM-as-a-Judge evaluation"
-        )
-        
-        # QA
-        parser.add_argument(
-            "--max-prompts",
-            type=int,
-            help="Maximum prompts per ECG"
         )
         
         # Verbosity
@@ -387,20 +301,12 @@ class PipelineArgs:
         # Apply command-line overrides
         if args.input_parquet:
             instance.input_parquet = args.input_parquet
-        if args.output_json:
-            instance.output_json = args.output_json
         if args.output_dir:
             instance.output_dir = args.output_dir
         if args.bert_checkpoint:
             instance.bert_checkpoint = args.bert_checkpoint
         if args.tokenizer_checkpoint:
             instance.tokenizer_checkpoint = args.tokenizer_checkpoint
-        if args.efficientnet_checkpoint:
-            instance.efficientnet_checkpoint = args.efficientnet_checkpoint
-        if args.gpt2_checkpoint:
-            instance.gpt2_checkpoint = args.gpt2_checkpoint
-        if args.enable_report_generation:
-            instance.enable_report_generation = True
         if args.device:
             instance.device = args.device
         if args.cpu:
@@ -427,32 +333,24 @@ class PipelineArgs:
             instance.preprocessing_output = args.preprocessing_output
         if args.bert_output:
             instance.bert_output = args.bert_output
-        if args.efficientnet_output:
-            instance.efficientnet_output = args.efficientnet_output
-        if args.embeddings_output:
-            instance.embeddings_output = args.embeddings_output
 
         # Override flags if provided
-        if args.use_preprocessing is not None:
-            instance.use_preprocessing = args.use_preprocessing
-        if args.use_bert_classification is not None:
-            instance.use_bert_classification = args.use_bert_classification
-        if args.use_efficientnet_classification is not None:
-            instance.use_efficientnet_classification = args.use_efficientnet_classification
-        if args.use_tokenizer_embeddings is not None:
-            instance.use_tokenizer_embeddings = args.use_tokenizer_embeddings
+        # Derive step flags from run_step
+        instance.run_step = args.run_step
+        if instance.run_step == "preprocess":
+            instance.use_preprocessing = True
+            instance.use_bert_classification = False
+        elif instance.run_step == "bert":
+            instance.use_preprocessing = False
+            instance.use_bert_classification = True
+        else:  # all
+            instance.use_preprocessing = True
+            instance.use_bert_classification = True
         if args.threshold:
             instance.classification_threshold = args.threshold
             instance.bert_threshold = args.threshold
         if args.no_bert_gt:
             instance.use_bert_as_ground_truth = False
-        if args.no_metrics:
-            instance.compute_classification_metrics = False
-            instance.compute_text_metrics = False
-        if args.with_llm_judge:
-            instance.run_llm_judge = True
-        if args.max_prompts:
-            instance.max_prompts_per_ecg = args.max_prompts
         if args.quiet:
             instance.verbose = False
         
@@ -461,18 +359,12 @@ class PipelineArgs:
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
-            "mode": self.mode,
             "input_parquet": self.input_parquet,
-            "output_json": self.output_json,
             "output_dir": self.output_dir,
             "ecg_signals_path": self.ecg_signals_path,
             "bert_checkpoint": self.bert_checkpoint,
             "tokenizer_checkpoint": self.tokenizer_checkpoint,
-            "efficientnet_checkpoint": self.efficientnet_checkpoint,
-            "gpt2_checkpoint": self.gpt2_checkpoint,
-            "enable_report_generation": self.enable_report_generation,
             "device": self.device,
-            "cpu_fallback": self.cpu_fallback,
             "batch_size": self.batch_size,
             "num_workers": self.num_workers,
             "apply_psa_normalization": self.apply_psa_normalization,
@@ -483,10 +375,5 @@ class PipelineArgs:
             "classification_threshold": self.classification_threshold,
             "use_bert_as_ground_truth": self.use_bert_as_ground_truth,
             "bert_threshold": self.bert_threshold,
-            "max_report_length": self.max_report_length,
-            "max_prompts_per_ecg": self.max_prompts_per_ecg,
-            "compute_classification_metrics": self.compute_classification_metrics,
-            "compute_text_metrics": self.compute_text_metrics,
-            "run_llm_judge": self.run_llm_judge,
             "verbose": self.verbose,
         }
