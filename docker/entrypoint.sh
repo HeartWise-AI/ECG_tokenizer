@@ -37,31 +37,33 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
     echo "  -v ./outputs:/app/outputs                # outputs (.parquet, metrics, logs)"
     echo "  -v ./preprocessing:/app/preprocessing    # cached .npy signals"
     echo "  -v ./checkpoints:/app/checkpoints:ro     # tokenizer / BERT weights"
-    echo "  -v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro  # raw ECG paths"
+    echo "  -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro  # raw ECG paths (match absolute paths in CSVs)"
     echo ""
     echo "Examples:"
-    echo "  # Full run (preprocess + BERT) on GPU"
-    echo "  docker run --gpus all \\
-      -v \$(pwd)/inputs:/app/inputs \\
-      -v \$(pwd)/outputs:/app/outputs \\
-      -v \$(pwd)/preprocessing:/app/preprocessing \\
-      -v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro \\
-      -v \$(pwd)/checkpoints:/app/checkpoints:ro \\
-      tokenizer_inference \\
-      --run-step all \\
-      --input /app/inputs/harvard_emory_subset_1k.csv \\
-      --ecg-signals-path /mnt/data1/datasets/Harvard-Emory-ECG
-    echo ""
-    echo "  # Preprocess only, CPU"
-    echo "  docker run \\
-      -v \$(pwd)/inputs:/app/inputs \\
-      -v \$(pwd)/outputs:/app/outputs \\
-      -v \$(pwd)/preprocessing:/app/preprocessing \\
-      -v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro \\
-      tokenizer_inference \\
-      --run-step preprocess \\
-      --input /app/inputs/harvard_emory_subset_1k.csv \\
-      --device cpu
+    cat <<'EXAMPLES'
+  # Full run (preprocess + BERT) on GPU
+  docker run --gpus all \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    -v $(pwd)/checkpoints:/app/checkpoints:ro \
+    tokenizer_inference \
+    --run-step all \
+    --input /app/inputs/harvard_emory_subset_1k.csv \
+    --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
+
+  # Preprocess only, CPU
+  docker run \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    tokenizer_inference \
+    --run-step preprocess \
+    --input /app/inputs/harvard_emory_subset_1k.csv \
+    --device cpu
+EXAMPLES
     exit 0
 fi
 
