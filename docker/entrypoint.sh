@@ -17,7 +17,7 @@ if [[ "$1" == "--help" || "$1" == "-h" ]]; then
 Usage: docker run [docker-opts] tokenizer_inference [pipeline-opts]
 
 Pipeline options (python inference/main.py):
-  --run-step {preprocess|bert|all}    Which stages to run (default: all)
+  --step {preprocess|bert|all}        Which stages to run (default: all)
   --input PATH                        Input CSV/Parquet (must have ecg_path, reports)
   --output-dir PATH                   Output dir (default: /app/outputs)
   --ecg-signals-path PATH             Base dir for ECG files (or leave if ecg_path absolute)
@@ -47,7 +47,7 @@ Examples:
     -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
     -v $(pwd)/checkpoints:/app/checkpoints:ro \
     tokenizer_inference \
-    --run-step all \
+    --step all \
     --input /app/inputs/harvard_emory_subset_1k.csv \
     --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
 
@@ -58,7 +58,7 @@ Examples:
     -v $(pwd)/preprocessing:/app/preprocessing \
     -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
     tokenizer_inference \
-    --run-step preprocess \
+    --step preprocess \
     --input /app/inputs/harvard_emory_subset_1k.csv \
     --device cpu
 USAGE

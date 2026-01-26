@@ -144,9 +144,10 @@ class PipelineArgs:
             help="Path to configuration file"
         )
         
-        # Step control
+        # Step control (single flag)
         parser.add_argument(
-            "--run-step",
+            "--step",
+            dest="run_step",
             choices=["preprocess", "bert", "all"],
             default="all",
             help="Which step to run (preprocess only, bert only, or full preprocess+bert).",

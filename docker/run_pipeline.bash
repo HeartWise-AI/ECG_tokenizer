@@ -206,7 +206,7 @@ build_args() {
     args="$args --ecg-signals-path $ecg_signals_path"
     args="$args --preprocessing-folder $preprocessing_folder"
     args="$args --preprocessing-n-workers $preprocessing_n_workers"
-    args="$args --run-step $run_step"
+    args="$args --step $run_step"
     
     if [[ -n $dataset_name ]]; then
         args="$args --dataset-name $dataset_name"
