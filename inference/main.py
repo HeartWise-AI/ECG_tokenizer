@@ -160,7 +160,7 @@ def main(args: PipelineArgs) -> None:
         args.preprocessing_output = str(Path(args.output_dir) / "preprocessed.parquet")
     
     # Step 0/1: preprocessing
-    current_parquet = args.input_parquet
+    current_file = args.input_parquet
     if args.use_preprocessing:
         df_input = validate_input(args)
         preprocessed_parquet = run_preprocessing(args, df_input)
@@ -174,7 +174,12 @@ def main(args: PipelineArgs) -> None:
                 f"Preprocessing skipped but {args.preprocessing_output} not found. "
                 "Run with --run-step preprocess first."
             )
-        current_parquet = args.preprocessing_output
+        current_file = args.preprocessing_output
+    
+    # Set default BERT output path based on input file
+    if not args.bert_output:
+        input_stem = Path(current_file).stem
+        args.bert_output = str(Path(args.output_dir) / f"{input_stem}_bert_output.parquet")
     
     # Step 2: BERT classification (only if requested)
     if args.use_bert_classification:
@@ -182,12 +187,12 @@ def main(args: PipelineArgs) -> None:
             args.bert_output = current_parquet
         current_parquet = run_bert_classification(
             args,
-            input_parquet=current_parquet,
+            input_parquet=current_file,
             output_parquet=args.bert_output,
         )
         (Path(args.output_dir) / "last_bert_parquet.txt").write_text(current_parquet)
     else:
-        current_parquet = args.bert_output
+        current_file = args.bert_output
     
     # Step 3: EfficientNet runs externally via scripts/runner.sh
 
@@ -200,7 +205,6 @@ if __name__ == "__main__":
     print(f"  ECG Signals Path: {args.ecg_signals_path}")
     print(f"  Device: {args.device}")
     print(f"  Batch Size: {args.batch_size}")
-    print(f"  PSA Normalization: {args.apply_psa_normalization}")
     print(f"  Required Columns: {DIAGNOSIS_COLUMN}, ecg_path")
     
     main(args)

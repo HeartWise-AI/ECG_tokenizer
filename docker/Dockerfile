@@ -36,10 +36,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Download NLTK data for text metrics
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('wordnet', quiet=True)"
 
-# Clone ECG_LLM_Judge repository for LLM-as-a-Judge evaluation
-RUN git clone https://github.com/HeartWise-AI/ECG_LLM_Judge.git ${APP_HOME}/ECG_LLM_Judge || \
-    echo "Warning: Could not clone ECG_LLM_Judge repository"
-
 # Copy application code
 COPY data/ ${APP_HOME}/data/
 COPY models/ ${APP_HOME}/models/
@@ -47,6 +43,9 @@ COPY utils/ ${APP_HOME}/utils/
 COPY inference/ ${APP_HOME}/inference/
 COPY dataset_generation/ ${APP_HOME}/dataset_generation/
 COPY config/ ${APP_HOME}/config/
+
+# Copy API keys from repository root
+COPY api_keys.json ${APP_HOME}/api_keys.json
 
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh
@@ -57,7 +56,7 @@ COPY docker/run_pipeline.bash ${APP_HOME}/run_pipeline.bash
 RUN chmod +x ${APP_HOME}/entrypoint.sh ${APP_HOME}/run_pipeline.bash
 
 # Set Python path
-ENV PYTHONPATH="${APP_HOME}:${PYTHONPATH}"
+ENV PYTHONPATH="${APP_HOME}"
 
 # Set entrypoint
 ENTRYPOINT ["/app/entrypoint.sh"]

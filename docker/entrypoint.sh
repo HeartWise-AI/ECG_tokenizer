@@ -1,76 +1,103 @@
 #!/bin/bash
-# ECG Tokenizer Pipeline Entrypoint
-# Following DeepECG_Docker pattern
-
+# ECG Tokenizer Pipeline Entrypoint (updated)
 set -e
 
 APP_HOME="${APP_HOME:-/app}"
 
-# Display banner
+# Banner
 echo "============================================================"
 echo "ECG Tokenizer Inference Pipeline"
 echo "============================================================"
+echo "(preprocessing saves .npy; thresholds from config)"
 echo ""
 
-# Check if help is requested
+# Help
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-    echo "Usage: docker run [docker-options] ecg-tokenizer [pipeline-options]"
-    echo ""
-    echo "Pipeline Options:"
-    echo "  --mode MODE           Pipeline mode: preprocessing, analysis, full_run (default: full_run)"
-    echo "  --input FILE          Input parquet file path"
-    echo "  --output FILE         Output JSON file path"
-    echo "  --device DEVICE       Device to use: cuda:0, cpu, etc."
-    echo "  --batch-size N        Batch size for processing"
-    echo "  --no-psa              Skip PSA normalization"
-    echo "  --with-llm-judge      Run LLM-as-a-Judge evaluation"
-    echo "  --help, -h            Show this help message"
-    echo ""
-    echo "Volume Mounts:"
-    echo "  /app/inputs           Input parquet files"
-    echo "  /app/outputs          Output results (JSON, CSV)"
-    echo "  /app/ecg_signals      Raw ECG signal files (read-only)"
-    echo "  /app/checkpoints      Model checkpoints (read-only)"
-    echo "  /app/config           Configuration files (read-only)"
-    echo ""
-    echo "Examples:"
-    echo "  # Run with GPU"
-    echo "  docker run --gpus all \\"
-    echo "    -v ./inputs:/app/inputs \\"
-    echo "    -v ./outputs:/app/outputs \\"
-    echo "    -v ./ecg_signals:/app/ecg_signals:ro \\"
-    echo "    -v ./checkpoints:/app/checkpoints:ro \\"
-    echo "    ecg-tokenizer --mode full_run"
-    echo ""
-    echo "  # Run with CPU"
-    echo "  docker run \\"
-    echo "    -v ./inputs:/app/inputs \\"
-    echo "    -v ./outputs:/app/outputs \\"
-    echo "    ecg-tokenizer --device cpu --batch-size 8"
-    exit 0
+  cat <<'USAGE'
+Usage: docker run [docker-opts] tokenizer_inference [pipeline-opts]
+
+Pipeline options (python inference/main.py):
+  --step {preprocess|bert|all}        Which stages to run (default: all)
+  --input PATH                        Input CSV/Parquet (must have ecg_path, reports)
+  --output-dir PATH                   Output dir (default: /app/outputs)
+  --ecg-signals-path PATH             Base dir for ECG files (or leave if ecg_path absolute)
+  --device DEVICE                     cuda:0 | cpu (or add --cpu)
+  --batch-size N                      Batch size (default: 32)
+  --num-workers N                     Dataloader workers (default: 8)
+  --preprocessing-folder DIR          Where .npy signals are saved (default: /app/preprocessing)
+  --dataset-name NAME                 Optional prefix for preprocessing outputs
+  --bert-checkpoint PATH              BERT classifier checkpoint
+  --tokenizer-checkpoint PATH         ECG tokenizer checkpoint
+  --no-psa                            Disable PSA normalization during preprocessing
+  --help, -h                          Show this help
+
+Volume mounts (recommended):
+  -v ./inputs:/app/inputs
+  -v ./outputs:/app/outputs
+  -v ./preprocessing:/app/preprocessing
+  -v ./checkpoints:/app/checkpoints:ro
+  -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro
+
+Examples:
+  # Preprocess only
+  docker run --gpus all \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    -v $(pwd)/checkpoints:/app/checkpoints:ro \
+    tokenizer_inference \
+    --step preprocess \
+    --input /app/inputs/harvard_emory_subset_1k.csv \
+    --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
+
+  # BERT only, CPU
+  docker run \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    tokenizer_inference \
+    --step bert \
+    --input /app/inputs/preprocessed.parquet \
+    --device cpu
+
+  # Full run (preprocess + BERT) on GPU
+  docker run --gpus all \
+    -v $(pwd)/inputs:/app/inputs \
+    -v $(pwd)/outputs:/app/outputs \
+    -v $(pwd)/preprocessing:/app/preprocessing \
+    -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+    -v $(pwd)/checkpoints:/app/checkpoints:ro \
+    tokenizer_inference \
+    --step all \
+    --input /app/inputs/harvard_emory_subset_1k.csv \
+    --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
+
+USAGE
+  exit 0
 fi
 
-# Check for required directories
+# Ensure required dirs exist
 echo "Checking directories..."
 for dir in inputs outputs; do
-    if [ ! -d "${APP_HOME}/${dir}" ]; then
-        mkdir -p "${APP_HOME}/${dir}"
-        echo "  Created ${dir}/"
-    else
-        echo "  Found ${dir}/"
-    fi
+  if [ ! -d "${APP_HOME}/${dir}" ]; then
+    mkdir -p "${APP_HOME}/${dir}"
+    echo "  Created ${dir}/"
+  else
+    echo "  Found ${dir}/"
+  fi
 done
 
-# Check for optional directories
-for dir in ecg_signals checkpoints config; do
-    if [ -d "${APP_HOME}/${dir}" ]; then
-        echo "  Found ${dir}/"
-    else
-        echo "  Note: ${dir}/ not mounted"
-    fi
+# Optional dirs
+for dir in ecg_signals checkpoints config preprocessing; do
+  if [ -d "${APP_HOME}/${dir}" ]; then
+    echo "  Found ${dir}/"
+  else
+    echo "  Note: ${dir}/ not mounted"
+  fi
 done
 
 echo ""
 
-# Run the pipeline with all passed arguments
 exec python "${APP_HOME}/inference/main.py" "$@"
