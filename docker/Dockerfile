@@ -44,6 +44,9 @@ COPY inference/ ${APP_HOME}/inference/
 COPY dataset_generation/ ${APP_HOME}/dataset_generation/
 COPY config/ ${APP_HOME}/config/
 
+# Copy API keys from repository root
+COPY api_keys.json ${APP_HOME}/api_keys.json
+
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh
 COPY docker/heartwise.config ${APP_HOME}/heartwise.config
