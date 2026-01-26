@@ -41,23 +41,8 @@ docker build --no-cache -f docker/Dockerfile -t tokenizer_inference .
 - `-v ./inputs:/app/inputs`            – input CSV/Parquet
 - `-v ./outputs:/app/outputs`          – outputs (parquet, metrics)
 - `-v ./preprocessing:/app/preprocessing` – cached `.npy` signals
-- `-v ./checkpoints:/app/checkpoints:ro` – BERT/tokenizer weights
+- `-v ./checkpoints:/app/checkpoints` – BERT/tokenizer weights (writable for model downloads)
 - `-v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro` – raw ECG paths (match the `ecg_path` values)
-
-## Run examples
-### Full run (preprocess + BERT) on GPU
-```bash
-docker run --gpus all --rm \
-  -v $(pwd)/inputs:/app/inputs \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/preprocessing:/app/preprocessing \
-  -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
-  -v $(pwd)/checkpoints:/app/checkpoints:ro \
-  tokenizer_inference \
-  --step all \
-  --input /app/inputs/harvard_emory_subset_1k.csv \
-  --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
-```
 
 ### Preprocess only (CPU)
 ```bash
@@ -81,6 +66,21 @@ docker run --rm \
   tokenizer_inference \
   --step bert \
   --input /app/inputs/preprocessed.parquet
+```
+
+## Run examples
+### Full run (preprocess + BERT) on GPU
+```bash
+docker run --gpus all --rm \
+  -v $(pwd)/inputs:/app/inputs \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/preprocessing:/app/preprocessing \
+  -v /media/data1/datasets/Harvard-Emory-ECG:/media/data1/datasets/Harvard-Emory-ECG:ro \
+  -v $(pwd)/checkpoints:/app/checkpoints \
+  tokenizer_inference \
+  --step all \
+  --input /app/inputs/harvard_emory_subset_1k.csv \
+  --ecg-signals-path /media/data1/datasets/Harvard-Emory-ECG
 ```
 
 ## Using the helper script locally (no container)
