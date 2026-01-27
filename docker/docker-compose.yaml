@@ -40,8 +40,8 @@ services:
       - CUDA_VISIBLE_DEVICES=0
       - PYTHONUNBUFFERED=1
     
-    # Command
-    command: ["--mode", "full_run", "--input", "/app/inputs/data.parquet", "--output", "/app/outputs/results.json"]
+    # Command: run preprocess + BERT (EfficientNet is external)
+    command: ["bash", "-lc", "source /app/docker/run_pipeline.bash --step all --input_file /app/inputs/data.parquet"]
     
     # Interactive mode
     stdin_open: true
@@ -66,7 +66,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     
-    command: ["--mode", "full_run", "--device", "cpu", "--batch-size", "8"]
+    command: ["bash", "-lc", "source /app/docker/run_pipeline.bash --step all --device cpu --batch-size 8 --input_file /app/inputs/data.parquet"]
     
     stdin_open: true
     tty: true
