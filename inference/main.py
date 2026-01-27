@@ -164,10 +164,10 @@ def main(args: PipelineArgs) -> None:
     if args.use_preprocessing:
         df_input = validate_input(args)
         preprocessed_parquet = run_preprocessing(args, df_input)
-        current_parquet = str(preprocessed_parquet)
-        # checkpoint path for resume
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        (Path(args.output_dir) / "last_preprocessed_parquet.txt").write_text(current_parquet)
+        current_file = str(preprocessed_parquet)
+    elif args.use_bert_classification:
+        # BERT-only mode: use input file directly (CSV or parquet)
+        current_file = args.input_parquet
     else:
         if not Path(args.preprocessing_output).exists():
             raise FileNotFoundError(
@@ -183,14 +183,11 @@ def main(args: PipelineArgs) -> None:
     
     # Step 2: BERT classification (only if requested)
     if args.use_bert_classification:
-        if not args.bert_output:
-            args.bert_output = current_parquet
-        current_parquet = run_bert_classification(
+        current_file = run_bert_classification(
             args,
             input_parquet=current_file,
             output_parquet=args.bert_output,
         )
-        (Path(args.output_dir) / "last_bert_parquet.txt").write_text(current_parquet)
     else:
         current_file = args.bert_output
     
