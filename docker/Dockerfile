@@ -49,18 +49,24 @@ COPY config/ ${APP_HOME}/config/
 COPY api_keys.json ${APP_HOME}/api_keys.json
 
 # Prefetch model weights so runtime stays offline
+ARG HF_TOKEN=""
+ENV HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
 RUN python - <<'PY'
 import json
+import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 
 api_path = Path("/app/api_keys.json")
-token = None
-if api_path.exists():
+token = os.environ.get("HUGGING_FACE_HUB_TOKEN")
+if not token and api_path.exists():
     try:
         token = json.load(api_path.open()).get("HUGGING_FACE_TOKEN")
     except Exception as exc:  # pragma: no cover
         print(f"[WARN] Unable to read HUGGING_FACE_TOKEN: {exc}")
+
+if not token:
+    raise SystemExit("Hugging Face token not provided. Pass --build-arg HF_TOKEN=... or put HUGGING_FACE_TOKEN in api_keys.json")
 
 
 def prefetch(repo: str, dest: str) -> None:
