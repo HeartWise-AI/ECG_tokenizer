@@ -1,50 +1,54 @@
-# ECG Tokenizer Docker Pipeline
+# ECG Tokenizer – Docker Inference
 
-## Inputs
-- Parquet/CSV with columns: `ecg_path` (path to .npy or WFDB .hea) and `reports`.
+This document covers the containerized inference flow (preprocess → BERT → EfficientNet) with all Hugging Face weights/configs baked into the image.
 
-## Running steps
-Use `docker/run_pipeline.bash` with `--step`:
+## Build the image (prefetch weights)
+Requires a HF token in root in `api_keys.json` (key: `HUGGING_FACE_TOKEN`).
+All weights uploaded at HF: https://huggingface.co/collections/heartwise/deepecg-tok
 
-1) Preprocess only  
+
+Weights/configs after build:
+- Tokenizer checkpoint: `/app/checkpoints/deepecg_tokenizer.pt`
+- EfficientNet checkpoint: `/app/checkpoints/deepecg_tokenizer_efficientnet.pt`
+- EfficientNet config: `/app/checkpoints/efficientnet/base_config.yaml`
+- BERT snapshot: `/app/checkpoints/bert/…`
+
+
+## Run commands
+
+Docker image creation:
 ```bash
-source docker/run_pipeline.bash --step preprocess --input_file /path/to/data.csv
+docker build --no-cache -f docker/Dockerfile -t tokenizer_inference .
 ```
 
-2) BERT only (on the parquet from step 1)  
+
+Full pipeline (preprocess + BERT + EfficientNet):
 ```bash
-source docker/run_pipeline.bash --step bert --input_file /volume/ECG_tokenizer/outputs/<preprocessed_parquet>.parquet
+docker run --gpus all --rm --shm-size=8g -v "$(pwd)/inputs:/app/inputs" -v "$(pwd)/outputs:/app/outputs" -v "$(pwd)/preprocessing:/app/preprocessing" -v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro tokenizer_inference --step all --input_file /app/inputs/harvard_emory_subset_1k.csv
 ```
 
-3) Full (preprocess + BERT)  
+Preprocess only:
 ```bash
-source docker/run_pipeline.bash --step all --input_file /path/to/data.csv
+docker run --rm --shm-size=4g \
+  -v "$(pwd)/inputs:/app/inputs" \
+  -v "$(pwd)/outputs:/app/outputs" \
+  -v "$(pwd)/preprocessing:/app/preprocessing" \
+  -v /mnt/data1/datasets/Harvard-Emory-ECG:/mnt/data1/datasets/Harvard-Emory-ECG:ro \
+  tokenizer_inference \
+  --step preprocess \
+  --input /app/inputs/harvard_emory_subset_1k.csv
 ```
 
-4) EfficientNet (external)  
+BERT only (csv can be used too):
 ```bash
-bash scripts/runner.sh --base_config config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference
+docker run --gpus all --rm --shm-size=8g -v "$(pwd)/outputs:/app/outputs" tokenizer_inference --step bert --input_file /app/outputs/preprocessed.parquet
 ```
 
-## Outputs
-- Preprocessed parquet: `<output_dir>/<timestamp>[_<dataset>]_preprocessed_data.parquet`
-- Cleaned signals: `<preprocessing_folder>/<timestamp>[_<dataset>]_preprocessing/*.npy`
-- BERT probabilities CSV: `<preprocessed_parquet>.bert_probabilities.csv` (same base name)
-
-## Volume mounts (Docker)
-| Mount | Purpose |
-|-------|---------|
-| `/app/inputs` | Input CSV/Parquet |
-| `/app/outputs` | Parquet outputs (preprocessed + BERT) |
-| `/app/preprocessing` | Saved `.npy` signals |
-| `/app/ecg_signals` | Raw ECGs (read-only) |
-| `/app/checkpoints` | BERT/tokenizer checkpoints (read-only) |
-| `/app/config` | Config files (read-only) |
-
-## Checkpoints needed
-- BERT classifier: `/app/checkpoints/mimic_mhi_bert`
-- Tokenizer: `/app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt`
-(EfficientNet checkpoint is only needed when you call `scripts/runner.sh`.)
-
-## Notes
-- BERT is mandatory for generating labels; `--step bert` or `--step all` runs it.
+Analysis (BERT → EfficientNet, skip preprocessing):
+```bash
+docker run --gpus all --rm --shm-size=8g \
+  -v "$(pwd)/outputs:/app/outputs" \
+  tokenizer_inference \
+  --step analysis \
+  --input /app/outputs/preprocessed.parquet
+```
