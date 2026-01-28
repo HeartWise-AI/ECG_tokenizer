@@ -85,8 +85,8 @@ def prefetch(repo: str, dest: str) -> None:
 
 
 prefetch("heartwise/Bert_diagnosis2classification_En_Fr", "/app/checkpoints/bert")
-prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/ECG_tokenizer_latest")
-prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/efficientnet")
+prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/DeepECG-Tok_tokenizer")
+prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes")
 PY
 
 # Copy Docker-specific files

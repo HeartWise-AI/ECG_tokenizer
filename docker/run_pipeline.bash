@@ -91,7 +91,7 @@ run_step="all"
 use_preprocessing=true
 use_bert_classification=true
 use_efficientnet_classification=true
-efficientnet_config="${APP_ROOT}/checkpoints/efficientnet/base_config.yaml"
+efficientnet_config="${APP_ROOT}/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes/base_config.yaml"
 
 # =============================================================================
 # PARSE COMMAND LINE ARGUMENTS
