@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV APP_HOME=/app
+ENV HF_HOME=${APP_HOME}/.cache/huggingface
 
 WORKDIR ${APP_HOME}
 
@@ -46,6 +47,38 @@ COPY config/ ${APP_HOME}/config/
 
 # Copy API keys from repository root
 COPY api_keys.json ${APP_HOME}/api_keys.json
+
+# Prefetch model weights so runtime stays offline
+RUN python - <<'PY'
+import json
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+api_path = Path("/app/api_keys.json")
+token = None
+if api_path.exists():
+    try:
+        token = json.load(api_path.open()).get("HUGGING_FACE_TOKEN")
+    except Exception as exc:  # pragma: no cover
+        print(f"[WARN] Unable to read HUGGING_FACE_TOKEN: {exc}")
+
+
+def prefetch(repo: str, dest: str) -> None:
+    Path(dest).mkdir(parents=True, exist_ok=True)
+    print(f"Prefetching {repo} -> {dest}")
+    snapshot_download(
+        repo_id=repo,
+        repo_type="model",
+        local_dir=dest,
+        local_dir_use_symlinks=False,
+        token=token,
+    )
+
+
+prefetch("heartwise/Bert_diagnosis2classification_En_Fr", "/app/checkpoints/bert")
+prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/ECG_tokenizer_latest")
+prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/efficientnet")
+PY
 
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh

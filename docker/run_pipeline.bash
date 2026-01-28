@@ -91,6 +91,7 @@ run_step="all"
 use_preprocessing=true
 use_bert_classification=true
 use_efficientnet_classification=true
+efficientnet_config="${APP_ROOT}/checkpoints/efficientnet/base_config.yaml"
 
 # =============================================================================
 # PARSE COMMAND LINE ARGUMENTS
@@ -177,6 +178,7 @@ ecg_signals_path=$(convert_path "$ecg_signals_path")
 preprocessing_folder=$(convert_path "$preprocessing_folder")
 bert_checkpoint=$(convert_path "$bert_checkpoint")
 tokenizer_checkpoint=$(convert_path "$tokenizer_checkpoint")
+efficientnet_config=$(convert_path "$efficientnet_config")
 
 # Set defaults if not in config
 device=${device:-cuda:0}
@@ -251,6 +253,7 @@ run_pipeline() {
     echo "  Preprocessing Folder: $preprocessing_folder"
     echo "  PSA Normalization: $apply_psa_normalization"
     echo "  Run Step: $run_step"
+    echo "  EfficientNet Config: $efficientnet_config"
     echo "------------------------------------------------------------"
     echo "Required Input Columns:"
     echo "  - ecg_path: ECG signal path"
@@ -279,8 +282,12 @@ run_pipeline() {
                 echo "Error: BERT output not found at $bert_output after --step analysis"
                 return 1
             fi
-            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
-            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            if [[ ! -f "$efficientnet_config" ]]; then
+                echo "Error: EfficientNet config not found at $efficientnet_config (expected from downloaded HF model)"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             ;;
         efficientnet)
             # Ensure BERT output exists before running EfficientNet
@@ -288,8 +295,12 @@ run_pipeline() {
                 echo "Error: Run BERT before this step! Missing $bert_output"
                 return 1
             fi
-            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
-            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            if [[ ! -f "$efficientnet_config" ]]; then
+                echo "Error: EfficientNet config not found at $efficientnet_config (expected from downloaded HF model)"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             ;;
         all)
             echo "[RUN] python $python_script $args"
@@ -298,8 +309,12 @@ run_pipeline() {
                 echo "Error: BERT output not found at $bert_output after run_step=all"
                 return 1
             fi
-            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
-            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            if [[ ! -f "$efficientnet_config" ]]; then
+                echo "Error: EfficientNet config not found at $efficientnet_config (expected from downloaded HF model)"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             ;;
         *)
             echo "Unknown run_step: $run_step"
