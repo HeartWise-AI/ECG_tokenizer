@@ -1929,7 +1929,6 @@ class MedGemmaDecoder(nn.Module):
         quantized_features: Optional[torch.Tensor] = None,
         quantized_codes: Optional[torch.Tensor] = None,
         max_token_length: int = 256,
-        category_hint: Optional[Union[str, Sequence[str]]] = None,
         **generate_kwargs: Any,
     ) -> torch.Tensor:
         embed_layer = self.llm_model.get_input_embeddings()
@@ -2010,20 +2009,8 @@ class MedGemmaDecoder(nn.Module):
             prompt_text = self.tokenizer.decode(prompt_tensor[0].tolist(), skip_special_tokens=True)
         except Exception:
             prompt_text = ""
-        task_hint = generate_args.pop("task_hint", None)
         # Coerce category hint if provided (supports str or list[str])
-        if category_hint is not None:
-            if isinstance(category_hint, (list, tuple)) and category_hint:
-                c0 = str(category_hint[0]).lower()
-            else:
-                c0 = str(category_hint).lower()
-            task_hint = (
-                "json" if "json" in c0 else
-                "binary" if any(k in c0 for k in ["yes_no", "yesno", "binary", "classification"]) else
-                "scalar" if any(k in c0 for k in ["lvef", "heart rate", "bpm", "numeric"]) else
-                task_hint
-            )
-        task = task_hint or self._infer_task(prompt_text)
+        task = self._infer_task(prompt_text)
         route = self._decoding_profile(task)
         for k, v in route.items():
             generate_args.setdefault(k, v)
@@ -2213,7 +2200,6 @@ class MedGemmaDecoder(nn.Module):
         quantized_codes: Optional[torch.Tensor] = None,
         prompt_input_ids: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
-        category_hint: Optional[Union[str, Sequence[str]]] = None,
         max_token_length: int = 256,
         **generate_kwargs: Any,
     ) -> torch.Tensor:
@@ -2273,7 +2259,6 @@ class MedGemmaDecoder(nn.Module):
         generate_args.setdefault("min_new_tokens", 0)
 
         # Infer task for EACH sample using raw (uninjected) prompt IDs
-        task_hint = generate_args.pop("task_hint", None)
         tasks = []
         for b in range(batch_size):
             try:
@@ -2282,22 +2267,7 @@ class MedGemmaDecoder(nn.Module):
                 prompt_text = ""
 
             # Apply category hint if provided
-            sample_task_hint = task_hint
-            if category_hint is not None:
-                if isinstance(category_hint, (list, tuple)) and len(category_hint) > b:
-                    c0 = str(category_hint[b]).lower()
-                elif isinstance(category_hint, (list, tuple)) and category_hint:
-                    c0 = str(category_hint[0]).lower()
-                else:
-                    c0 = str(category_hint).lower()
-                sample_task_hint = (
-                    "json" if "json" in c0 else
-                    "binary" if any(k in c0 for k in ["yes_no", "yesno", "binary", "classification"]) else
-                    "scalar" if any(k in c0 for k in ["lvef", "heart rate", "bpm", "numeric"]) else
-                    sample_task_hint
-                )
-
-            task = sample_task_hint or self._infer_task(prompt_text)
+            task = self._infer_task(prompt_text)
             tasks.append(task)
 
         # Compute prompt lengths for grouping

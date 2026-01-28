@@ -177,7 +177,6 @@ def generate_diverse(
     config,
     num_samples: int = 10,
     temperature: float = 0.7,
-    category_hint: Optional[str] = None,
 ) -> List[str]:
     """Generate multiple diverse answers for a single (ECG, question) pair."""
     system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
@@ -214,15 +213,6 @@ def generate_diverse(
     }
 
     # Derive task hint
-    if category_hint is not None:
-        cat_lower = str(category_hint).lower()
-        if 'json' in cat_lower:
-            generation_kwargs["task_hint"] = "json"
-        elif 'yesno' in cat_lower or 'binary' in cat_lower:
-            generation_kwargs["task_hint"] = "binary"
-        elif 'lvef' in cat_lower or 'bpm' in cat_lower or 'heart rate' in cat_lower or 'numeric' in cat_lower:
-            generation_kwargs["task_hint"] = "scalar"
-
     generations = []
     for i in range(num_samples):
         with torch.no_grad():
@@ -325,7 +315,6 @@ def main():
             model, tokenizer, ecg_tensor, question, device, config,
             num_samples=args.num_samples,
             temperature=args.temperature,
-            category_hint=category,
         )
 
         results[waveform_name] = {

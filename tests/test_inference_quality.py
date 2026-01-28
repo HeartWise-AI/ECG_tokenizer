@@ -218,7 +218,6 @@ def main():
         print(f"Failed metrics: {', '.join(m.upper() for m in failed_metrics)}")
         print(f"Expected >= {args.threshold}")
         print("\nDEBUG HINTS:")
-        print("  - Check if task_hint is correctly derived (not forcing binary mode)")
         print("  - Verify prompt format matches training exactly")
         print("  - Ensure ECG embeddings are injected after <start_of_image>")
         print("  - Compare generation kwargs with training validation")
