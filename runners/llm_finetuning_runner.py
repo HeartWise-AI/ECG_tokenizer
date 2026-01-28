@@ -1653,27 +1653,8 @@ class LLMFinetuningRunner(BaseRunner):
         try:
             model_for_generation.eval()
             with torch.no_grad():
-                # Task hint from batch categories (if consistent)
-                task_hint = None
-                try:
-                    if batch is not None and 'prompt_category' in batch and isinstance(batch['prompt_category'], list):
-                        cats = [str(c).lower() for c in batch['prompt_category'] if c is not None]
-                        uniq = set(cats)
-                        if len(uniq) == 1:
-                            cat = next(iter(uniq))
-                            if 'json' in cat:
-                                task_hint = 'json'
-                            elif 'yesno' in cat or 'binary' in cat:
-                                task_hint = 'binary'
-                            elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
-                                task_hint = 'scalar'
-                except Exception:
-                    task_hint = None
-
                 # Build generation kwargs matching inference script
                 generation_kwargs = self._build_generation_kwargs()
-                generation_kwargs["task_hint"] = task_hint
-                generation_kwargs["category_hint"] = batch.get('prompt_category') if isinstance(batch, dict) else None
                 
                 generated_ids = model_for_generation.generate_report_with_question(
                     ecg_signal,
@@ -2592,23 +2573,6 @@ class LLMFinetuningRunner(BaseRunner):
             )
             loss: torch.Tensor = outputs['loss']
             
-            # Derive per-batch task hint when categories are uniform
-            task_hint = None
-            try:
-                if 'prompt_category' in batch and isinstance(batch['prompt_category'], list):
-                    cats = [str(c).lower() for c in batch['prompt_category'] if c is not None]
-                    uniq = set(cats)
-                    if len(uniq) == 1:
-                        cat = next(iter(uniq))
-                        if 'json' in cat:
-                            task_hint = 'json'
-                        elif 'yesno' in cat or 'binary' in cat:
-                            task_hint = 'binary'
-                        elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
-                            task_hint = 'scalar'
-            except Exception:
-                task_hint = None
-
             skip_generation = bool(getattr(self.config, "skip_val_generation", False))
             generated_ids = None
             if not skip_generation:
@@ -2616,7 +2580,6 @@ class LLMFinetuningRunner(BaseRunner):
                 model_for_generation.eval()
                 # Build generation kwargs matching inference script
                 generation_kwargs = self._build_generation_kwargs()
-                generation_kwargs["task_hint"] = task_hint
                 
                 generated_ids = model_for_generation.generate_report_with_question(
                     ecg_signal,
@@ -2659,7 +2622,6 @@ class LLMFinetuningRunner(BaseRunner):
         labels: torch.Tensor,
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
-        category_hint: Any | None = None,
     ) -> dict[str, torch.Tensor]:
         """Inference step that generates text using the model's decoder."""
 
@@ -2674,30 +2636,10 @@ class LLMFinetuningRunner(BaseRunner):
             )
             loss: torch.Tensor = outputs['loss']
 
-            # Derive task hint directly from provided category hint
-            task_hint = None
-            try:
-                if category_hint is not None:
-                    cats = category_hint if isinstance(category_hint, (list, tuple)) else [category_hint]
-                    cats = [str(c).lower() for c in cats if c is not None]
-                    uniq = set(cats)
-                    if len(uniq) == 1:
-                        cat = next(iter(uniq))
-                        if 'json' in cat:
-                            task_hint = 'json'
-                        elif 'yesno' in cat or 'binary' in cat:
-                            task_hint = 'binary'
-                        elif 'lvef' in cat or 'bpm' in cat or 'heart rate' in cat or 'numeric' in cat:
-                            task_hint = 'scalar'
-            except Exception:
-                task_hint = None
-
             model_for_generation = self.model.module if hasattr(self.model, 'module') else self.model
             model_for_generation.eval()
             # Build generation kwargs matching inference script
             generation_kwargs = self._build_generation_kwargs()
-            generation_kwargs["task_hint"] = task_hint
-            generation_kwargs["category_hint"] = category_hint
             
             generated_ids = model_for_generation.generate_report_with_question(
                 ecg_signal,
@@ -2742,7 +2684,6 @@ class LLMFinetuningRunner(BaseRunner):
             labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
             
             # Derive category hint directly from batch categories
-            cat_hint = batch.get('prompt_category') if isinstance(batch, dict) else None
             outputs: dict[str, torch.Tensor] = self._inference_step(
                 ecg_signal=ecg_signal,
                 input_ids=input_ids,
@@ -2750,7 +2691,6 @@ class LLMFinetuningRunner(BaseRunner):
                 labels=labels,
                 prompt_input_ids=(batch['prompt_input_ids'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None),
                 prompt_attention_mask=(batch['prompt_attention_mask'].to(self.config.device) if getattr(self.config, 'instruct_mode', False) and 'prompt_input_ids' in batch else None),
-                category_hint=cat_hint,
             )
             generated_ids: torch.Tensor = outputs['generated_ids']
             loss = outputs['loss'].item()
