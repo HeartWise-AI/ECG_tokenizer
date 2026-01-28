@@ -46,6 +46,7 @@ COPY dataset_generation/ ${APP_HOME}/dataset_generation/
 COPY config/ ${APP_HOME}/config/
 COPY scripts/ ${APP_HOME}/scripts/
 COPY projects/ ${APP_HOME}/projects/
+COPY runners/ ${APP_HOME}/runners/
 
 # Copy API keys from repository root
 COPY api_keys.json ${APP_HOME}/api_keys.json
