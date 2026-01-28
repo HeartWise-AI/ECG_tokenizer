@@ -21,7 +21,7 @@ class PipelineArgs:
     """Pipeline arguments with defaults matching DeepECG_Docker patterns."""
     
     # Step control
-    run_step: str = "all"  # preprocess | bert | all
+    run_step: str = "all"  # preprocess | bert | analysis | efficientnet | all
     use_preprocessing: bool = True
     use_bert_classification: bool = True
     
@@ -142,9 +142,16 @@ class PipelineArgs:
         parser.add_argument(
             "--step",
             dest="run_step",
-            choices=["preprocess", "bert", "all"],
+            choices=["preprocess", "bert", "analysis", "efficientnet", "all"],
             default="all",
-            help="Which step to run (preprocess only, bert only, or full preprocess+bert).",
+            help=(
+                "Which step to run. "
+                "preprocess: only preprocessing; "
+                "bert: BERT on existing parquet; "
+                "analysis: start at BERT (skip preprocessing); "
+                "efficientnet: skip internal steps (runner.sh handles it); "
+                "all: preprocess + bert."
+            ),
         )
         
         # Paths
@@ -309,9 +316,13 @@ class PipelineArgs:
         if instance.run_step == "preprocess":
             instance.use_preprocessing = True
             instance.use_bert_classification = False
-        elif instance.run_step == "bert":
+        elif instance.run_step in ("bert", "analysis"):
             instance.use_preprocessing = False
             instance.use_bert_classification = True
+        elif instance.run_step == "efficientnet":
+            # This entry point does nothing for efficientnet; caller should run runner.sh.
+            instance.use_preprocessing = False
+            instance.use_bert_classification = False
         else:  # all
             instance.use_preprocessing = True
             instance.use_bert_classification = True

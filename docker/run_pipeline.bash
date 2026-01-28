@@ -40,13 +40,12 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --step [preprocess|bert|all]  Choose which step to run (default: all)"
-    echo "  --no-efficientnet        (deprecated) no-op; EfficientNet runs via scripts/runner.sh"
+    echo "  --step [preprocess|bert|analysis|efficientnet|all]  Choose which step to run (default: all)"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
     echo "  source run_pipeline.bash --input_file /path/to/data.parquet"
-    echo "  source run_pipeline.bash --no-preprocessing --input_file /path/to/preprocessed.parquet"
+    echo "  source run_pipeline.bash --step efficientnet --input_file /path/to/preprocessed.parquet"
     return 0
 }
 
@@ -87,10 +86,11 @@ dataset_name=$(get_param "dataset_name")
 bert_checkpoint=$(get_param "bert_checkpoint")
 tokenizer_checkpoint=$(get_param "tokenizer_checkpoint")
 bert_base_config=$(get_param "bert_base_config")
+bert_output=""
 run_step="all"
 use_preprocessing=true
 use_bert_classification=true
-use_efficientnet_classification=false  # orchestrator no longer runs EfficientNet here
+use_efficientnet_classification=true
 
 # =============================================================================
 # PARSE COMMAND LINE ARGUMENTS
@@ -137,7 +137,7 @@ while [[ "$#" -gt 0 ]]; do
                 run_step="$2"
                 shift 2
             else
-                echo "Error: --step requires one of preprocess|bert|all"
+                echo "Error: --step requires one of preprocess|bert|analysis|efficientnet|all"
                 usage
                 return 1
             fi
@@ -187,6 +187,9 @@ preprocessing_folder=${preprocessing_folder:-${APP_ROOT}/preprocessing}
 preprocessing_n_workers=${preprocessing_n_workers:-16}
 apply_psa_normalization=${apply_psa_normalization:-true}
 
+# Derive BERT output path (fixed name for consistency across steps)
+bert_output=${output_dir}/preprocessed_bert_output.parquet
+
 # =============================================================================
 # BUILD AND RUN PIPELINE
 # =============================================================================
@@ -207,6 +210,7 @@ build_args() {
     args="$args --preprocessing-folder $preprocessing_folder"
     args="$args --preprocessing-n-workers $preprocessing_n_workers"
     args="$args --step $run_step"
+    args="$args --bert-output $bert_output"
     
     if [[ -n $dataset_name ]]; then
         args="$args --dataset-name $dataset_name"
@@ -257,10 +261,51 @@ run_pipeline() {
     local args=$(build_args)
     local python_script="${APP_ROOT}/inference/main.py"
     
-    echo "[RUN] python $python_script $args"
-    echo ""
-    
-    python "$python_script" $args
+    # Sequential control based on step
+    case "$run_step" in
+        preprocess)
+            echo "[RUN] python $python_script $args"
+            python "$python_script" $args
+            ;;
+        bert)
+            echo "[RUN] python $python_script $args"
+            python "$python_script" $args
+            ;;
+        analysis)
+            # Run BERT only, then EfficientNet
+            echo "[RUN] python $python_script $args"
+            python "$python_script" $args || return 1
+            if [[ ! -f "$bert_output" ]]; then
+                echo "Error: BERT output not found at $bert_output after --step analysis"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            ;;
+        efficientnet)
+            # Ensure BERT output exists before running EfficientNet
+            if [[ ! -f "$bert_output" ]]; then
+                echo "Error: Run BERT before this step! Missing $bert_output"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            ;;
+        all)
+            echo "[RUN] python $python_script $args"
+            python "$python_script" $args || return 1
+            if [[ ! -f "$bert_output" ]]; then
+                echo "Error: BERT output not found at $bert_output after run_step=all"
+                return 1
+            fi
+            echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${APP_ROOT}/config/linear_probing/base_config.yaml --selected_gpus 0 --use_wandb false --run_mode inference"
+            bash "${APP_ROOT}/scripts/runner.sh" --base_config "${APP_ROOT}/config/linear_probing/base_config.yaml" --selected_gpus 0 --use_wandb false --run_mode inference
+            ;;
+        *)
+            echo "Unknown run_step: $run_step"
+            return 1
+            ;;
+    esac
 
 }
 
