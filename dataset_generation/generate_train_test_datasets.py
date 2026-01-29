@@ -2483,6 +2483,7 @@ def main(
     siglip_random_seed: int = 0,
     siglip_implneg_sample_size: int = 64,
     siglip_max_hardneg_per_group: int | None = 3,
+    output_dir: str = "/volume/ECG_tokenizer/output",
     prompt_workers: int = 1,
     answer_workers: int = 1,
     siglip_train_ecgs: Optional[int] = None,
@@ -2505,6 +2506,7 @@ def main(
         mhi_train_samples: For combined mode, number of MHI training samples
         mimic_test_samples: For combined mode, number of MIMIC test samples
         mhi_test_samples: For combined mode, number of MHI test samples
+        output_dir: Base directory for QA parquet outputs
         prompt_workers: Number of worker processes for prompt generation
         answer_workers: Number of worker processes for answer generation
         preserve_common_rhythms: If True, retain Sinusal/Regular labels in outputs
@@ -2513,7 +2515,8 @@ def main(
     print("GENERATING TRAIN AND TEST DATASETS", flush=True)
     print("=" * 80)
     print(f"Dataset type: {dataset_type.upper()}")
-    print(f"Target sizes: Train={train_samples:,}, Test={test_samples:,}")
+    if dataset_type != 'custom':
+        print(f"Target sizes: Train={train_samples:,}, Test={test_samples:,}")
     print(f"Max normal percentage: {max_normal_percentage*100:.1f}%")
     print(f"Min samples per diagnosis: {min_samples_per_diagnosis}")
     
@@ -2574,26 +2577,26 @@ def main(
         total_test = (mimic_test_samples or 0) + (mhi_test_samples or 0)
         total_train = (mimic_train_samples or 0) + (mhi_train_samples or 0)
         
-        test_output = f'/volume/ECG_tokenizer/output/combined_test_qa_m{(mimic_test_samples or 0)//1000}k_h{(mhi_test_samples or 0)//1000}k.parquet'
-        train_output = f'/volume/ECG_tokenizer/output/combined_train_qa_m{(mimic_train_samples or 0)//1000}k_h{(mhi_train_samples or 0)//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'preprocessed_combined_test_qa.parquet')
+        train_output = str(Path(output_dir) / f'preprocessed_combined_train_qa.parquet')
         
         print("\nNote: Creating combined dataset with samples from both MIMIC and MHI")
         
     elif dataset_type == 'mimic-iv':
         test_input = '/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet'
-        test_output = f'/volume/ECG_tokenizer/output/mimic_test_qa_{test_samples//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'mimic_test_qa_{test_samples//1000}k.parquet')
 
         train_input = '/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_psa_train_updated.parquet'
-        train_output = f'/volume/ECG_tokenizer/output/mimic_train_qa_{train_samples//1000}k.parquet'
+        train_output = str(Path(output_dir) / f'mimic_train_qa_{train_samples//1000}k.parquet')
     
     elif dataset_type == 'mhi':
         # For MHI, use v1.6 parquet with Split column filtering
         mhi_base_path = '/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet'
         test_input = mhi_base_path  # Will be filtered by Split='test' in process_dataset
-        test_output = f'/volume/ECG_tokenizer/output/mhi_test_qa_{test_samples//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'mhi_test_qa_{test_samples//1000}k.parquet')
 
         train_input = mhi_base_path  # Will be filtered by Split='train' in process_dataset
-        train_output = f'/volume/ECG_tokenizer/output/mhi_train_qa_{train_samples//1000}k.parquet'
+        train_output = str(Path(output_dir) / f'mhi_train_qa_{train_samples//1000}k.parquet')
 
         print("\nNote: Using MHI v1.6 parquet with Split column filtering")
 
@@ -2602,8 +2605,8 @@ def main(
             raise ValueError("For dataset_type 'custom', please provide --custom_parquet_path")
         test_input = custom_parquet_path
         train_input = custom_parquet_path
-        test_output = '/volume/ECG_tokenizer/output/custom_test_qa.parquet'
-        train_output = '/volume/ECG_tokenizer/output/custom_train_qa.parquet'
+        test_output = str(Path(output_dir) / 'custom_test_qa.parquet')
+        train_output = str(Path(output_dir) / 'custom_train_qa.parquet')
 
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
@@ -2620,6 +2623,63 @@ def main(
             mhi_test_samples = None
             mimic_train_samples = None
             mhi_train_samples = None
+
+        # Custom mode: process once and write a single file
+        if dataset_type == 'custom':
+            single_output = str(Path(output_dir) / 'preprocessed_qa.parquet')
+            df_all = process_dataset(
+                train_input,  # same as test_input
+                single_output,
+                "custom",
+                sample_size=None,  # use all rows
+                dataset_type=dataset_type,
+                max_prompts_per_ecg=max_prompts_per_ecg,
+                max_normal_percentage=max_normal_percentage,
+                min_samples_per_diagnosis=min_samples_per_diagnosis,
+                mimic_samples=None,
+                mhi_samples=None,
+                prompt_workers=prompt_workers,
+                answer_workers=answer_workers,
+                preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
+            )
+
+            # Ensure waveform_name exists for summary
+            if 'waveform_name' not in df_all.columns:
+                for col in ('waveform_path_psa', 'npy_path', 'ecg_path'):
+                    if col in df_all.columns:
+                        df_all = df_all.copy()
+                        df_all['waveform_name'] = df_all[col].astype(str).apply(lambda p: os.path.basename(p))
+                        break
+
+            print(f"\n{'='*80}")
+            print("FINAL SUMMARY")
+            print(f"{'='*80}")
+            print(f"Custom dataset: {len(df_all)} prompts from {df_all['waveform_name'].nunique()} ECGs")
+            print(f"\nFile saved:")
+            print(f"  {single_output}")
+
+            if generate_siglip_alignment:
+                print("\nTriggering SigLIP alignment export...")
+                output_dir_aln = siglip_output_dir or 'ecg_text_alignment'
+                generate_siglip_alignment_dataset(
+                    parquet_path=siglip_parquet_path,
+                    output_dir=output_dir_aln,
+                    include_qa=siglip_include_qa,
+                    w_pos=siglip_pos_weight,
+                    w_hardneg=siglip_hardneg_weight,
+                    w_implneg=siglip_implneg_weight,
+                    sample_size=siglip_sample_size,
+                    random_seed=siglip_random_seed,
+                    implneg_sample_size=siglip_implneg_sample_size,
+                    max_hardneg_per_group=siglip_max_hardneg_per_group,
+                    train_ecgs=siglip_train_ecgs,
+                    val_ecgs=siglip_val_ecgs,
+                    test_ecgs=siglip_test_ecgs,
+                    max_positive_per_label=siglip_max_positive_per_label,
+                )
+
+            return
         
         # Process test dataset first (smaller) - allow all rows for custom
         effective_test_sample_size = test_sample_size
@@ -2877,6 +2937,12 @@ if __name__ == "__main__":
         help="Maximum hard negatives to keep per exclusivity group"
     )
     parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/volume/ECG_tokenizer/output",
+        help="Base directory to write QA parquet outputs"
+    )
+    parser.add_argument(
         "--custom_parquet_path",
         type=str,
         default=None,
@@ -2936,6 +3002,7 @@ if __name__ == "__main__":
         siglip_random_seed=args.siglip_random_seed,
         siglip_implneg_sample_size=args.siglip_implneg_sample_size,
         siglip_max_hardneg_per_group=args.siglip_max_hardneg_per_group,
+        output_dir=args.output_dir,
         prompt_workers=args.prompt_workers,
         answer_workers=args.answer_workers,
         siglip_train_ecgs=args.siglip_train_ecgs,

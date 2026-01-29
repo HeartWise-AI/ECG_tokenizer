@@ -195,7 +195,7 @@ def generate_answer(
         eos_ids.append(end_of_turn_id)
     
     generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
-    generation_kwargs.setdefault("max_new_tokens", 96)
+    generation_kwargs.setdefault("max_new_tokens", 512)
     # Use stochastic sampling (matching validation behavior) - no do_sample/temperature override
     generation_kwargs.setdefault("no_repeat_ngram_size", 5)
     generation_kwargs.setdefault("repetition_penalty", 1.1)
@@ -275,6 +275,11 @@ def main():
     print(f"\nLoading validation data from {args.validation_parquet}...")
     val_df = pd.read_parquet(args.validation_parquet)
     print(f"Total QA pairs: {len(val_df)}")
+    if 'waveform_name' not in val_df.columns:
+        if 'ecg_path' in val_df.columns:
+            val_df['waveform_name'] = val_df['ecg_path'].astype(str).apply(lambda p: os.path.basename(p))
+        elif args.waveform_column in val_df.columns:
+            val_df['waveform_name'] = val_df[args.waveform_column].astype(str).apply(lambda p: os.path.basename(p))
     print(f"Unique waveforms: {val_df['waveform_name'].nunique()}")
     
     if args.max_samples:
@@ -444,5 +449,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
