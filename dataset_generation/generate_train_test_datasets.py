@@ -763,7 +763,7 @@ def generate_answers_for_dataset(
     dataset_type: str,
     answer_workers: int,
 ) -> tuple[pd.DataFrame, int]:
-    if dataset_type in ['mimic-iv', 'combined']:
+    if dataset_type in ['mimic-iv', 'combined', 'custom']:
         answer_dataset = 'mimic'
     elif dataset_type == 'mhi':
         answer_dataset = 'mhi'
@@ -1001,6 +1001,7 @@ def generate_siglip_alignment_dataset(
         'waveform_name',
         'Split',
         'split',
+        'ecg_path',
     }
     if 'waveform_path_psa' in available_cols:
         needed_cols.add('waveform_path_psa')
@@ -1018,9 +1019,12 @@ def generate_siglip_alignment_dataset(
         raise ValueError("Merged dataframe is empty after selecting required columns")
 
     if 'waveform_path_psa' not in df.columns:
-        if 'npy_path' not in df.columns:
-            raise ValueError("Missing required ECG path column ('waveform_path_psa' or 'npy_path') after column selection")
-        df['waveform_path_psa'] = df['npy_path'].astype(str)
+        if 'npy_path' not in df.columns and 'ecg_path' not in df.columns:
+            raise ValueError("Missing required ECG path column ('waveform_path_psa', 'npy_path', or 'ecg_path') after column selection")
+        if 'waveform_path_psa' not in df.columns and 'ecg_path' in df.columns:
+            df['waveform_path_psa'] = df['ecg_path'].astype(str)
+        if 'waveform_path_psa' not in df.columns and 'npy_path' in df.columns:
+            df['waveform_path_psa'] = df['npy_path'].astype(str)
 
     if include_diagnosis and diagnosis_column not in df.columns:
         print(
@@ -1643,6 +1647,7 @@ def process_dataset(
     prompt_workers: int = 1,
     answer_workers: int = 1,
     preserve_common_rhythms: bool = True,
+    custom_parquet_path: Optional[str] = None,
 ):
     """Process a single dataset (train or test)
     
@@ -1691,7 +1696,12 @@ def process_dataset(
     print(f"   Columns: {list(df.columns)[:10]}...")
     
     # 3. Load and merge demographic data based on dataset type
-    if dataset_type == 'combined':
+    if dataset_type == 'custom':
+        print(f"\n2. Using custom dataset as-is (no demographic merge)...")
+        df_merged = df.copy()
+        df_merged['dataset_source'] = 'custom'
+
+    elif dataset_type == 'combined':
         # Process combined dataset - load both MIMIC and MHI data
         print(f"\n2. Processing COMBINED dataset...")
         
@@ -1854,7 +1864,7 @@ def process_dataset(
         
         # Clean up
         df_merged = df_merged.drop(columns=['npy_id'], errors='ignore')
-        df_merged['dataset_source'] = 'mimic-iv'
+        df_merged['dataset_source'] = 'custom' if dataset_type == 'custom' else 'mimic-iv'
         
     elif dataset_type == 'mhi':
         print(f"\n2. Loading MHI data (1.7M rows, this may take a moment)...")
@@ -2412,6 +2422,17 @@ def process_dataset(
         df_with_answers['age_at_ecg'] = pd.to_numeric(df_with_answers['age_at_ecg'], errors='coerce')
     if 'rr_interval' in df_with_answers.columns:
         df_with_answers['rr_interval'] = pd.to_numeric(df_with_answers['rr_interval'], errors='coerce')
+
+    # Harmonize path column for deduplication
+    if 'waveform_path_psa' not in df_with_answers.columns:
+        if 'ecg_path' in df_with_answers.columns:
+            df_with_answers['waveform_path_psa'] = df_with_answers['ecg_path']
+            if 'waveform_path_psa' not in columns_to_keep:
+                columns_to_keep.append('waveform_path_psa')
+        elif 'npy_path' in df_with_answers.columns:
+            df_with_answers['waveform_path_psa'] = df_with_answers['npy_path']
+            if 'waveform_path_psa' not in columns_to_keep:
+                columns_to_keep.append('waveform_path_psa')
     
     # Final safety-net: deduplicate on ECG path + prompt to prevent residual duplicates
     dedup_subset = ['waveform_path_psa', 'prompt']
@@ -2469,6 +2490,7 @@ def main(
     siglip_test_ecgs: Optional[int] = None,
     siglip_max_positive_per_label: Optional[int] = None,
     preserve_common_rhythms: bool = True,
+    custom_parquet_path: Optional[str] = None,
 ):
     """Main function to process both train and test datasets
     
@@ -2574,7 +2596,15 @@ def main(
         train_output = f'/volume/ECG_tokenizer/output/mhi_train_qa_{train_samples//1000}k.parquet'
 
         print("\nNote: Using MHI v1.6 parquet with Split column filtering")
-    
+
+    elif dataset_type == 'custom':
+        if custom_parquet_path is None:
+            raise ValueError("For dataset_type 'custom', please provide --custom_parquet_path")
+        test_input = custom_parquet_path
+        train_input = custom_parquet_path
+        test_output = '/volume/ECG_tokenizer/output/custom_test_qa.parquet'
+        train_output = '/volume/ECG_tokenizer/output/custom_train_qa.parquet'
+
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 
@@ -2591,13 +2621,16 @@ def main(
             mimic_train_samples = None
             mhi_train_samples = None
         
-        # Process test dataset first (smaller) - but skip if test_samples is 0
-        if test_sample_size > 0:
+        # Process test dataset first (smaller) - allow all rows for custom
+        effective_test_sample_size = test_sample_size
+        if dataset_type == 'custom':
+            effective_test_sample_size = None  # use all available
+        if test_sample_size > 0 or dataset_type == 'custom':
             test_df = process_dataset(
                 test_input,
                 test_output,
                 "test",
-                sample_size=test_sample_size,
+                sample_size=effective_test_sample_size,
                 dataset_type=dataset_type,
                 max_prompts_per_ecg=max_prompts_per_ecg,
                 max_normal_percentage=max_normal_percentage,
@@ -2607,17 +2640,21 @@ def main(
                 prompt_workers=prompt_workers,
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
             )
         else:
             print("Skipping test dataset (test_samples=0)")
         
-        # Process train dataset - but skip if train_samples is 0
-        if train_sample_size > 0:
+        # Process train dataset - allow all rows for custom
+        effective_train_sample_size = train_sample_size
+        if dataset_type == 'custom':
+            effective_train_sample_size = None  # use all available
+        if train_sample_size > 0 or dataset_type == 'custom':
             train_df = process_dataset(
                 train_input,
                 train_output,
                 "train",
-                sample_size=train_sample_size,
+                sample_size=effective_train_sample_size,
                 dataset_type=dataset_type,
                 max_prompts_per_ecg=max_prompts_per_ecg,
                 max_normal_percentage=max_normal_percentage,
@@ -2627,17 +2664,36 @@ def main(
                 prompt_workers=prompt_workers,
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
             )
         else:
             print("Skipping train dataset (train_samples=0)")
         
         # Final summary
+        def _ensure_waveform_name(df: pd.DataFrame) -> pd.DataFrame:
+            if 'waveform_name' in df.columns:
+                return df
+            candidate = None
+            for col in ('waveform_path_psa', 'npy_path', 'ecg_path'):
+                if col in df.columns:
+                    candidate = col
+                    break
+            if candidate:
+                df = df.copy()
+                df['waveform_name'] = df[candidate].astype(str).apply(lambda p: os.path.basename(p))
+            return df
+
+        if 'test_df' in locals() and test_df is not None:
+            test_df = _ensure_waveform_name(test_df)
+        if 'train_df' in locals() and train_df is not None:
+            train_df = _ensure_waveform_name(train_df)
+
         print(f"\n{'='*80}")
         print("FINAL SUMMARY")
         print(f"{'='*80}")
-        if test_sample_size > 0:
+        if test_sample_size > 0 or dataset_type == 'custom':
             print(f"Test dataset: {len(test_df)} prompts from {test_df['waveform_name'].nunique()} ECGs")
-        if train_sample_size > 0:
+        if train_sample_size > 0 or dataset_type == 'custom':
             print(f"Train dataset: {len(train_df)} prompts from {train_df['waveform_name'].nunique()} ECGs")
         
         print(f"\nFiles saved:")
@@ -2688,8 +2744,8 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="mimic-iv",
-        choices=["mimic-iv", "mhi", "combined"],
-        help="Dataset type: 'mimic-iv', 'mhi', or 'combined' for both"
+        choices=["mimic-iv", "mhi", "combined", "custom"],
+        help="Dataset type: 'mimic-iv', 'mhi', 'combined', or 'custom' for a user-provided parquet"
     )
     parser.add_argument(
         "--train_samples",
@@ -2821,6 +2877,12 @@ if __name__ == "__main__":
         help="Maximum hard negatives to keep per exclusivity group"
     )
     parser.add_argument(
+        "--custom_parquet_path",
+        type=str,
+        default=None,
+        help="Path to custom parquet when --dataset custom"
+    )
+    parser.add_argument(
         "--siglip_train_ecgs",
         type=int,
         default=None,
@@ -2881,4 +2943,5 @@ if __name__ == "__main__":
         siglip_test_ecgs=args.siglip_test_ecgs,
         siglip_max_positive_per_label=args.siglip_max_positive_per_label,
         preserve_common_rhythms=not args.drop_common_rhythms,
+        custom_parquet_path=args.custom_parquet_path,
     )
