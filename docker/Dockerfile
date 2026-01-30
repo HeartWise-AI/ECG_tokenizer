@@ -32,7 +32,8 @@ RUN mkdir -p ${APP_HOME}/inputs \
 # Copy requirements and install Python dependencies
 COPY docker/requirements.txt ${APP_HOME}/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
+    pip install --no-cache-dir -r ${APP_HOME}/requirements.txt && \
+    pip install --no-cache-dir "transformers==4.46.2" "tokenizers==0.20.1" "sentencepiece>=0.1.99"
 
 # Download NLTK data for text metrics
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('wordnet', quiet=True)"
