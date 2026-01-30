@@ -32,15 +32,6 @@ os.environ.setdefault("WORLD_SIZE", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from transformers import AutoTokenizer
-# Pre-import Gemma tokenizer modules so they're available during checkpoint unpickling
-try:
-    from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast
-except ImportError:
-    pass
-try:
-    from transformers.models.gemma2.tokenization_gemma2_fast import Gemma2TokenizerFast
-except ImportError:
-    pass
 
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
