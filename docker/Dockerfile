@@ -98,9 +98,6 @@ snapshot_download(
     local_dir_use_symlinks=False,
     token=token,
 )
-PY
-
-prefetch("google/medgemma-4b-it", "/app/.cache/huggingface/hub/models--google--medgemma-4b-it")
 
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh
