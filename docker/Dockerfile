@@ -90,6 +90,14 @@ prefetch("heartwise/Bert_diagnosis2classification_En_Fr", "/app/checkpoints/bert
 prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/DeepECG-Tok_tokenizer")
 prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes")
 prefetch("heartwise/DeepECG-Tok_medgemma-4b-it", "/app/checkpoints/DeepECG-Tok_medgemma-4b-it")
+# Also cache the base Gemma tokenizer/model so AutoTokenizer can load offline
+snapshot_download(
+    repo_id="google/medgemma-4b-it",
+    repo_type="model",
+    local_dir="/app/checkpoints/google-medgemma-4b-it",
+    local_dir_use_symlinks=False,
+    token=token,
+)
 PY
 
 # Copy Docker-specific files
