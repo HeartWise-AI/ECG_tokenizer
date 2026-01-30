@@ -19,6 +19,8 @@ torch>=2.4.1
 torchvision>=0.19.1
 tqdm>=4.66.5
 transformers>=4.46.2
+tokenizers>=0.20.1
+sentencepiece>=0.1.99
 vector-quantize-pytorch>=1.21.8
 wandb>=0.18.3
 wfdb==4.1.2
