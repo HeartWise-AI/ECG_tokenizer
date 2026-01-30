@@ -40,7 +40,7 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --step [preprocess|bert|analysis|efficientnet|qa|all]  Choose which step to run (default: all)"
+    echo "  --step [preprocess|bert|analysis|efficientnet|qa|llm|all]  Choose which step to run (default: all)"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
@@ -92,6 +92,7 @@ use_preprocessing=true
 use_bert_classification=true
 use_efficientnet_classification=true
 efficientnet_config="${APP_ROOT}/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes/base_config.yaml"
+llm_checkpoint="${APP_ROOT}/checkpoints/DeepECG-Tok_medgemma-4b-it/deepecg_tokenizer_medgemma.pt"
 qa_output=""
 
 # =============================================================================
@@ -145,7 +146,7 @@ while [[ "$#" -gt 0 ]]; do
                 run_step="$2"
                 shift 2
             else
-                echo "Error: --step requires one of preprocess|bert|analysis|efficientnet|qa|all"
+                echo "Error: --step requires one of preprocess|bert|analysis|efficientnet|qa|llm|all"
                 usage
                 return 1
             fi
@@ -187,6 +188,7 @@ bert_checkpoint=$(convert_path "$bert_checkpoint")
 tokenizer_checkpoint=$(convert_path "$tokenizer_checkpoint")
 efficientnet_config=$(convert_path "$efficientnet_config")
 qa_output=$(convert_path "$qa_output")
+llm_checkpoint=$(convert_path "$llm_checkpoint")
 
 # Set defaults if not in config
 device=${device:-cuda:0}
@@ -263,6 +265,7 @@ run_pipeline() {
     echo "  PSA Normalization: $apply_psa_normalization"
     echo "  Run Step: $run_step"
     echo "  EfficientNet Config: $efficientnet_config"
+    echo "  LLM Checkpoint: $llm_checkpoint"
     echo "------------------------------------------------------------"
     echo "Required Input Columns:"
     echo "  - ecg_path: ECG signal path"
@@ -299,6 +302,12 @@ run_pipeline() {
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
             python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            if [[ ! -f "$qa_output" ]]; then
+                echo "Error: QA output not found at $qa_output after analysis"
+                return 1
+            fi
+            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
+            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         efficientnet)
             # Ensure BERT output exists before running EfficientNet
@@ -328,6 +337,12 @@ run_pipeline() {
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
             python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            if [[ ! -f "$qa_output" ]]; then
+                echo "Error: QA output not found at $qa_output after all step"
+                return 1
+            fi
+            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
+            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         qa)
             if [[ ! -f "$bert_output" ]]; then
@@ -336,6 +351,14 @@ run_pipeline() {
             fi
             echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
             python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            ;;
+        llm)
+            if [[ ! -f "$qa_output" ]]; then
+                echo "Error: QA output not found at $qa_output for LLM step. Run --step qa first."
+                return 1
+            fi
+            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
+            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         *)
             echo "Unknown run_step: $run_step"

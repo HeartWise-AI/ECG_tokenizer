@@ -47,6 +47,7 @@ COPY config/ ${APP_HOME}/config/
 COPY scripts/ ${APP_HOME}/scripts/
 COPY projects/ ${APP_HOME}/projects/
 COPY runners/ ${APP_HOME}/runners/
+COPY datasets/ ${APP_HOME}/datasets_generation/
 
 # Copy API keys from repository root
 COPY api_keys.json ${APP_HOME}/api_keys.json
@@ -87,6 +88,7 @@ def prefetch(repo: str, dest: str) -> None:
 prefetch("heartwise/Bert_diagnosis2classification_En_Fr", "/app/checkpoints/bert")
 prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/DeepECG-Tok_tokenizer")
 prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes")
+prefetch("heartwise/DeepECG-Tok_medgemma-4b-it", "/app/checkpoints/DeepECG-Tok_medgemma-4b-it")
 PY
 
 # Copy Docker-specific files
