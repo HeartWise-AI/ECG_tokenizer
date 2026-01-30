@@ -24,6 +24,7 @@ import pandas as pd
 from tqdm import tqdm
 import re
 from typing import Optional, Any
+import os
 
 os.environ.setdefault("LOCAL_RANK", "0")
 os.environ.setdefault("RANK", "0")
@@ -69,7 +70,13 @@ def load_model(checkpoint_path: str, device: torch.device):
         print(f"Loading config.yaml from {config_yaml_path}...")
         yaml_config = load_yaml(config_yaml_path)
     
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+    # Tokenizer loading (offline-friendly with fallback)
+    base_tokenizer_dir = os.getenv("BASE_TOKENIZER_DIR", "/app/checkpoints/google-medgemma-4b-it")
+    prefer_local = os.getenv("HF_OFFLINE", "0") == "1" or os.path.isdir(base_tokenizer_dir)
+    if prefer_local and os.path.isdir(base_tokenizer_dir):
+        tokenizer = AutoTokenizer.from_pretrained(base_tokenizer_dir, local_files_only=True)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -450,4 +457,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
