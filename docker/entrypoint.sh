@@ -7,6 +7,7 @@ APP_HOME="${APP_HOME:-/app}"
 
 # Prefer offline HF cache when baked weights are present
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+export BASE_MODEL_DIR="${APP_HOME}/checkpoints/google-medgemma-4b-it"
 
 # Help
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then
