@@ -32,7 +32,7 @@ RUN mkdir -p ${APP_HOME}/inputs \
 # Copy requirements and install Python dependencies
 COPY docker/requirements.txt ${APP_HOME}/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
+    pip install --no-cache-dir -r ${APP_HOME}/requirements.txt \
     pip install --no-cache-dir --upgrade --force-reinstall "transformers>=4.46.2"
 
 # Download NLTK data for text metrics
