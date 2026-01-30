@@ -93,11 +93,9 @@ prefetch("heartwise/DeepECG-Tok_medgemma-4b-it", "/app/checkpoints/DeepECG-Tok_m
 # Also cache the base Gemma tokenizer/model so AutoTokenizer can load offline
 snapshot_download(
     repo_id="google/medgemma-4b-it",
-    repo_type="model",
-    local_dir="/app/checkpoints/google-medgemma-4b-it",
-    local_dir_use_symlinks=False,
     token=token,
 )
+PY
 
 # Copy Docker-specific files
 COPY docker/entrypoint.sh ${APP_HOME}/entrypoint.sh
