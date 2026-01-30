@@ -33,6 +33,7 @@ RUN mkdir -p ${APP_HOME}/inputs \
 COPY docker/requirements.txt ${APP_HOME}/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
+    pip install --no-cache-dir --upgrade --force-reinstall "transformers>=4.46.2"
 
 # Download NLTK data for text metrics
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('wordnet', quiet=True)"
