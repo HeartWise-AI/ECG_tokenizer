@@ -993,7 +993,11 @@ class LLMFinetuningProject(BaseProject):
             Dictionary containing validation data loader and model for inference
         """        
         # Load the pretrained tokenizer
-        state_dict = self._load_checkpoint(self.config.pretrained_tokenizer_path)
+        # Load from resume_checkpoint_path if available, otherwise pretrained_tokenizer_path
+        inference_checkpoint = getattr(self.config, 'resume_checkpoint_path', None) or self.config.pretrained_tokenizer_path
+        if self.config.is_ref_device:
+            print(f"[LLMFinetuningProject] Loading inference checkpoint: {inference_checkpoint}")
+        state_dict = self._load_checkpoint(inference_checkpoint)
         
         # Get the config from the pretrained tokenizer
         pretrained_config_raw = state_dict['config']
