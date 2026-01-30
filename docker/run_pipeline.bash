@@ -40,7 +40,7 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --step [preprocess|bert|analysis|efficientnet|all]  Choose which step to run (default: all)"
+    echo "  --step [preprocess|bert|analysis|efficientnet|qa|all]  Choose which step to run (default: all)"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
@@ -92,6 +92,7 @@ use_preprocessing=true
 use_bert_classification=true
 use_efficientnet_classification=true
 efficientnet_config="${APP_ROOT}/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes/base_config.yaml"
+qa_output=""
 
 # =============================================================================
 # PARSE COMMAND LINE ARGUMENTS
@@ -121,6 +122,12 @@ while [[ "$#" -gt 0 ]]; do
                 shift 2
             fi
             ;;
+        --output-dir|--output_dir)
+            if [[ -n $2 && ! $2 =~ ^-- ]]; then
+                output_dir="$2"
+                shift 2
+            fi
+            ;;
         --dataset-name)
             if [[ -n $2 && ! $2 =~ ^-- ]]; then
                 dataset_name="$2"
@@ -138,7 +145,7 @@ while [[ "$#" -gt 0 ]]; do
                 run_step="$2"
                 shift 2
             else
-                echo "Error: --step requires one of preprocess|bert|analysis|efficientnet|all"
+                echo "Error: --step requires one of preprocess|bert|analysis|efficientnet|qa|all"
                 usage
                 return 1
             fi
@@ -179,6 +186,7 @@ preprocessing_folder=$(convert_path "$preprocessing_folder")
 bert_checkpoint=$(convert_path "$bert_checkpoint")
 tokenizer_checkpoint=$(convert_path "$tokenizer_checkpoint")
 efficientnet_config=$(convert_path "$efficientnet_config")
+qa_output=$(convert_path "$qa_output")
 
 # Set defaults if not in config
 device=${device:-cuda:0}
@@ -191,6 +199,7 @@ apply_psa_normalization=${apply_psa_normalization:-true}
 
 # Derive BERT output path (fixed name for consistency across steps)
 bert_output=${output_dir}/preprocessed_bert_output.parquet
+qa_output=${output_dir}/preprocessed_qa.parquet
 
 # =============================================================================
 # BUILD AND RUN PIPELINE
@@ -288,6 +297,8 @@ run_pipeline() {
             fi
             echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
             ;;
         efficientnet)
             # Ensure BERT output exists before running EfficientNet
@@ -315,6 +326,16 @@ run_pipeline() {
             fi
             echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            ;;
+        qa)
+            if [[ ! -f "$bert_output" ]]; then
+                echo "Error: BERT output not found at $bert_output for QA step"
+                return 1
+            fi
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
             ;;
         *)
             echo "Unknown run_step: $run_step"
