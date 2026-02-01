@@ -822,18 +822,17 @@ class MedGemmaDecoder(nn.Module):
         # Check task indicators in the question only
         if "json" in question_part or "return json" in question_part or "{\"" in question_part:
             return "json"
-        if "yes/no" in question_part or "binary" in question_part or "pathological?" in question_part or "shd?" in question_part or "yes or no" in question_part:
+        if "yes/no" in question_part or "yes or no" in question_part:
             return "binary"
         if "lvef" in question_part or "ejection fraction" in question_part:
             return "scalar"
         return "free"
 
     def _decoding_profile(self, task: str) -> dict:
+        """Return task-specific decoding settings (excluding temperature/top_p which are user-controlled)."""
         if task == "binary":
             return {
                 "max_new_tokens": 3,
-                "temperature": 0.0,
-                "top_p": 1.0,
                 "bad_words_ids": self._binary_bad_words_ids(),
                 "force_json": False,
                 "min_tokens_guard": 2,
@@ -841,16 +840,12 @@ class MedGemmaDecoder(nn.Module):
         if task == "json":
             return {
                 "max_new_tokens": 196,
-                "temperature": 0.2,
-                "top_p": 0.9,
                 "force_json": True,
                 "min_tokens_guard": 16,
             }
         if task == "scalar":
             return {
                 "max_new_tokens": 24,
-                "temperature": 0.0,
-                "top_p": 1.0,
                 "min_tokens_guard": 2,
             }
         return {}
@@ -2126,9 +2121,12 @@ class MedGemmaDecoder(nn.Module):
         """
         Overlay task-specific decoding profile on top of base_args and
         return sanitized args plus routing flags.
+
+        Uses setdefault to avoid overwriting user-provided values (e.g., temperature).
         """
         args = dict(base_args)
-        args.update(self._decoding_profile(task))
+        for k, v in self._decoding_profile(task).items():
+            args.setdefault(k, v)
         args = self._sanitize_generate_args(args)
 
         eos_token_id = args.pop("eos_token_id", None)
