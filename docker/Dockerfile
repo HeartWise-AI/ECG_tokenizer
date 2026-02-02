@@ -19,15 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     build-essential \
     libsndfile1 \
-    software-properties-common \
-    gnupg \
-    lsb-release \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 \
-    python3.12-venv \
-    python3.12-dev \
-    python3.12-distutils \
+    python3 \
+    python3-venv \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -46,8 +39,8 @@ COPY uv.lock ${APP_HOME}/uv.lock
 # RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
-ENV UV_PYTHON=/usr/bin/python3.12
-RUN python3.12 -m pip install --upgrade pip
+ENV UV_PYTHON=3.12
+RUN python3 -m pip install --upgrade pip
 RUN pip install uv
 RUN uv sync --python $UV_PYTHON
 ENV PATH="/app/.venv/bin:$PATH"
