@@ -1,7 +1,7 @@
 # ECG Tokenizer Inference Pipeline Docker Image
 # Following DeepECG_Docker pattern for clean, production-ready deployment
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu24.04
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,6 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     build-essential \
     libsndfile1 \
+    software-properties-common \
+    gnupg \
+    lsb-release \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-venv \
     python3.12-dev \
