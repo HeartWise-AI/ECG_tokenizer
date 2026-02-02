@@ -36,6 +36,8 @@ COPY uv.lock ${APP_HOME}/uv.lock
 # RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
+ENV UV_PYTHON=python3.11
+
 RUN pip install uv
 RUN uv sync
 RUN uv pip install -r requirements.txt
