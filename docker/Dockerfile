@@ -1,7 +1,7 @@
 # ECG Tokenizer Inference Pipeline Docker Image
 # Following DeepECG_Docker pattern for clean, production-ready deployment
 
-FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,6 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     build-essential \
     libsndfile1 \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directory structure (following DeepECG_Docker pattern)
@@ -36,8 +40,10 @@ COPY uv.lock ${APP_HOME}/uv.lock
 # RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
+ENV UV_PYTHON=/usr/bin/python3.12
+RUN python3.12 -m pip install --upgrade pip
 RUN pip install uv
-RUN uv sync
+RUN uv sync --python $UV_PYTHON
 ENV PATH="/app/.venv/bin:$PATH"
 # RUN uv pip install -r requirements.txt
 # Download NLTK data for text metrics
