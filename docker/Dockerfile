@@ -1,7 +1,7 @@
 # ECG Tokenizer Inference Pipeline Docker Image
 # Following DeepECG_Docker pattern for clean, production-ready deployment
 
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+FROM nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,7 +36,7 @@ COPY uv.lock ${APP_HOME}/uv.lock
 # RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
-ENV UV_PYTHON=python3.11
+ENV UV_PYTHON=python3.12
 
 RUN pip install uv
 RUN uv sync
