@@ -1,7 +1,7 @@
 # ECG Tokenizer Inference Pipeline Docker Image
 # Following DeepECG_Docker pattern for clean, production-ready deployment
 
-FROM nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
