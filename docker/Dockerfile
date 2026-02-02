@@ -31,9 +31,13 @@ RUN mkdir -p ${APP_HOME}/inputs \
 
 # Copy requirements and install Python dependencies
 COPY docker/requirements.txt ${APP_HOME}/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
+COPY pyproject.toml ${APP_HOME}/pyproject.toml
+# RUN pip install --no-cache-dir --upgrade pip && \
+#     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
+RUN pip install uv
+RUN uv sync
+RUN uv pip install -r requirements.txt
 # Download NLTK data for text metrics
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('wordnet', quiet=True)"
 
