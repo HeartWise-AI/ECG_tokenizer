@@ -40,6 +40,7 @@ ENV UV_PYTHON=python3.12
 
 RUN pip install uv
 RUN uv sync
+ENV PATH="/app/.venv/bin:$PATH"
 # RUN uv pip install -r requirements.txt
 # Download NLTK data for text metrics
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('wordnet', quiet=True)"
