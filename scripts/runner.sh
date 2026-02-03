@@ -75,19 +75,21 @@ if [ "$USE_WANDB" != "true" ] && [ "$USE_WANDB" != "false" ]; then
     print_usage
 fi
 
-YQ_BIN="yq"
-if ! command -v "$YQ_BIN" &> /dev/null; then
-    echo "Error: yq (Go version) is not installed. Please install it from https://github.com/mikefarah/yq/releases"
+# Check if yq is installed
+if ! command -v yq &> /dev/null
+then
+    echo "Error: yq is not installed. Please install yq to proceed."
+    echo "Installation instructions: https://github.com/mikefarah/yq/#install"
     exit 1
 fi
 
 # Setup run_mode in base config
 echo "Setting run_mode in $CONFIG_PATH to $RUN_MODE"
-$YQ_BIN eval -i ".run_mode = \"$RUN_MODE\"" "$CONFIG_PATH"
+yq eval -i ".run_mode = \"$RUN_MODE\"" "$CONFIG_PATH"
 
 # Setup use_wandb in base config
 echo "Setting use_wandb in $CONFIG_PATH to $USE_WANDB"
-$YQ_BIN eval -i ".use_wandb = $USE_WANDB" "$CONFIG_PATH"
+yq eval -i ".use_wandb = $USE_WANDB" "$CONFIG_PATH"
 
 # Calculate number of GPUs from the comma-separated list
 NUM_GPUS=$(echo $SELECTED_GPUS | tr ',' '\n' | wc -l)

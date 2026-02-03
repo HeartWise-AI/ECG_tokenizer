@@ -47,6 +47,7 @@ ENV UV_PYTHON=3.12
 RUN python3 -m pip install --upgrade pip
 RUN pip install uv
 RUN uv sync --python $UV_PYTHON
+RUN ln -sf /usr/bin/yq /app/.venv/bin/yq
 ENV PATH="/app/.venv/bin:$PATH"
 # RUN uv pip install -r requirements.txt
 # Download NLTK data for text metrics
