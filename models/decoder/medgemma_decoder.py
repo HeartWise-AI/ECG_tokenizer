@@ -56,8 +56,6 @@ def _load_medgemma_model(
         for loader in loaders:
             try:
                 kwargs = dict(
-                    dtype=torch_dtype,
-                    torch_dtype=torch_dtype,
                     trust_remote_code=True,
                 )
                 if attn_impl:
