@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Go yq (mikefarah) to avoid Python yq CLI mismatch
+RUN wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq \
+    && chmod +x /usr/bin/yq
+
 # Create directory structure (following DeepECG_Docker pattern)
 RUN mkdir -p ${APP_HOME}/inputs \
     ${APP_HOME}/outputs \
