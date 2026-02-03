@@ -26,6 +26,7 @@ dependencies = [
     "tokenizers==0.21.4",
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
+    "wfdb==4.1.2",
     "xmltodict>=0.12.0",
     "pywavelets>=1.1.0",
     "sacrebleu>=2.5.1",
