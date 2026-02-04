@@ -202,7 +202,7 @@ def generate_answer(
         eos_ids.append(end_of_turn_id)
     
     generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
-    generation_kwargs.setdefault("max_new_tokens", 512)
+    generation_kwargs.setdefault("max_new_tokens", 96)
     # Use stochastic sampling (matching validation behavior) - no do_sample/temperature override
     generation_kwargs.setdefault("no_repeat_ngram_size", 5)
     generation_kwargs.setdefault("repetition_penalty", 1.1)
