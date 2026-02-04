@@ -37,11 +37,8 @@ RUN mkdir -p ${APP_HOME}/inputs \
     ${APP_HOME}/preprocessing
 
 # Copy requirements and install Python dependencies
-COPY docker/requirements.txt ${APP_HOME}/requirements.txt
 COPY pyproject.toml ${APP_HOME}/pyproject.toml
 COPY uv.lock ${APP_HOME}/uv.lock
-# RUN pip install --no-cache-dir --upgrade pip && \
-#     pip install --no-cache-dir -r ${APP_HOME}/requirements.txt
 
 ENV UV_PYTHON=3.12
 RUN python3 -m pip install --upgrade pip
