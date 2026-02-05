@@ -596,7 +596,7 @@ requires-dist = [
     { name = "torchvision", specifier = ">=0.19.1", index = "https://download.pytorch.org/whl/cu129" },
     { name = "tqdm", specifier = ">=4.66.5" },
     { name = "transformers", specifier = "==4.56.2" },
-    { name = "vector-quantize-pytorch", specifier = "==1.14.24" },
+    { name = "vector-quantize-pytorch", specifier = "==1.24.2" },
     { name = "wandb", specifier = ">=0.18.3" },
     { name = "wfdb", specifier = "==4.1.2" },
     { name = "xmltodict", specifier = ">=0.12.0" },
@@ -2774,16 +2774,16 @@ wheels = [
 
 [[package]]
 name = "vector-quantize-pytorch"
-version = "1.14.24"
+version = "1.24.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "einops" },
     { name = "einx" },
     { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/b0/20d9585813a3921fde976166acc9cd424006572fa909ba20d0c4bec73d0c/vector_quantize_pytorch-1.14.24.tar.gz", hash = "sha256:8f42d7825582851c3420f8e0967da1d4c3fd8117a494145dfde78b75bf41af26", size = 589194, upload-time = "2024-05-17T03:51:36.356Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/3d/3766a704c889d12ef7b43eee4ff1fb51489a088c6a20b1ce438d9d954bec/vector_quantize_pytorch-1.24.2.tar.gz", hash = "sha256:723ff33588ad6f5d1ef5f097e4f971a7d71f2df12df14f63db97504cf2fc7893", size = 698896, upload-time = "2025-11-02T13:43:27.61Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/af/29bc7483238a001d31d99290ab5e6becf3488eb77e1f8323f0c51ecfbe7c/vector_quantize_pytorch-1.14.24-py3-none-any.whl", hash = "sha256:5c5c0c02d9e8a1b08952254af5d73ebfbf57e64486d8a2e0f1068e4053b62636", size = 36877, upload-time = "2024-05-17T03:51:33.705Z" },
+    { url = "https://files.pythonhosted.org/packages/84/91/e75ae1a327616e19181e1a294a3ccb0674137a2e5a804542718f8df6938e/vector_quantize_pytorch-1.24.2-py3-none-any.whl", hash = "sha256:50103b2b9a4e338e982c18c27d5a3a1ed458647154ea7b1d6400267445f41a79", size = 48601, upload-time = "2025-11-02T13:43:25.21Z" },
 ]
 
 [[package]]
