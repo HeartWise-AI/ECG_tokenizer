@@ -18,19 +18,11 @@ dependencies = [
     "pytest-cov>=6.1.1",
     "rouge-score>=0.1.2",
     "scikit-learn>=1.5.2",
-<<<<<<< HEAD
     "statsmodels>=0.14.5",
-    "torch>=2.4.1",
-    "torchvision>=0.19.1",
-    "tqdm>=4.66.5",
-    "transformers==4.50.0",
-    "tokenizers==0.21.4",
-=======
     "torch==2.8.0+cu129",
     "torchvision>=0.19.1",
     "tqdm>=4.66.5",
     "transformers==4.56.2",
->>>>>>> main
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
     "wfdb==4.1.2",
