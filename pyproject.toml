@@ -44,7 +44,9 @@ packages = [
 ]
 
 [[tool.uv.index]]
+name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
+explicit = true
 
 [tool.pyright]
 exclude = [
@@ -71,3 +73,7 @@ typeCheckingMode = "basic"
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
 default = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu129" }
+torchvision = { index = "pytorch-cu129" }
