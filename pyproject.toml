@@ -23,6 +23,7 @@ dependencies = [
     "torchvision>=0.19.1",
     "tqdm>=4.66.5",
     "transformers==4.56.2",
+    "tokenizers==0.22.2",
     "vector-quantize-pytorch>=1.21.8",
     "wandb>=0.18.3",
     "wfdb==4.1.2",
