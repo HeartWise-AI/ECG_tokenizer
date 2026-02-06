@@ -24,8 +24,6 @@ import pandas as pd
 from tqdm import tqdm
 import re
 from typing import Optional, Any
-import os
-import os
 
 os.environ.setdefault("LOCAL_RANK", "0")
 os.environ.setdefault("RANK", "0")
@@ -425,7 +423,7 @@ def main():
                     bleu1.append(sentence_bleu([ref_tokens], gen_tokens, weights=(1,0,0,0), smoothing_function=smoother.method1))
                     bleu4.append(sentence_bleu([ref_tokens], gen_tokens, weights=(0.25,0.25,0.25,0.25), smoothing_function=smoother.method1))
                     meteor_scores.append(meteor_score([ref_tokens], gen_tokens))
-                except:
+                except Exception:
                     pass
         
         print(f"\nOverall Metrics ({len(rouge1)} samples):")

@@ -14,12 +14,10 @@ Required Input Columns:
     - ecg_path: Absolute/relative path to ECG file (authoritative)
 """
 
-import os
 import sys
-import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Optional
 
 import pandas as pd
 
@@ -31,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 from inference.pipeline_args import PipelineArgs
 from utils.files_handler import load_df, save_df
 from utils.preprocessing.analysis_pipeline import AnalysisPipeline
-from utils.constants import DIAGNOSIS_COLUMN, ECG_PATTERNS
+from utils.constants import DIAGNOSIS_COLUMN
 
 
 def setup_directories(args: PipelineArgs) -> None:
