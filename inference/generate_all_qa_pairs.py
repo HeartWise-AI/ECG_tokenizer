@@ -49,15 +49,25 @@ def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
     return fallback
 
 
+def _coerce_config(config_obj: Any) -> Any:
+    """Convert dict config to SimpleNamespace for attribute access."""
+    from types import SimpleNamespace
+    if isinstance(config_obj, dict):
+        return SimpleNamespace(**{k: _coerce_config(v) for k, v in config_obj.items()})
+    if isinstance(config_obj, list):
+        return [_coerce_config(item) for item in config_obj]
+    return config_obj
+
+
 def load_model(checkpoint_path: str, device: torch.device):
     """Load model from checkpoint.
-    
+
     Loads both the checkpoint weights and the config.yaml from the checkpoint folder
     to properly configure the bridge (e.g., num_codebooks_kept for 1CB models).
     """
     print(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint_data = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    config = checkpoint_data["config"]
+    config = _coerce_config(checkpoint_data["config"])
     
     # Load config.yaml from checkpoint folder for bridge configuration
     # The config.yaml may have settings not stored in the checkpoint config object
@@ -100,19 +110,32 @@ def load_model(checkpoint_path: str, device: torch.device):
     if num_codebooks_kept is not None:
         print(f"   Bridge config: num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}, num_quantizers={num_quantizers}")
     
+    # Detect if checkpoint has LoRA weights even if config says use_lora=False
+    # This can happen with DPO checkpoints that were saved with incomplete config
+    has_lora_weights = any('lora_A' in k or 'lora_B' in k for k in checkpoint_state_dict.keys())
+    use_lora = bool(getattr(config, "use_lora", False)) or has_lora_weights
+
+    if has_lora_weights and not getattr(config, "use_lora", False):
+        print(f"   OVERRIDE: Config use_lora=False but checkpoint has LoRA weights, enabling LoRA")
+
     # Reconstruct LoRA config if training stored scalar fields (common) instead of a full lora_config dict.
+    # Use sensible defaults matching the standard training config when checkpoint has LoRA but no config.
     lora_config = getattr(config, "lora_config", None)
-    if lora_config is None and bool(getattr(config, "use_lora", False)):
+    if lora_config is None and use_lora:
+        # Default target modules for MedGemma/Gemma models
+        default_target_modules = ['q_proj', 'k_proj', 'v_proj', 'o_proj']
         lora_config = {
-            "r": int(getattr(config, "lora_r", 16)),
-            "lora_alpha": int(getattr(config, "lora_alpha", getattr(config, "lora_r", 16))),
-            "lora_dropout": float(getattr(config, "lora_dropout", 0.0)),
-            "target_modules": list(getattr(config, "lora_target_modules", None) or []),
+            "r": int(getattr(config, "lora_r", 32)),
+            "lora_alpha": int(getattr(config, "lora_alpha", 64)),
+            "lora_dropout": float(getattr(config, "lora_dropout", 0.05)),
+            "target_modules": list(getattr(config, "lora_target_modules", None) or default_target_modules),
             "bias": str(getattr(config, "lora_bias", "none")),
         }
+        print(f"   Using LoRA config: r={lora_config['r']}, alpha={lora_config['lora_alpha']}, targets={lora_config['target_modules']}")
         # Persist so downstream code paths can reuse it.
         try:
             setattr(config, "lora_config", lora_config)
+            setattr(config, "use_lora", True)
         except Exception:
             pass
 
@@ -138,7 +161,7 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,  # Don't load stage1 - all weights are in the finetuned checkpoint
-        use_lora=bool(getattr(config, "use_lora", False)),
+        use_lora=use_lora,
         lora_config=lora_config,
         tokenizer=tokenizer,
         ecg_token_start_id=None,
@@ -157,7 +180,7 @@ def load_model(checkpoint_path: str, device: torch.device):
 
     # Put LoRA into inference mode if present (keeps adapters attached; generation works either way).
     try:
-        if bool(getattr(config, "use_lora", False)):
+        if use_lora:
             model.set_lora_inference_mode(True)
     except Exception:
         pass
