@@ -6,8 +6,8 @@ This module follows the DeepECG_Docker pattern with clean entry point,
 mode-based execution, and configuration-driven setup.
 
 Usage:
-    python inference/main.py --input data.parquet --output results.json
-    python inference/main.py --config heartwise.config
+    python inference/preprocessing.py --input data.parquet --output results.json
+    python inference/preprocessing.py --config heartwise.config
 
 Required Input Columns:
     - reports: Text reports for BERT classification

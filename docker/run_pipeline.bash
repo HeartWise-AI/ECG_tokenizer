@@ -10,7 +10,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Detect environment: Docker vs Local
-if [[ -f "/app/inference/main.py" ]]; then
+if [[ -f "/app/inference/preprocessing.py" ]]; then
     # Running inside Docker container
     APP_ROOT="/app"
     REPO_ROOT="/app"
@@ -274,7 +274,7 @@ run_pipeline() {
     echo ""
     
     local args=$(build_args)
-    local python_script="${APP_ROOT}/inference/main.py"
+    local python_script="${APP_ROOT}/inference/preprocessing.py"
     
     # Sequential control based on step
     case "$run_step" in
