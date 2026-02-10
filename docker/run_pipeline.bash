@@ -86,6 +86,7 @@ dataset_name=$(get_param "dataset_name")
 bert_checkpoint=$(get_param "bert_checkpoint")
 tokenizer_checkpoint=$(get_param "tokenizer_checkpoint")
 bert_base_config=$(get_param "bert_base_config")
+qa_disable_categories=$(get_param "qa_disable_categories")
 bert_output=""
 run_step="all"
 use_preprocessing=true
@@ -300,8 +301,10 @@ run_pipeline() {
             fi
             echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            qa_disable_arg=()
+            [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
             if [[ ! -f "$qa_output" ]]; then
                 echo "Error: QA output not found at $qa_output after analysis"
                 return 1
@@ -335,8 +338,10 @@ run_pipeline() {
             fi
             echo "[RUN] bash ${APP_ROOT}/scripts/runner.sh --base_config ${efficientnet_config} --selected_gpus 0 --use_wandb false --run_mode inference"
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            qa_disable_arg=()
+            [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
             if [[ ! -f "$qa_output" ]]; then
                 echo "Error: QA output not found at $qa_output after all step"
                 return 1
@@ -349,8 +354,10 @@ run_pipeline() {
                 echo "Error: BERT output not found at $bert_output for QA step"
                 return 1
             fi
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}"
+            qa_disable_arg=()
+            [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
+            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
+            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
             ;;
         llm)
             if [[ ! -f "$qa_output" ]]; then

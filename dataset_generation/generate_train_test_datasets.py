@@ -20,7 +20,7 @@ from collections import defaultdict, Counter
 from dataclasses import dataclass
 from typing import Optional, Set, List, Dict, Any, Tuple
 from tqdm import tqdm
-from ecg_prompt_maker import ECGPromptMaker
+from ecg_prompt_maker import ECGPromptMaker, QAFeatureFlags, _log_qa_feature_flags
 from ecg_answer_generator import ECGAnswerGenerator
 
 from dataset_generation.siglip_shared import (
@@ -559,14 +559,14 @@ def _top_off_sample(
 
 PROMPT_MAKER_WORKER = None
 PROMPT_MAX_PER_ECG = None
+PROMPT_QA_FLAGS = None
 
 
-def _init_prompt_worker(max_prompts_per_ecg: Optional[int]) -> None:
-    """Initializer for multiprocessing prompt worker."""
-
-    global PROMPT_MAKER_WORKER, PROMPT_MAX_PER_ECG
+def _init_prompt_worker(max_prompts_per_ecg: Optional[int], qa_feature_flags: Optional[QAFeatureFlags] = None) -> None:
+    global PROMPT_MAKER_WORKER, PROMPT_MAX_PER_ECG, PROMPT_QA_FLAGS
     PROMPT_MAKER_WORKER = ECGPromptMaker()
     PROMPT_MAX_PER_ECG = max_prompts_per_ecg
+    PROMPT_QA_FLAGS = qa_feature_flags
     random.seed()
     np.random.seed()
 
@@ -644,7 +644,7 @@ def _prompt_worker(row_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise RuntimeError("Prompt worker not initialised")
 
     row_series = pd.Series(row_dict)
-    prompts = PROMPT_MAKER_WORKER.generate_prompts_for_ecg(row_series)
+    prompts = PROMPT_MAKER_WORKER.generate_prompts_for_ecg(row_series, PROMPT_QA_FLAGS)
     prompts = _prioritize_prompts(prompts, PROMPT_MAX_PER_ECG)
 
     results: List[Dict[str, Any]] = []
@@ -661,6 +661,7 @@ def _generate_prompts_serial(
     df_sampled: pd.DataFrame,
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> List[Dict[str, Any]]:
     prompt_maker = ECGPromptMaker()
     all_prompts: List[Dict[str, Any]] = []
@@ -669,7 +670,7 @@ def _generate_prompts_serial(
     ecgs_processed = 0
 
     for _, row in tqdm(df_sampled.iterrows(), total=len(df_sampled), desc="   Generating prompts"):
-        prompts = prompt_maker.generate_prompts_for_ecg(row)
+        prompts = prompt_maker.generate_prompts_for_ecg(row, qa_feature_flags)
         ecgs_processed += 1
 
         prompts = _prioritize_prompts(prompts, max_prompts_per_ecg)
@@ -699,12 +700,13 @@ def _generate_prompts_parallel(
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
     workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> List[Dict[str, Any]]:
     records = df_sampled.to_dict(orient='records')
     all_prompts: List[Dict[str, Any]] = []
 
     ctx = mp.get_context("spawn")
-    with ctx.Pool(processes=workers, initializer=_init_prompt_worker, initargs=(max_prompts_per_ecg,)) as pool:
+    with ctx.Pool(processes=workers, initializer=_init_prompt_worker, initargs=(max_prompts_per_ecg, qa_feature_flags)) as pool:
         iterator = pool.imap_unordered(_prompt_worker, records, chunksize=32)
         for prompt_list in tqdm(iterator, total=len(records), desc="   Generating prompts"):
             if prompt_list:
@@ -723,11 +725,12 @@ def generate_prompts_for_dataset(
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
     prompt_workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> pd.DataFrame:
     if prompt_workers and prompt_workers > 1:
-        prompts = _generate_prompts_parallel(df_sampled, sample_size, max_prompts_per_ecg, prompt_workers)
+        prompts = _generate_prompts_parallel(df_sampled, sample_size, max_prompts_per_ecg, prompt_workers, qa_feature_flags)
     else:
-        prompts = _generate_prompts_serial(df_sampled, sample_size, max_prompts_per_ecg)
+        prompts = _generate_prompts_serial(df_sampled, sample_size, max_prompts_per_ecg, qa_feature_flags)
 
     if sample_size and len(prompts) > sample_size:
         prompts = prompts[:sample_size]
@@ -741,9 +744,9 @@ def generate_prompts_for_dataset(
 ANSWER_GENERATOR_WORKER = None
 
 
-def _init_answer_worker(dataset: str) -> None:
+def _init_answer_worker(dataset: str, qa_feature_flags: Optional[QAFeatureFlags] = None) -> None:
     global ANSWER_GENERATOR_WORKER
-    ANSWER_GENERATOR_WORKER = ECGAnswerGenerator(language='en', dataset=dataset)
+    ANSWER_GENERATOR_WORKER = ECGAnswerGenerator(language='en', dataset=dataset, qa_feature_flags=qa_feature_flags)
     random.seed()
     np.random.seed()
 
@@ -762,6 +765,7 @@ def generate_answers_for_dataset(
     df_with_prompts: pd.DataFrame,
     dataset_type: str,
     answer_workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> tuple[pd.DataFrame, int]:
     if dataset_type in ['mimic-iv', 'combined', 'custom']:
         answer_dataset = 'mimic'
@@ -774,7 +778,7 @@ def generate_answers_for_dataset(
 
     if answer_workers and answer_workers > 1:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=answer_workers, initializer=_init_answer_worker, initargs=(answer_dataset,)) as pool:
+        with ctx.Pool(processes=answer_workers, initializer=_init_answer_worker, initargs=(answer_dataset, qa_feature_flags)) as pool:
             updated_records = list(
                 tqdm(
                     pool.imap(_answer_worker, records, chunksize=64),
@@ -783,7 +787,7 @@ def generate_answers_for_dataset(
                 )
             )
     else:
-        answer_gen = ECGAnswerGenerator(language='en', dataset=answer_dataset)
+        answer_gen = ECGAnswerGenerator(language='en', dataset=answer_dataset, qa_feature_flags=qa_feature_flags)
         updated_records = []
         for _, row in tqdm(df_with_prompts.iterrows(), total=len(df_with_prompts), desc="   Generating answers"):
             row_dict = row.to_dict()
@@ -1648,6 +1652,7 @@ def process_dataset(
     answer_workers: int = 1,
     preserve_common_rhythms: bool = True,
     custom_parquet_path: Optional[str] = None,
+    disable_categories: Optional[List[str]] = None,
 ):
     """Process a single dataset (train or test)
     
@@ -2018,12 +2023,16 @@ def process_dataset(
             # Mark as borderline if any limit column >= 1 and not already pathological
             df_merged.loc[(df_merged[col] >= 1) & (df_merged['ecg_type'] == 'normal'), 'ecg_type'] = 'borderline'
     
-    # Report ecg_type distribution
     ecg_type_counts = df_merged['ecg_type'].value_counts()
     print(f"   ECG type distribution:")
     for ecg_type, count in ecg_type_counts.items():
         print(f"     {ecg_type}: {count} ({100*count/len(df_merged):.1f}%)")
-    
+
+    qa_feature_flags = QAFeatureFlags.detect(df_merged)
+    qa_feature_flags = QAFeatureFlags.apply_overrides(qa_feature_flags, disable_categories)
+    print(f"\n2b. QA feature flags (column-based):")
+    _log_qa_feature_flags(qa_feature_flags)
+
     # 4. Calculate how many ECGs we need for the target number of questions
     # For combined mode, handle sampling differently
     if dataset_type == 'combined' and (mimic_samples or mhi_samples):
@@ -2334,6 +2343,7 @@ def process_dataset(
         sample_size=sample_size,
         max_prompts_per_ecg=max_prompts_per_ecg,
         prompt_workers=prompt_workers,
+        qa_feature_flags=qa_feature_flags,
     )
 
     print(f"   Total prompts generated: {len(df_with_prompts):,}")
@@ -2373,6 +2383,7 @@ def process_dataset(
         df_with_prompts,
         dataset_type=dataset_type,
         answer_workers=answer_workers,
+        qa_feature_flags=qa_feature_flags,
     )
     if dropped_count > 0:
         print(f"     Dropped {dropped_count} questions with no available data")
@@ -2492,6 +2503,7 @@ def main(
     siglip_max_positive_per_label: Optional[int] = None,
     preserve_common_rhythms: bool = True,
     custom_parquet_path: Optional[str] = None,
+    disable_categories: Optional[str] = None,
 ):
     """Main function to process both train and test datasets
     
@@ -2512,6 +2524,10 @@ def main(
         preserve_common_rhythms: If True, retain Sinusal/Regular labels in outputs
     """
     
+    disable_list = [s.strip() for s in (disable_categories or "").split(",") if s.strip()] or None
+    if disable_list:
+        print(f"Disable QA categories: {disable_list}")
+
     print("GENERATING TRAIN AND TEST DATASETS", flush=True)
     print("=" * 80)
     print(f"Dataset type: {dataset_type.upper()}")
@@ -2628,10 +2644,10 @@ def main(
         if dataset_type == 'custom':
             single_output = str(Path(output_dir) / 'preprocessed_qa.parquet')
             df_all = process_dataset(
-                train_input,  # same as test_input
+                train_input,
                 single_output,
                 "custom",
-                sample_size=None,  # use all rows
+                sample_size=None,
                 dataset_type=dataset_type,
                 max_prompts_per_ecg=max_prompts_per_ecg,
                 max_normal_percentage=max_normal_percentage,
@@ -2642,6 +2658,7 @@ def main(
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
                 custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
             )
 
             # Ensure waveform_name exists for summary
@@ -2701,6 +2718,7 @@ def main(
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
                 custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
             )
         else:
             print("Skipping test dataset (test_samples=0)")
@@ -2725,6 +2743,7 @@ def main(
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
                 custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
             )
         else:
             print("Skipping train dataset (train_samples=0)")
@@ -2949,6 +2968,12 @@ if __name__ == "__main__":
         help="Path to custom parquet when --dataset custom"
     )
     parser.add_argument(
+        "--disable_categories",
+        type=str,
+        default=None,
+        help="Comma-separated QA categories to disable (e.g. heart_rate,lvef,afib_risk)"
+    )
+    parser.add_argument(
         "--siglip_train_ecgs",
         type=int,
         default=None,
@@ -3011,4 +3036,5 @@ if __name__ == "__main__":
         siglip_max_positive_per_label=args.siglip_max_positive_per_label,
         preserve_common_rhythms=not args.drop_common_rhythms,
         custom_parquet_path=args.custom_parquet_path,
+        disable_categories=args.disable_categories,
     )
