@@ -63,7 +63,7 @@ class AnalysisPipeline:
                         if np.isnan(lead_array).any():
                             continue
                         
-                        file_id = os.path.basename(row[ecg_path_col]).replace(".npy", "")
+                        file_id = os.path.splitext(os.path.basename(row[ecg_path_col]))[0]
                         
                         # Shape corrections
                         if lead_array.shape[-1] == 1:

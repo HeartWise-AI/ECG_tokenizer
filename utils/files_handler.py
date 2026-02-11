@@ -1,8 +1,11 @@
 import os
 import csv
 import json
+import struct
+import base64
 import yaml
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -177,6 +180,9 @@ def save_json(
 # ECG signal IO
 # ---------------------------------------------------------------------
 
+LEAD_ORDER = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+
+
 class ECGFileHandler:
     """
     Handler for ECG signal file operations.
@@ -184,6 +190,7 @@ class ECGFileHandler:
     Supports:
     - .npy: preferred storage
     - .hea: WFDB header files (read-only)
+    - .xml: CLSA and GE MUSE XML formats (read-only)
     """
     
     @staticmethod
@@ -199,7 +206,7 @@ class ECGFileHandler:
     @staticmethod
     def load_ecg_signal(filename: str) -> np.ndarray:
         """
-        Load ECG signal from .npy or .hea (WFDB).
+        Load ECG signal from .npy, .hea (WFDB), or .xml (CLSA/GE MUSE).
         Returns shape (N, 12) float32.
         """
         filename = str(filename)
@@ -209,6 +216,8 @@ class ECGFileHandler:
             record_path = filename[:-4]
             record = wfdb.rdrecord(record_path)
             np_array = record.p_signal
+        elif filename.endswith('.xml'):
+            return ECGFileHandler._load_xml_signal(filename)
         else:
             np_array = np.load(filename, allow_pickle=False)
         writable_array = np.copy(np_array)
@@ -224,3 +233,105 @@ class ECGFileHandler:
         if extension:
             files = [f for f in files if f.endswith(extension)]
         return files
+
+    @staticmethod
+    def _parse_xml_to_dict(element):
+        if len(element) == 0:
+            return element.text
+        result = {}
+        for child in element:
+            child_result = ECGFileHandler._parse_xml_to_dict(child)
+            if child.tag in result:
+                if not isinstance(result[child.tag], list):
+                    result[child.tag] = [result[child.tag]]
+                result[child.tag].append(child_result)
+            else:
+                result[child.tag] = child_result
+        return result
+
+    @staticmethod
+    def _flatten_dict(d, parent_key=''):
+        items = []
+        if isinstance(d, dict):
+            for k, v in d.items():
+                new_key = f'{parent_key}.{k}' if parent_key else k
+                items.extend(ECGFileHandler._flatten_dict(v, new_key).items())
+        elif isinstance(d, list):
+            for i, item in enumerate(d):
+                items.extend(ECGFileHandler._flatten_dict(item, f'{parent_key}.{i}').items())
+        else:
+            items.append((parent_key, d))
+        return dict(items)
+
+    @staticmethod
+    def _decode_base64_waveform(raw_wave: str) -> np.ndarray:
+        arr = base64.b64decode(bytes(raw_wave, "utf-8"))
+        byte_array = struct.unpack(f"{len(arr) // 2}h", arr)
+        return np.array(byte_array, dtype=np.float32)
+
+    @staticmethod
+    def _derive_missing_leads(leads: dict[str, Any]) -> None:
+        if leads["III"] is None:
+            leads["III"] = np.subtract(leads["II"], leads["I"])
+        if leads["aVR"] is None:
+            leads["aVR"] = np.add(leads["I"], leads["II"]) * (-0.5)
+        if leads["aVL"] is None:
+            leads["aVL"] = np.subtract(leads["I"], 0.5 * leads["II"])
+        if leads["aVF"] is None:
+            leads["aVF"] = np.subtract(leads["II"], 0.5 * leads["I"])
+
+    @staticmethod
+    def _extract_leads_clsa(data_dict: dict) -> np.ndarray:
+        leads: dict[str, Any] = {lead: None for lead in LEAD_ORDER}
+        lead_order_str = data_dict['RestingECGMeasurements.MeasurementTable.LeadOrder']
+        for i, lead in enumerate(lead_order_str.replace(' ', '').split(',')):
+            raw = data_dict[f'StripData.WaveformData.{i}'].lstrip('\t').split(',')
+            leads[lead] = np.array(raw, dtype=float)
+
+        ECGFileHandler._derive_missing_leads(leads)
+
+        non_empty_dim = next(l.shape[0] for l in leads.values() if l is not None)
+        for lead in leads:
+            if leads[lead] is None:
+                leads[lead] = np.full(non_empty_dim, np.nan)
+        return np.vstack([leads[lead] for lead in LEAD_ORDER])
+
+    @staticmethod
+    def _extract_leads_muse(data_dict: dict) -> np.ndarray:
+        leads: dict[str, Any] = {lead: None for lead in LEAD_ORDER}
+        for i in range(12):
+            key = f'Waveform.1.LeadData.{i}.LeadID'
+            if key in data_dict:
+                wave = data_dict[f'Waveform.1.LeadData.{i}.WaveFormData']
+                leads[data_dict[key]] = ECGFileHandler._decode_base64_waveform(wave)
+
+        ECGFileHandler._derive_missing_leads(leads)
+
+        non_empty_dim = next(l.shape[0] for l in leads.values() if l is not None)
+        for lead in leads:
+            if leads[lead] is None:
+                leads[lead] = np.full(non_empty_dim, np.nan)
+        return np.vstack([leads[lead] for lead in LEAD_ORDER])
+
+    @staticmethod
+    def _load_xml_signal(filename: str) -> np.ndarray:
+        """
+        Parse a CLSA or GE MUSE XML file and return shape (samples, 12).
+        Raises ValueError for unsupported XML formats.
+        """
+        tree = ET.parse(filename)
+        data_dict = ECGFileHandler._flatten_dict(
+            ECGFileHandler._parse_xml_to_dict(tree.getroot())
+        )
+
+        if 'RestingECGMeasurements.MeasurementTable.LeadOrder' in data_dict:
+            leads = ECGFileHandler._extract_leads_clsa(data_dict)
+        elif any(f'Waveform.1.LeadData.{i}.LeadID' in data_dict for i in range(12)):
+            leads = ECGFileHandler._extract_leads_muse(data_dict)
+        else:
+            raise ValueError(
+                f"Unsupported ECG XML format in {filename}. "
+                "Pre-convert to .npy or add a handler in ECGFileHandler."
+            )
+
+        return leads.T
