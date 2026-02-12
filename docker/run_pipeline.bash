@@ -365,7 +365,7 @@ run_pipeline() {
                 return 1
             fi
             echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
-            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
+            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --device 1 --save_interval 10 --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         *)
             echo "Unknown run_step: $run_step"

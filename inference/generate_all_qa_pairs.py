@@ -263,10 +263,10 @@ def main():
     parser.add_argument("--waveform_column", type=str, default="waveform_path_psa", help="Column with waveform paths")
     parser.add_argument("--question_column", type=str, default="prompt", help="Column with questions")
     parser.add_argument("--answer_column", type=str, default="generated_answer", help="Column with ground truth")
-    parser.add_argument("--device", type=int, default=0, help="GPU device ID")
+    parser.add_argument("--device", type=int, default=2, help="GPU device ID")
     parser.add_argument("--output_prefix", type=str, default="all_qa_generations", 
                         help="Prefix for output files (default: all_qa_generations)")
-    parser.add_argument("--save_interval", type=int, default=1000,
+    parser.add_argument("--save_interval", type=int, default=10,
                         help="Save checkpoint every N samples (default: 1000)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from existing checkpoint if available")
@@ -280,11 +280,19 @@ def main():
     print(f"\nLoading validation data from {args.validation_parquet}...")
     val_df = pd.read_parquet(args.validation_parquet)
     print(f"Total QA pairs: {len(val_df)}")
+
+    waveform_column = args.waveform_column
+    if waveform_column not in val_df.columns and 'ecg_path' in val_df.columns:
+        print(f"Warning: Column '{waveform_column}' not found; falling back to 'ecg_path'.")
+        waveform_column = 'ecg_path'
+    if waveform_column not in val_df.columns:
+        raise KeyError(
+            f"Column '{waveform_column}' not found in validation data. "
+            f"Available columns: {list(val_df.columns)}"
+        )
+
     if 'waveform_name' not in val_df.columns:
-        if 'ecg_path' in val_df.columns:
-            val_df['waveform_name'] = val_df['ecg_path'].astype(str).apply(lambda p: os.path.basename(p))
-        elif args.waveform_column in val_df.columns:
-            val_df['waveform_name'] = val_df[args.waveform_column].astype(str).apply(lambda p: os.path.basename(p))
+        val_df['waveform_name'] = val_df[waveform_column].astype(str).apply(lambda p: os.path.basename(p))
     print(f"Unique waveforms: {val_df['waveform_name'].nunique()}")
     
     if args.max_samples:
@@ -319,7 +327,7 @@ def main():
     
     for idx, row in tqdm(val_df.iloc[start_idx:].iterrows(), total=len(val_df)-start_idx, desc="Generating", initial=start_idx):
         waveform_name = row['waveform_name']
-        waveform_path = row[args.waveform_column]
+        waveform_path = row[waveform_column]
         question = row[args.question_column]
         ground_truth = row[args.answer_column]
         prompt_category = row.get('prompt_category', 'unknown')
