@@ -2983,6 +2983,12 @@ class LLMFinetuningRunner(BaseRunner):
             while base is not None and tokenizer is None:
                 tokenizer = getattr(base, "tokenizer", None)
                 base = getattr(base, "dataset", None) if hasattr(base, "dataset") else None
+        # Handle ConcatDataset (.datasets is a list of sub-datasets)
+        if tokenizer is None and hasattr(dataset_ref, "datasets"):
+            for sub_ds in dataset_ref.datasets:
+                tokenizer = getattr(sub_ds, "tokenizer", None)
+                if tokenizer is not None:
+                    break
         if tokenizer is None:
             raise AttributeError("Unable to locate tokenizer on the provided dataloader dataset.")
         labels_for_metrics = labels

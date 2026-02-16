@@ -31,6 +31,15 @@ os.environ.setdefault("WORLD_SIZE", "1")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Shim: transformers ≥5.x merged tokenization_gemma_fast into tokenization_gemma
+# and renamed GemmaTokenizerFast → GemmaTokenizer.  Checkpoints saved with older
+# versions pickle the old module path + class name.
+import types as _types, importlib as _importlib
+_gemma_tok = _importlib.import_module("transformers.models.gemma.tokenization_gemma")
+_shim = _types.ModuleType("transformers.models.gemma.tokenization_gemma_fast")
+_shim.GemmaTokenizerFast = _gemma_tok.GemmaTokenizer  # alias old → new
+sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = _shim
+
 from transformers import AutoTokenizer
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode

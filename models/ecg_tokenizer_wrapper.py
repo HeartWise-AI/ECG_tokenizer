@@ -1244,9 +1244,44 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 peft_config.inference_mode = inference_mode
             print(f"Set LoRA inference mode to: {inference_mode}")
 
+    def _normalize_lora_key(self, key: str) -> str:
+        """Normalize LoRA key to a canonical form for matching.
+
+        Handles different naming conventions:
+        - decoder.llm_model.base_model.model.model.language_model... (base checkpoint)
+        - decoder.llm.model.language_model... (DPO checkpoint)
+        - .lora_A.weight vs .lora_A.default.weight
+        """
+        normalized = key
+
+        # Normalize LLM path prefixes to a common form
+        # Base format: decoder.llm_model.base_model.model.model.language_model
+        # DPO format: decoder.llm.model.language_model
+        if 'decoder.llm.model.language_model' in normalized:
+            normalized = normalized.replace(
+                'decoder.llm.model.language_model',
+                'decoder.llm_model.base_model.model.model.language_model'
+            )
+        if 'decoder.llm.model.vision_tower' in normalized:
+            normalized = normalized.replace(
+                'decoder.llm.model.vision_tower',
+                'decoder.llm_model.base_model.model.model.vision_tower'
+            )
+        if 'decoder.llm.model.multi_modal_projector' in normalized:
+            normalized = normalized.replace(
+                'decoder.llm.model.multi_modal_projector',
+                'decoder.llm_model.base_model.model.model.multi_modal_projector'
+            )
+
+        # Normalize LoRA weight naming: .lora_A.default.weight -> .lora_A.weight
+        normalized = normalized.replace('.lora_A.default.weight', '.lora_A.weight')
+        normalized = normalized.replace('.lora_B.default.weight', '.lora_B.weight')
+
+        return normalized
+
     def _load_state_dict(
-        self, 
-        state_dict: dict[str, torch.Tensor], 
+        self,
+        state_dict: dict[str, torch.Tensor],
         strict: bool = False
     ):
         """
@@ -1256,41 +1291,46 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         """
         """Load state dict selectively based on configuration."""
         print("Loading state dict...")
-        
+
         # Check if this is a LoRA checkpoint by looking for LoRA-specific keys
         has_lora_keys = any('lora_A' in key or 'lora_B' in key or 'base_layer' in key for key in state_dict.keys())
         current_has_lora = any('lora_A' in key or 'lora_B' in key or 'base_layer' in key for key in self.state_dict().keys())
-        
+
         if has_lora_keys and current_has_lora:
             # Both checkpoint and current model have LoRA - need to handle naming differences
             print("Loading LoRA checkpoint into LoRA model...")
             filtered_state_dict = {}
             current_state_dict = self.state_dict()
-            
-            for key, value in state_dict.items():
-                # Handle different LoRA naming conventions
-                if 'lora_A.weight' in key and 'lora_A.default.weight' not in key:
-                    # Convert old naming to new naming: .lora_A.weight -> .lora_A.default.weight
-                    new_key = key.replace('.lora_A.weight', '.lora_A.default.weight')
-                    if new_key in current_state_dict:
-                        filtered_state_dict[new_key] = value
-                    else:
-                        # If the new key doesn't exist, try the original
-                        if key in current_state_dict:
-                            filtered_state_dict[key] = value
-                elif 'lora_B.weight' in key and 'lora_B.default.weight' not in key:
-                    # Convert old naming to new naming: .lora_B.weight -> .lora_B.default.weight
-                    new_key = key.replace('.lora_B.weight', '.lora_B.default.weight')
-                    if new_key in current_state_dict:
-                        filtered_state_dict[new_key] = value
-                    else:
-                        # If the new key doesn't exist, try the original
-                        if key in current_state_dict:
-                            filtered_state_dict[key] = value
+
+            # Build a mapping from normalized keys to actual model keys
+            normalized_to_model_key = {}
+            for model_key in current_state_dict.keys():
+                norm_key = self._normalize_lora_key(model_key)
+                normalized_to_model_key[norm_key] = model_key
+
+            matched_lora = 0
+            unmatched_lora = 0
+
+            for ckpt_key, value in state_dict.items():
+                # Normalize the checkpoint key
+                norm_key = self._normalize_lora_key(ckpt_key)
+
+                # Try to find a matching model key via normalized form
+                if norm_key in normalized_to_model_key:
+                    model_key = normalized_to_model_key[norm_key]
+                    filtered_state_dict[model_key] = value
+                    if 'lora_' in ckpt_key:
+                        matched_lora += 1
+                elif ckpt_key in current_state_dict:
+                    # Direct match
+                    filtered_state_dict[ckpt_key] = value
+                    if 'lora_' in ckpt_key:
+                        matched_lora += 1
                 else:
-                    # For all other keys, try direct mapping
-                    if key in current_state_dict:
-                        filtered_state_dict[key] = value
+                    if 'lora_' in ckpt_key:
+                        unmatched_lora += 1
+
+            print(f"  Matched {matched_lora} LoRA keys, {unmatched_lora} unmatched")
 
             # Align checkpoint tensors with current model shapes (handle token count changes)
             target_state_dict = self.state_dict()

@@ -1,0 +1,14 @@
+{
+  "classification": 18000,
+  "interpretation": 16000,
+  "json_interpretation": 9000,
+  "acs_severity": 10000,
+  "culprit_artery": 2000,
+  "urgency_assessment": 400,
+  "category_infarct_ischemia": 5000,
+  "category_conduction": 3500,
+  "category_rhythm": 3500,
+  "afib_risk": 3000,
+  "structural_heart_disease": 2500,
+  "lvef": 1600
+}

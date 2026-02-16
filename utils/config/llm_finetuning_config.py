@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
 from utils.enums import ConfigName
@@ -182,6 +182,15 @@ class LLMFinetuningConfig(HeartWiseConfig):
     debug_prompt_stop_after_first_batch: bool = False  # Exit loops after first batch when debugging
     debug_ablate_ecg: Optional[str] = None         # None, "zero", or "shuffle"
     debug_shuffle_prompts: bool = False            # Shuffle prompt_input_ids within batch
+
+    # Multi-dataset support
+    train_dataset_paths: Optional[List[str]] = None       # List of train parquet paths (overrides train_dataset_path)
+    dataset_weights: Optional[List[float]] = None          # Per-dataset sampling weights
+    validation_dataset_paths: Optional[List[str]] = None   # List of validation parquet paths
+
+    # ECG augmentation
+    ecg_augmentation_enabled: bool = False                 # Enable random ECG perturbations
+    ecg_augmentation_prob: float = 0.5                     # Per-sample augmentation probability
 
     # CF evaluation configuration (early-signal, evaluation-only)
     use_cf_eval: bool = False

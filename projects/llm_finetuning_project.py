@@ -28,6 +28,7 @@ from projects.base_project import BaseProject
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from data.ecg_clinical_report_dataset import (
     get_distributed_clinical_report_dataloader,
+    get_multi_dataset_distributed_dataloader,
     custom_collate_fn,
     _maybe_subset_dataset,
 )
@@ -388,65 +389,137 @@ class LLMFinetuningProject(BaseProject):
         if getattr(self.config, 'use_weighted_sampling', False):
             sample_weight_col = getattr(self.config, 'sample_weight_column', 'sample_weight')
 
-        # Get the dataloaders
-        train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.train_dataset_path,
-            signal_path_column=signal_col,
-            ecg_waveform_length=self.config.ecg_waveform_length,
-            ecg_num_leads=self.config.ecg_num_leads,
-            tokenizer=tokenizer,
-            max_token_length=self.config.max_token_length,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            num_replicas=self.config.world_size,
-            rank=self.config.device,
-            shuffle=True,
-            pin_memory=True,
-            instruct_mode=instruct_flag,
-            # Use 0 placeholders when using Q-Former (or prefix tuning).
-            num_ecg_tokens=num_ecg_tokens,
-            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
-            prompt_column=prompt_col,
-            answer_column=answer_col,
-            category_column=category_col,
-            prefix_tuning=getattr(self.config, 'prefix_tuning', False),
-            pattern_columns=getattr(self.config, 'pattern_label_columns', None),
-            subset_size=None,
-            balance_categories=False,
-            sampling_seed=getattr(self.config, 'seed', 42),
-            medgemma_prompt_style=medgemma_prompt_style,
-            debug_print_example=debug_print_example,
-            sample_weight_column=sample_weight_col,
-        )
-        
-        validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
-            dataset_path=self.config.validation_dataset_path,
-            signal_path_column=signal_col,
-            ecg_waveform_length=self.config.ecg_waveform_length,
-            ecg_num_leads=self.config.ecg_num_leads,
-            tokenizer=tokenizer,
-            max_token_length=self.config.max_token_length,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            num_replicas=self.config.world_size,
-            rank=self.config.device,
-            shuffle=getattr(self.config, "validation_shuffle", False), 
-            pin_memory=True,
-            instruct_mode=instruct_flag,
-            # Use 0 placeholders when using Q-Former (or prefix tuning).
-            num_ecg_tokens=num_ecg_tokens,
-            ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
-            prompt_column=prompt_col,
-            answer_column=answer_col,
-            category_column=category_col,
-            prefix_tuning=getattr(self.config, 'prefix_tuning', False),
-            pattern_columns=getattr(self.config, 'pattern_label_columns', None),
-            subset_size=getattr(self.config, "validation_subset_size", None),
-            balance_categories=getattr(self.config, "validation_balance_prompt_categories", False),
-            sampling_seed=getattr(self.config, "validation_sampling_seed", None),
-            medgemma_prompt_style=medgemma_prompt_style,
-            debug_print_example=debug_print_example,
-        )
+        # Create augmentor if enabled (training only)
+        augmentor = None
+        if getattr(self.config, 'ecg_augmentation_enabled', False):
+            from data.ecg_augmentations import ECGAugmentor
+            augmentor = ECGAugmentor(prob=getattr(self.config, 'ecg_augmentation_prob', 0.5))
+            if self.config.is_ref_device:
+                print(f"[LLM Finetuning] ECG augmentation enabled (prob={augmentor.prob})")
+
+        # Check for multi-dataset paths
+        train_paths = getattr(self.config, 'train_dataset_paths', None)
+        dataset_weights = getattr(self.config, 'dataset_weights', None)
+
+        if train_paths and len(train_paths) > 0:
+            train_dataloader: DataLoader = get_multi_dataset_distributed_dataloader(
+                dataset_paths=train_paths,
+                dataset_weights=dataset_weights or [1.0] * len(train_paths),
+                signal_path_column=signal_col,
+                ecg_waveform_length=self.config.ecg_waveform_length,
+                ecg_num_leads=self.config.ecg_num_leads,
+                tokenizer=tokenizer,
+                max_token_length=self.config.max_token_length,
+                batch_size=self.config.batch_size,
+                num_workers=self.config.num_workers,
+                num_replicas=self.config.world_size,
+                rank=self.config.device,
+                shuffle=True,
+                pin_memory=True,
+                instruct_mode=instruct_flag,
+                num_ecg_tokens=num_ecg_tokens,
+                ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+                prompt_column=prompt_col,
+                answer_column=answer_col,
+                category_column=category_col,
+                prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+                pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+                medgemma_prompt_style=medgemma_prompt_style,
+                debug_print_example=debug_print_example,
+                augmentor=augmentor,
+                sampling_seed=getattr(self.config, 'seed', 42),
+            )
+        else:
+            # Existing single-dataset path (backward compatible)
+            train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
+                dataset_path=self.config.train_dataset_path,
+                signal_path_column=signal_col,
+                ecg_waveform_length=self.config.ecg_waveform_length,
+                ecg_num_leads=self.config.ecg_num_leads,
+                tokenizer=tokenizer,
+                max_token_length=self.config.max_token_length,
+                batch_size=self.config.batch_size,
+                num_workers=self.config.num_workers,
+                num_replicas=self.config.world_size,
+                rank=self.config.device,
+                shuffle=True,
+                pin_memory=True,
+                instruct_mode=instruct_flag,
+                num_ecg_tokens=num_ecg_tokens,
+                ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+                prompt_column=prompt_col,
+                answer_column=answer_col,
+                category_column=category_col,
+                prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+                pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+                subset_size=None,
+                balance_categories=False,
+                sampling_seed=getattr(self.config, 'seed', 42),
+                medgemma_prompt_style=medgemma_prompt_style,
+                debug_print_example=debug_print_example,
+                sample_weight_column=sample_weight_col,
+                augmentor=augmentor,
+            )
+
+        # Check for multi-dataset validation paths
+        validation_paths = getattr(self.config, 'validation_dataset_paths', None)
+
+        if validation_paths and len(validation_paths) > 0:
+            validation_dataloader: DataLoader = get_multi_dataset_distributed_dataloader(
+                dataset_paths=validation_paths,
+                dataset_weights=[1.0] * len(validation_paths),
+                signal_path_column=signal_col,
+                ecg_waveform_length=self.config.ecg_waveform_length,
+                ecg_num_leads=self.config.ecg_num_leads,
+                tokenizer=tokenizer,
+                max_token_length=self.config.max_token_length,
+                batch_size=self.config.batch_size,
+                num_workers=self.config.num_workers,
+                num_replicas=self.config.world_size,
+                rank=self.config.device,
+                shuffle=getattr(self.config, "validation_shuffle", False),
+                pin_memory=True,
+                instruct_mode=instruct_flag,
+                num_ecg_tokens=num_ecg_tokens,
+                ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+                prompt_column=prompt_col,
+                answer_column=answer_col,
+                category_column=category_col,
+                prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+                pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+                medgemma_prompt_style=medgemma_prompt_style,
+                debug_print_example=debug_print_example,
+                augmentor=None,  # No augmentation for validation
+                sampling_seed=getattr(self.config, "validation_sampling_seed", None),
+            )
+        else:
+            validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
+                dataset_path=self.config.validation_dataset_path,
+                signal_path_column=signal_col,
+                ecg_waveform_length=self.config.ecg_waveform_length,
+                ecg_num_leads=self.config.ecg_num_leads,
+                tokenizer=tokenizer,
+                max_token_length=self.config.max_token_length,
+                batch_size=self.config.batch_size,
+                num_workers=self.config.num_workers,
+                num_replicas=self.config.world_size,
+                rank=self.config.device,
+                shuffle=getattr(self.config, "validation_shuffle", False),
+                pin_memory=True,
+                instruct_mode=instruct_flag,
+                num_ecg_tokens=num_ecg_tokens,
+                ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
+                prompt_column=prompt_col,
+                answer_column=answer_col,
+                category_column=category_col,
+                prefix_tuning=getattr(self.config, 'prefix_tuning', False),
+                pattern_columns=getattr(self.config, 'pattern_label_columns', None),
+                subset_size=getattr(self.config, "validation_subset_size", None),
+                balance_categories=getattr(self.config, "validation_balance_prompt_categories", False),
+                sampling_seed=getattr(self.config, "validation_sampling_seed", None),
+                medgemma_prompt_style=medgemma_prompt_style,
+                debug_print_example=debug_print_example,
+            )
 
         phase1_train_dataloader: DataLoader | None = None
         phase1_subset_size = phase1_cfg.get('train_subset_size')
