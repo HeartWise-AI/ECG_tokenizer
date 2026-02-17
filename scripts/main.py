@@ -1,11 +1,25 @@
 
 import os
 import sys
+import types
 
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.append(project_root)
+
+# Shim for checkpoints saved with older transformers that had a fast Gemma tokenizer.
+# transformers >=5 removed tokenization_gemma_fast; register an alias so torch.load
+# can unpickle the class reference without error.
+_FAST_MOD = "transformers.models.gemma.tokenization_gemma_fast"
+if _FAST_MOD not in sys.modules:
+    try:
+        from transformers.models.gemma import tokenization_gemma as _slow_mod
+        _shim = types.ModuleType(_FAST_MOD)
+        _shim.GemmaTokenizerFast = _slow_mod.GemmaTokenizer
+        sys.modules[_FAST_MOD] = _shim
+    except ImportError:
+        pass
 
 from utils.seed import set_seed
 from utils.ddp import DistributedUtils
