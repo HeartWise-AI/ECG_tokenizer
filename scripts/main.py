@@ -21,6 +21,15 @@ if _FAST_MOD not in sys.modules:
     except ImportError:
         pass
 
+# transformers >=5 removed encode_plus from tokenizers.  Patch it back as
+# an alias for __call__ so existing dataset code keeps working.
+try:
+    from transformers import PreTrainedTokenizerBase
+    if not hasattr(PreTrainedTokenizerBase, 'encode_plus'):
+        PreTrainedTokenizerBase.encode_plus = lambda self, *a, **kw: self(*a, **kw)
+except ImportError:
+    pass
+
 from utils.seed import set_seed
 from utils.ddp import DistributedUtils
 from utils.parser import HeartWiseParser
