@@ -191,6 +191,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     # ECG augmentation
     ecg_augmentation_enabled: bool = False                 # Enable random ECG perturbations
     ecg_augmentation_prob: float = 0.5                     # Per-sample augmentation probability
+    ecg_augmentation_amplitude_min: float = 0.8            # Global amplitude scale lower bound
+    ecg_augmentation_amplitude_max: float = 1.2            # Global amplitude scale upper bound
 
     # CF evaluation configuration (early-signal, evaluation-only)
     use_cf_eval: bool = False
