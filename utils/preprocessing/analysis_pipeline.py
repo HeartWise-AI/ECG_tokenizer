@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.constants import MHI_PSA_AMPLITUDE_SCALE
+from utils.constants import PTBXL_POWER_RATIO
 from utils.files_handler import ECGFileHandler
 from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 
@@ -88,8 +88,13 @@ class AnalysisPipeline:
         ecg_signal_processor: ECGSignalProcessor,
         signal: np.ndarray,
     ) -> np.ndarray:
-        # Dataset-agnostic deterministic scaling anchored on MHI original->PSA mapping.
-        scaled = signal.astype(np.float32, copy=False) * np.float32(MHI_PSA_AMPLITUDE_SCALE)
+        # Per-sample spectral power normalization: match lead-0 average spectral
+        # power to the PTB-XL reference, then remove powerline harmonics.
+        scaled = ecg_signal_processor.normalize_signal_spectral_power(
+            signal.astype(np.float32, copy=False),
+            target_power=PTBXL_POWER_RATIO,
+            reference_lead=0,
+        )
 
         cleaned = np.empty_like(scaled, dtype=np.float32)
         for lead_idx in range(cls.TARGET_LEADS):
@@ -121,7 +126,8 @@ class AnalysisPipeline:
         ecg_path_col = cls._resolve_path_column(df=df, path_column=path_column)
         print(f"Detected path column: {ecg_path_col}")
         print(
-            f"Using deterministic preprocessing: scale={MHI_PSA_AMPLITUDE_SCALE}, "
+            f"Using deterministic preprocessing: per-sample spectral normalization "
+            f"(target_power={PTBXL_POWER_RATIO}), "
             f"flatten_ranges={list(cls.FIXED_FLATTEN_RANGES)}"
         )
 

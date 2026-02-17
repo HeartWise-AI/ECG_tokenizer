@@ -31,10 +31,45 @@ class ECGSignalProcessor:
         fft_result = np.fft.fft(signal, axis=0)
         adjusted_fft = fft_result * power_ratio
         adjusted_signal = np.fft.ifft(adjusted_fft, axis=0)
-        return np.real(adjusted_signal)    
-    
+        return np.real(adjusted_signal)
+
     def compute_average_spectral_power(self, magnitude_spectrum: np.ndarray) -> float:
         return np.mean(magnitude_spectrum)
+
+    def normalize_signal_spectral_power(
+        self,
+        signal: np.ndarray,
+        target_power: float,
+        reference_lead: int = 0,
+    ) -> np.ndarray:
+        """Normalize a single signal's spectral power to *target_power*.
+
+        Steps:
+            1. Compute FFT magnitude spectrum of the *reference_lead*.
+            2. Derive ``avg_power = mean(magnitude_spectrum)``.
+            3. ``factor = target_power / avg_power``.
+            4. Scale **all** leads in the frequency domain and invert.
+
+        Parameters
+        ----------
+        signal : np.ndarray
+            Shape ``(time, leads)``.
+        target_power : float
+            Desired average spectral power (e.g. ``PTBXL_POWER_RATIO``).
+        reference_lead : int, optional
+            Lead index used to measure current spectral power.  Default ``0``.
+
+        Returns
+        -------
+        np.ndarray
+            Scaled signal with the same shape and ``float32`` dtype.
+        """
+        _, magnitude_spectrum = self.compute_magnitude_spectrum(signal[:, reference_lead])
+        avg_power = self.compute_average_spectral_power(magnitude_spectrum)
+        if avg_power == 0.0:
+            return signal.astype(np.float32, copy=False)
+        factor = target_power / avg_power
+        return self.adjust_spectral_power(signal, factor).astype(np.float32, copy=False)
     
     def scale_ecg_signals(self, df: pd.DataFrame, power_ratio: float) -> pd.DataFrame:
         _, mean_magnitude_spectrum = self.plot_mean_spectrum(np.array(df['ecg_signal'].tolist())[:, :, 0])
