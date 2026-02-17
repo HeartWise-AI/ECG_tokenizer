@@ -4,7 +4,11 @@ Each transform operates on (2500, 12) numpy arrays and returns the same shape.
 Augmentations are applied AFTER normalization (on the already-adjusted signal).
 """
 
+from __future__ import annotations
+
 import random
+from typing import Tuple
+
 import numpy as np
 
 
@@ -23,6 +27,33 @@ def amplitude_scale(waveform: np.ndarray) -> np.ndarray:
     """Scale amplitude by 0.8-1.2x independently per lead."""
     scales = np.random.uniform(0.8, 1.2, size=(1, waveform.shape[1]))
     return waveform * scales
+
+
+def global_amplitude_scale(
+    signal: np.ndarray,
+    scale_range: Tuple[float, float] = (0.8, 1.2),
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Scale all leads by the same random factor drawn from *scale_range*.
+
+    This simulates the amplitude mismatch between different ECG acquisition
+    pipelines (e.g. XML vs PSA) more faithfully than per-lead independent
+    scaling, because the mismatch is a global gain difference.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Shape ``(time, leads)`` — float32 recommended.
+    scale_range : tuple of float
+        ``(min, max)`` for the uniform distribution.
+    rng : np.random.Generator, optional
+        Explicit RNG for reproducibility.  If ``None`` a fresh default
+        generator is used (non-deterministic).
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    factor = rng.uniform(scale_range[0], scale_range[1])
+    return (signal * factor).astype(signal.dtype, copy=False)
 
 
 def baseline_wander(waveform: np.ndarray) -> np.ndarray:
@@ -76,10 +107,21 @@ class ECGAugmentor:
 
     Args:
         prob: Probability of applying any augmentation to a given sample.
+        amplitude_scale_range: (min, max) for global amplitude augmentation.
+            Set to None to disable. When enabled, this is always applied
+            (independent of prob) to simulate cross-dataset gain mismatch.
+        amplitude_scale_seed: Seed for the global amplitude scale RNG.
     """
 
-    def __init__(self, prob: float = 0.5):
+    def __init__(
+        self,
+        prob: float = 0.5,
+        amplitude_scale_range: Tuple[float, float] | None = (0.8, 1.2),
+        amplitude_scale_seed: int | None = None,
+    ):
         self.prob = prob
+        self.amplitude_scale_range = amplitude_scale_range
+        self.amplitude_rng = np.random.default_rng(amplitude_scale_seed) if amplitude_scale_range else None
         self.transforms = [
             gaussian_noise,
             amplitude_scale,
@@ -90,6 +132,14 @@ class ECGAugmentor:
 
     def __call__(self, waveform: np.ndarray) -> np.ndarray:
         """Apply random augmentations to a (2500, 12) waveform."""
+        # Global amplitude scale is always applied (simulates dataset mismatch)
+        if self.amplitude_scale_range is not None:
+            waveform = global_amplitude_scale(
+                waveform,
+                scale_range=self.amplitude_scale_range,
+                rng=self.amplitude_rng,
+            )
+
         if random.random() > self.prob:
             return waveform
         n_transforms = random.randint(1, 3)

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from utils.enums import ConfigName
 from utils.registry import ConfigRegistry
@@ -49,3 +50,7 @@ class ECGTokenizerLinearProbingConfig(HeartWiseConfig):
     waveform_length: int
     normalize_waveforms: bool
     lead_stats: dict[str, dict[str, float]]
+
+    # Inference parameters
+    inference_dataset_path: Optional[str] = None
+    inference_checkpoint_path: Optional[str] = None

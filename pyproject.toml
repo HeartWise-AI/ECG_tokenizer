@@ -11,19 +11,23 @@ dependencies = [
     "iterative-stratification>=0.1.9",
     "matplotlib>=3.9.2",
     "nltk>=3.9.1",
-    "pandas>=2.2.3",
-    "peft>=0.7.0",
+    "pandas==2.2.3",
+    "peft==0.17.1",
     "pyarrow>=19.0.0",
     "pytest>=8.3.5",
     "pytest-cov>=6.1.1",
     "rouge-score>=0.1.2",
     "scikit-learn>=1.5.2",
-    "torch>=2.4.1",
+    "statsmodels>=0.14.5",
+    "torch==2.8.0+cu129",
     "torchvision>=0.19.1",
     "tqdm>=4.66.5",
-    "transformers>=4.46.2",
-    "vector-quantize-pytorch>=1.21.8",
+    "transformers==4.56.2",
+    "tokenizers==0.22.2",
+    "vector-quantize-pytorch==1.24.2",
     "wandb>=0.18.3",
+    "wfdb==4.1.2",
+    "yq>=3.1.0",
     "xmltodict>=0.12.0",
     "pywavelets>=1.1.0",
     "sacrebleu>=2.5.1",
@@ -38,6 +42,11 @@ packages = [
     "projects",
     "utils/config"
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
 
 [tool.pyright]
 exclude = [
@@ -60,3 +69,11 @@ ignore = [
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu129" }
+torchvision = { index = "pytorch-cu129" }

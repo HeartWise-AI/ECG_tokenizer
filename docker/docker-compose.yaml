@@ -1,0 +1,81 @@
+version: '3.8'
+
+# ECG Tokenizer Inference Pipeline Docker Compose
+# Following DeepECG_Docker pattern for volume mounts and service configuration
+
+services:
+  ecg_tokenizer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ecg-tokenizer:latest
+    container_name: ecg_tokenizer_pipeline
+    
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # Volume mounts following DeepECG_Docker pattern
+    volumes:
+      # Input parquet files
+      - ./inputs:/app/inputs
+      # Output results (JSON, CSV)
+      - ./outputs:/app/outputs
+      # Raw ECG signals (read-only)
+      - ./ecg_signals:/app/ecg_signals:ro
+      # Preprocessed signals
+      - ./preprocessing:/app/preprocessing
+      # Model checkpoints (read-only)
+      - ./checkpoints:/app/checkpoints:ro
+      # Configuration files (read-only)
+      - ./config:/app/config:ro
+    
+    # Environment variables
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+    
+    # Command: run preprocess + BERT (EfficientNet is external)
+    command: ["bash", "-lc", "source /app/docker/run_pipeline.bash --step all --input_file /app/inputs/data.parquet"]
+    
+    # Interactive mode
+    stdin_open: true
+    tty: true
+
+  # CPU-only service variant
+  ecg_tokenizer_cpu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ecg-tokenizer:latest
+    container_name: ecg_tokenizer_pipeline_cpu
+    
+    volumes:
+      - ./inputs:/app/inputs
+      - ./outputs:/app/outputs
+      - ./ecg_signals:/app/ecg_signals:ro
+      - ./preprocessing:/app/preprocessing
+      - ./checkpoints:/app/checkpoints:ro
+      - ./config:/app/config:ro
+    
+    environment:
+      - PYTHONUNBUFFERED=1
+    
+    command: ["bash", "-lc", "source /app/docker/run_pipeline.bash --step all --device cpu --batch-size 8 --input_file /app/inputs/data.parquet"]
+    
+    stdin_open: true
+    tty: true
+
+# Volume definitions for named volumes (optional)
+volumes:
+  inputs:
+  outputs:
+  ecg_signals:
+  preprocessing:
+  checkpoints:
+  config:
