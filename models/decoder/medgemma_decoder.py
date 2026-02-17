@@ -1405,10 +1405,10 @@ class MedGemmaDecoder(nn.Module):
         labels: Optional[torch.Tensor],
         ecg_embeddings: torch.Tensor,
         embed_layer: torch.nn.Embedding,
-    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], torch.Tensor]]:
         """Insert ECG embeddings immediately after the <start_of_image> token.
 
-        Returns padded (inputs_embeds, attention_mask, input_ids, labels) or None if no <start_of_image> is found.
+        Returns padded (inputs_embeds, attention_mask, input_ids, labels, token_type_ids) or None if no <start_of_image> is found.
         """
         start_img_id = self._start_image_token_id()
         if start_img_id is None or input_ids is None or ecg_embeddings is None:
@@ -1437,6 +1437,7 @@ class MedGemmaDecoder(nn.Module):
         new_masks: list[torch.Tensor] = []
         new_ids: list[torch.Tensor] = []
         new_labels: list[torch.Tensor] = []
+        new_ttids: list[torch.Tensor] = []
         need_labels = labels is not None
 
         for b in range(batch_size):
@@ -1484,11 +1485,18 @@ class MedGemmaDecoder(nn.Module):
                 )
                 new_labels.append(merged_labels)
 
+            # token_type_ids: 0 = text, 1 = image/ECG
+            before_ttid = torch.zeros(img_pos + 1, device=device, dtype=torch.long)
+            ecg_ttid = torch.ones(ecg_len, device=device, dtype=torch.long)
+            after_ttid = torch.zeros(after_ids.size(0), device=device, dtype=torch.long)
+            new_ttids.append(torch.cat([before_ttid, ecg_ttid, after_ttid], dim=0))
+
         max_len = max(x.size(0) for x in new_ids)
         padded_embeds: list[torch.Tensor] = []
         padded_masks: list[torch.Tensor] = []
         padded_ids: list[torch.Tensor] = []
         padded_labels: list[torch.Tensor] = []
+        padded_ttids: list[torch.Tensor] = []
 
         for i in range(len(new_ids)):
             diff = max_len - new_ids[i].size(0)
@@ -1496,26 +1504,30 @@ class MedGemmaDecoder(nn.Module):
                 pad_ids = torch.full((diff,), pad_id, device=device, dtype=new_ids[i].dtype)
                 pad_masks = torch.zeros(diff, device=device, dtype=new_masks[i].dtype)
                 pad_embs = pad_vec.unsqueeze(0).expand(diff, -1)
+                pad_ttid = torch.zeros(diff, device=device, dtype=torch.long)
                 new_ids[i] = torch.cat([new_ids[i], pad_ids], dim=0)
                 new_masks[i] = torch.cat([new_masks[i], pad_masks], dim=0)
                 new_embeds[i] = torch.cat([new_embeds[i], pad_embs], dim=0)
+                new_ttids[i] = torch.cat([new_ttids[i], pad_ttid], dim=0)
                 if need_labels and len(new_labels) > i:
                     pad_labs = torch.full((diff,), -100, device=device, dtype=new_labels[i].dtype)
                     new_labels[i] = torch.cat([new_labels[i], pad_labs], dim=0)
             padded_ids.append(new_ids[i])
             padded_masks.append(new_masks[i])
             padded_embeds.append(new_embeds[i])
+            padded_ttids.append(new_ttids[i])
             if need_labels and len(new_labels) > i:
                 padded_labels.append(new_labels[i])
 
         inputs_embeds = torch.stack(padded_embeds, dim=0)
         attention_mask = torch.stack(padded_masks, dim=0)
         input_ids = torch.stack(padded_ids, dim=0)
+        token_type_ids = torch.stack(padded_ttids, dim=0)
         labels_out = None
         if need_labels and padded_labels:
             labels_out = torch.stack(padded_labels, dim=0)
 
-        return inputs_embeds, attention_mask, input_ids, labels_out
+        return inputs_embeds, attention_mask, input_ids, labels_out, token_type_ids
 
     # ------------------------------------------------------------------
     # Utilities
@@ -1752,8 +1764,9 @@ class MedGemmaDecoder(nn.Module):
                         "ECG injection debug: <start_of_image> present but injection failed in forward()."
                     )
 
+        token_type_ids = None
         if merged is not None:
-            inputs_embeds, attn_mask, input_ids, prepared_labels = merged
+            inputs_embeds, attn_mask, input_ids, prepared_labels, token_type_ids = merged
         else:
             text_embeddings = embed_layer(text_input_ids)
             if text_embeddings.dtype != model_dtype:
@@ -1772,6 +1785,17 @@ class MedGemmaDecoder(nn.Module):
             )
             attn_mask = torch.cat([prefix_mask, text_mask], dim=1)
 
+            # token_type_ids: ECG prefix = 1 (image-like), text = 0
+            prefix_ttid = torch.ones(
+                text_mask.size(0), prefix_len, device=device, dtype=torch.long
+            ) if prefix_len > 0 else torch.zeros(
+                text_mask.size(0), 0, device=device, dtype=torch.long
+            )
+            text_ttid = torch.zeros(
+                text_mask.size(0), text_input_ids.size(1), device=device, dtype=torch.long
+            )
+            token_type_ids = torch.cat([prefix_ttid, text_ttid], dim=1)
+
             prepared_labels = None
             if base_labels is not None:
                 prepared_labels = base_labels
@@ -1789,12 +1813,17 @@ class MedGemmaDecoder(nn.Module):
                             "labels length does not match combined ECG/text sequence length."
                         )
 
-        outputs = self.llm_model(
+        # Build forward kwargs — only pass token_type_ids when available
+        # (Gemma3-based models require it during training).
+        fwd_kwargs: Dict[str, Any] = dict(
             inputs_embeds=inputs_embeds,
             attention_mask=attn_mask,
             labels=prepared_labels,
             return_dict=True,
         )
+        if token_type_ids is not None:
+            fwd_kwargs["token_type_ids"] = token_type_ids
+        outputs = self.llm_model(**fwd_kwargs)
 
         result: Dict[str, torch.Tensor] = {"logits": outputs.logits}
         if hasattr(outputs, "loss") and outputs.loss is not None:
@@ -1970,7 +1999,7 @@ class MedGemmaDecoder(nn.Module):
             embed_layer=embed_layer,
         )
         if merged is not None:
-            prompt_embeddings, prompt_mask, prompt_tensor, _ = merged
+            prompt_embeddings, prompt_mask, prompt_tensor, _, _ttids = merged
             prefix_len = 0
         else:
             prompt_embeddings = torch.cat([ecg_embeddings, prompt_embeddings], dim=1)
@@ -2091,7 +2120,7 @@ class MedGemmaDecoder(nn.Module):
                     )
 
         if merged is not None:
-            inputs_embeds, attention_mask, _, _ = merged
+            inputs_embeds, attention_mask, _, _, _ttids = merged
             prefix_len = 0
         else:
             # Fallback: prepend ECG embeddings as a soft prefix
