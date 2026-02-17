@@ -12,6 +12,10 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Preprocess ECG data from parquet files.')
     parser.add_argument('--config', type=str, default="/volume/ECG_tokenizer/config/vqvae_training/base_config.yaml",
                         help='Path to the configuration file')
+    parser.add_argument('--parquet_path', type=str, default=None,
+                        help='Direct parquet path to preprocess (bypasses config dataset discovery)')
+    parser.add_argument('--dataset_label', type=str, default=None,
+                        help='Dataset label used for output folder naming when --parquet_path is provided')
     parser.add_argument('--output', type=str, default="/volume/ECG_tokenizer/output",
                         help='Base output folder path for both processed data and parquet files')
     parser.add_argument('--dataset', type=str, default=None,
@@ -22,6 +26,8 @@ def parse_arguments():
                         help='Number of rows to process (use -1 for all)')
     parser.add_argument('--workers', type=int, default=16,
                         help='Number of workers for preprocessing')
+    parser.add_argument('--path_column', type=str, default=None,
+                        help='Optional explicit column containing waveform paths (e.g., ecg_path, xml_path, npy_path)')
     return parser.parse_args()
 
 def load_config(config_path):
@@ -67,7 +73,7 @@ def swap_leads(signal, lead1, lead2):
     signal_copy[:, [lead1_idx, lead2_idx]] = signal_copy[:, [lead2_idx, lead1_idx]]
     return signal_copy
 
-def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_workers, file_type=None):
+def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_workers, file_type=None, path_column=None):
     dataset_output_folder = os.path.join(output_folder, dataset_name)
     
     # Create a preprocessing subfolder with file_type as suffix if available
@@ -99,7 +105,8 @@ def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_work
         preprocessing_n_workers=n_workers,
         swap_leads_fn=swap_leads if needs_lead_swap else None,
         swap_lead1='aVL',
-        swap_lead2='aVF'
+        swap_lead2='aVF',
+        path_column=path_column,
     )
 
     output_filename = f"{dataset_name}_cleaned.parquet"
@@ -113,10 +120,23 @@ def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_work
 
 def main():
     args = parse_arguments()
-    config = load_config(args.config)
-    
     output_folder = args.output
     os.makedirs(output_folder, exist_ok=True)
+
+    if args.parquet_path:
+        direct_dataset_name = args.dataset_label or os.path.splitext(os.path.basename(args.parquet_path))[0]
+        process_dataset(
+            parquet_path=args.parquet_path,
+            dataset_name=direct_dataset_name,
+            output_folder=output_folder,
+            row_limit=args.rows,
+            n_workers=args.workers,
+            file_type=args.file_type,
+            path_column=args.path_column,
+        )
+        return
+
+    config = load_config(args.config)
     
     dataset_files = find_dataset_files(config, args.dataset, args.file_type)
     
@@ -155,7 +175,8 @@ def main():
                 output_folder=output_folder,
                 row_limit=args.rows,
                 n_workers=args.workers,
-                file_type=current_file_type
+                file_type=current_file_type,
+                path_column=args.path_column,
             )
         except Exception as e:
             print(f"Error processing {key}: {e}")

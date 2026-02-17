@@ -27,9 +27,10 @@ class ECGSignalProcessor:
         return fft_freq, mean_magnitude_spectrum
     
     def adjust_spectral_power(self, signal: np.ndarray, power_ratio: float) -> np.ndarray:
-        fft_result = np.fft.fft(signal)
+        # ECG frequency content is along time axis (axis=0 for shape [time, leads]).
+        fft_result = np.fft.fft(signal, axis=0)
         adjusted_fft = fft_result * power_ratio
-        adjusted_signal = np.fft.ifft(adjusted_fft)
+        adjusted_signal = np.fft.ifft(adjusted_fft, axis=0)
         return np.real(adjusted_signal)    
     
     def compute_average_spectral_power(self, magnitude_spectrum: np.ndarray) -> float:
@@ -52,12 +53,34 @@ class ECGSignalProcessor:
         merge_threshold: int = 1
     ) -> List[Tuple[float, float]]:
         fft_freq, mean_magnitude_spectrum = self.plot_mean_spectrum(signals)
+        return self.detect_peaks_from_mean_spectrum(
+            fft_freq=fft_freq,
+            mean_magnitude_spectrum=mean_magnitude_spectrum,
+            window_size=window_size,
+            std_threshold=std_threshold,
+            min_freq=min_freq,
+            merge_threshold=merge_threshold,
+        )
+
+    def detect_peaks_from_mean_spectrum(
+        self,
+        fft_freq: np.ndarray,
+        mean_magnitude_spectrum: np.ndarray,
+        window_size: int = 3,
+        std_threshold: int = 2,
+        min_freq: int = 20,
+        merge_threshold: int = 1,
+    ) -> List[Tuple[float, float]]:
         valid_indices = fft_freq >= min_freq
         valid_freqs = fft_freq[valid_indices]
         valid_magnitude_spectrum = mean_magnitude_spectrum[valid_indices]
+
+        if valid_freqs.size < 2 or valid_magnitude_spectrum.size < 2:
+            return []
         
         freq_resolution = fft_freq[1] - fft_freq[0]
-        window_size_points = int(window_size / freq_resolution)
+        window_size_points = max(1, int(window_size / freq_resolution))
+        window_size_points = min(window_size_points, len(valid_magnitude_spectrum))
         
         peaks = []
         harmonics = []
@@ -132,7 +155,8 @@ class ECGSignalProcessor:
 
         fft_phase = np.angle(fft_result)
         fft_magnitude = np.abs(fft_result)
-        flatten_ranges = set(flatten_ranges)
+        # Preserve deterministic order while removing duplicates.
+        flatten_ranges = list(dict.fromkeys(flatten_ranges))
         for flatten_range in flatten_ranges:
             if flatten_range[0] >= flatten_range[1]:
                 continue
@@ -180,12 +204,13 @@ class ECGSignalProcessor:
         frac: float = 0.10, 
         kernel_size: int = 5
     ) -> Tuple[np.ndarray, np.ndarray]:
-        fft_freq, mean_magnitude_spectrum = self.plot_mean_spectrum(signals, color=color, label=label)
+        fft_freq, mean_magnitude_spectrum = self.plot_mean_spectrum(signals)
         
         valid_indices = fft_freq >= 40
         valid_freqs = fft_freq[valid_indices]
         valid_magnitude_spectrum = mean_magnitude_spectrum[valid_indices]
 
+        kernel_size = self._clamp_kernel_size(kernel_size, len(valid_magnitude_spectrum))
         median_filtered = medfilt(valid_magnitude_spectrum, kernel_size=kernel_size)
         loess_smoothed = lowess(median_filtered, valid_freqs, frac=frac, return_sorted=False)
 
@@ -199,11 +224,33 @@ class ECGSignalProcessor:
         kernel_size: int = 5
     ) -> List[Tuple[float, float]]:
         fft_freq, mean_magnitude_spectrum = self.plot_mean_spectrum(signals)
+        return self.find_crossings_for_peaks_from_mean_spectrum(
+            fft_freq=fft_freq,
+            mean_magnitude_spectrum=mean_magnitude_spectrum,
+            peak_ranges=peak_ranges,
+            frac=frac,
+            kernel_size=kernel_size,
+        )
+
+    def find_crossings_for_peaks_from_mean_spectrum(
+        self,
+        fft_freq: np.ndarray,
+        mean_magnitude_spectrum: np.ndarray,
+        peak_ranges: List[Tuple[float, float]],
+        frac: float = 0.1,
+        kernel_size: int = 5,
+    ) -> List[Tuple[float, float]]:
+        if len(peak_ranges) == 0:
+            return []
         
         valid_indices = fft_freq >= 30
         valid_freqs = fft_freq[valid_indices]
         valid_magnitude_spectrum = mean_magnitude_spectrum[valid_indices]
 
+        if valid_freqs.size == 0 or valid_magnitude_spectrum.size == 0:
+            return list(peak_ranges)
+
+        kernel_size = self._clamp_kernel_size(kernel_size, len(valid_magnitude_spectrum))
         median_filtered = medfilt(valid_magnitude_spectrum, kernel_size=kernel_size)
         loess_smoothed = lowess(median_filtered, valid_freqs, frac=frac, return_sorted=False)
 
@@ -239,6 +286,17 @@ class ECGSignalProcessor:
 
     def widen_ranges(self, ranges_list: List[Tuple[float, float]], widen_by: int = 1) -> List[Tuple[float, float]]:
         return [(start - widen_by, end + widen_by) for start, end in ranges_list]
+
+    @staticmethod
+    def _clamp_kernel_size(kernel_size: int, n_points: int) -> int:
+        if n_points <= 1:
+            return 1
+        clamped = max(1, int(kernel_size))
+        if clamped % 2 == 0:
+            clamped += 1
+        if clamped > n_points:
+            clamped = n_points if n_points % 2 == 1 else n_points - 1
+        return max(1, clamped)
 
     def clean_and_process_ecg_leads(
         self, 

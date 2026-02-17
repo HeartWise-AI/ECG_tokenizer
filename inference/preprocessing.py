@@ -15,8 +15,8 @@ Required Input Columns:
 """
 
 import sys
+import re
 from pathlib import Path
-from datetime import datetime
 from typing import Optional
 
 import pandas as pd
@@ -94,8 +94,8 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> Path:
     print("Running Preprocessing")
     print("=" * 60)
     print(f"ECG Signals Path: {args.ecg_signals_path}")
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = f"{run_id}_{args.dataset_name}" if args.dataset_name else run_id
+    dataset_tag = args.dataset_name or Path(args.input_parquet).stem
+    prefix = re.sub(r"[^A-Za-z0-9._-]+", "_", str(dataset_tag)).strip("._-") or "dataset"
     preprocessing_folder = Path(args.preprocessing_folder) / f"{prefix}_preprocessing"
     args.preprocessing_folder = str(preprocessing_folder)
 
