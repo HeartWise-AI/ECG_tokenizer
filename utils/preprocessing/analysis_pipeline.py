@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,19 @@ class AnalysisPipeline:
     TARGET_LENGTH = 2500
     TARGET_LEADS = 12
     # Fixed powerline harmonics removal ranges (Hz) for deterministic preprocessing.
-    FIXED_FLATTEN_RANGES = ((59.5, 60.5), (69.5, 70.5))
+    FIXED_FLATTEN_RANGES = ((59.5, 60.5), (69.5, 70.5), (89.5, 90.5), (119.5, 120.5))
+    OPTIONAL_100HZ_CLUSTER_RANGE = (99.5, 101.5)
+
+    SwapLeadsFn = Callable[[np.ndarray, int, int], np.ndarray]
+
+    @classmethod
+    def _get_flatten_ranges(
+        cls,
+        include_optional_100hz_cluster: bool,
+    ) -> tuple[tuple[float, float], ...]:
+        if include_optional_100hz_cluster:
+            return cls.FIXED_FLATTEN_RANGES + (cls.OPTIONAL_100HZ_CLUSTER_RANGE,)
+        return cls.FIXED_FLATTEN_RANGES
 
     @staticmethod
     def _resolve_path_column(df: pd.DataFrame, path_column: str | None) -> str:
@@ -67,7 +80,8 @@ class AnalysisPipeline:
         if signal.ndim != 2:
             raise ValueError(f"Expected signal with 2 dimensions, got shape {signal.shape}")
 
-        # Some loaders return shape (12, N)
+        # Some loaders return shape (12, N). We treat (12, 12) as already
+        # canonical because it is ambiguous and outside expected ECG lengths.
         if signal.shape[0] == cls.TARGET_LEADS and signal.shape[1] != cls.TARGET_LEADS:
             signal = signal.transpose(1, 0)
 
@@ -87,16 +101,18 @@ class AnalysisPipeline:
         cls,
         ecg_signal_processor: ECGSignalProcessor,
         signal: np.ndarray,
+        flatten_ranges: tuple[tuple[float, float], ...],
     ) -> np.ndarray:
         # Dataset-agnostic deterministic scaling anchored on MHI original->PSA mapping.
         scaled = signal.astype(np.float32, copy=False) * np.float32(MHI_PSA_AMPLITUDE_SCALE)
+        flatten_ranges_list = list(flatten_ranges)
 
         cleaned = np.empty_like(scaled, dtype=np.float32)
         for lead_idx in range(cls.TARGET_LEADS):
             cleaned[:, lead_idx] = ecg_signal_processor.flatten_fft_peak(
                 scaled[:, lead_idx],
-                flatten_ranges=list(cls.FIXED_FLATTEN_RANGES),
-            ).astype(np.float32, copy=False)
+                flatten_ranges=flatten_ranges_list,
+            )
 
         return cleaned
 
@@ -107,22 +123,24 @@ class AnalysisPipeline:
         output_folder: str,
         preprocessing_folder: str,
         preprocessing_n_workers: int,
-        swap_leads_fn=None,
-        swap_lead1=None,
-        swap_lead2=None,
-        path_column: str | None = None
+        swap_leads_fn: SwapLeadsFn | None = None,
+        swap_lead1: int | None = None,
+        swap_lead2: int | None = None,
+        path_column: str | None = None,
+        include_optional_100hz_cluster: bool = False,
     ) -> pd.DataFrame:
         del output_folder  # Kept for backward compatibility with callers.
         del preprocessing_n_workers  # Current deterministic path is intentionally single-threaded.
 
         ecg_signal_processor = ECGSignalProcessor()
+        flatten_ranges = cls._get_flatten_ranges(include_optional_100hz_cluster)
         os.makedirs(preprocessing_folder, exist_ok=True)
 
         ecg_path_col = cls._resolve_path_column(df=df, path_column=path_column)
         print(f"Detected path column: {ecg_path_col}")
         print(
             f"Using deterministic preprocessing: scale={MHI_PSA_AMPLITUDE_SCALE}, "
-            f"flatten_ranges={list(cls.FIXED_FLATTEN_RANGES)}"
+            f"flatten_ranges={list(flatten_ranges)}"
         )
 
         processed_rows: list[pd.Series] = []
@@ -143,6 +161,7 @@ class AnalysisPipeline:
                 processed_signal = cls._to_psa_like_signal(
                     ecg_signal_processor=ecg_signal_processor,
                     signal=canonical_signal,
+                    flatten_ranges=flatten_ranges,
                 )
 
                 if swap_leads_fn is not None and swap_lead1 is not None and swap_lead2 is not None:
