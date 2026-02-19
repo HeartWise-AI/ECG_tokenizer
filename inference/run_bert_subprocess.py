@@ -71,7 +71,11 @@ def run_bert_on_parquet(
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    df = load_df(str(input_path))
+    if input_path.suffix.lower() == ".csv":
+        # Avoid mixed-type chunk inference that can break parquet serialization.
+        df = pd.read_csv(input_path, low_memory=False)
+    else:
+        df = load_df(str(input_path))
     if "reports" not in df.columns:
         raise ValueError("Input file must contain a 'reports' column")
 

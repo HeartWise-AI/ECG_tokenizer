@@ -32,7 +32,7 @@ class PipelineArgs:
     checkpoints_dir: str = "/app/checkpoints"
 
     # Model checkpoints (only BERT + tokenizer are used here)
-    bert_checkpoint: str = "/app/checkpoints/mimic_mhi_bert"
+    bert_checkpoint: str = "/app/checkpoints/bert"
     tokenizer_checkpoint: str = "/app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt"
 
     # Device settings

@@ -5,8 +5,9 @@ set -e
 
 APP_HOME="${APP_HOME:-/app}"
 
-# Prefer offline HF cache when baked weights are present
-export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+# Default to online so models can be refreshed/downloaded at runtime.
+# Set HF_HUB_OFFLINE=1 at runtime to force local-only behavior.
+export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
 export BASE_MODEL_DIR="${APP_HOME}/checkpoints/google-medgemma-4b-it"
 
 # Help
