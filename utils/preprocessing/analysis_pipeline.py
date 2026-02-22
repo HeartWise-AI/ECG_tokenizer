@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 import pandas as pd
+from scipy.signal import resample as scipy_resample
 from tqdm import tqdm
 
 from utils.constants import PTBXL_POWER_RATIO
@@ -49,14 +50,9 @@ class AnalysisPipeline:
         if current_length == target_length:
             return signal.astype(np.float32, copy=False)
         if current_length < 2:
-            raise ValueError(f"Signal length must be >= 2 for interpolation; got {current_length}")
+            raise ValueError(f"Signal length must be >= 2 for resampling; got {current_length}")
 
-        old_x = np.linspace(0.0, 1.0, num=current_length, dtype=np.float64)
-        new_x = np.linspace(0.0, 1.0, num=target_length, dtype=np.float64)
-        out = np.empty((target_length, signal.shape[1]), dtype=np.float32)
-        for lead_idx in range(signal.shape[1]):
-            out[:, lead_idx] = np.interp(new_x, old_x, signal[:, lead_idx]).astype(np.float32, copy=False)
-        return out
+        return scipy_resample(signal, target_length, axis=0).astype(np.float32)
 
     @classmethod
     def _canonicalize_signal(cls, signal: np.ndarray) -> np.ndarray:
@@ -144,7 +140,7 @@ class AnalysisPipeline:
 
             source_path = str(source_path_raw)
             try:
-                raw_signal = ECGFileHandler.load_ecg_signal(source_path)
+                raw_signal = ECGFileHandler.load_ecg_signal_raw(source_path)
                 canonical_signal = cls._canonicalize_signal(raw_signal)
                 processed_signal = cls._to_psa_like_signal(
                     ecg_signal_processor=ecg_signal_processor,

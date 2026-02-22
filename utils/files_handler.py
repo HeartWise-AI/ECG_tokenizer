@@ -222,6 +222,27 @@ class ECGFileHandler:
             np_array = np.load(filename, allow_pickle=False)
         writable_array = np.copy(np_array)
         return writable_array.reshape(-1, 12)
+
+    @staticmethod
+    def load_ecg_signal_raw(filename: str) -> np.ndarray:
+        """
+        Load ECG signal preserving its original shape (no reshape).
+
+        Use this when the caller handles shape normalization (e.g.
+        AnalysisPipeline._canonicalize_signal which correctly transposes
+        (12, N) arrays instead of reshaping them).
+        """
+        filename = str(filename)
+        if filename.endswith('.hea'):
+            if wfdb is None:
+                raise ImportError("wfdb is required to read .hea files")
+            record_path = filename[:-4]
+            record = wfdb.rdrecord(record_path)
+            return np.copy(record.p_signal)
+        elif filename.endswith('.xml'):
+            return ECGFileHandler._load_xml_signal(filename)
+        else:
+            return np.copy(np.load(filename, allow_pickle=False))
     
     @staticmethod
     def list_files(directory_path: str, extension: Optional[str] = None) -> list:
