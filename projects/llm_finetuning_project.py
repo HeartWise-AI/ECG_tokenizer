@@ -395,14 +395,22 @@ class LLMFinetuningProject(BaseProject):
             from data.ecg_augmentations import ECGAugmentor
             amp_min = getattr(self.config, 'ecg_augmentation_amplitude_min', 0.8)
             amp_max = getattr(self.config, 'ecg_augmentation_amplitude_max', 1.2)
+            noise_snr_min = getattr(self.config, 'ecg_augmentation_noise_snr_min', 20.0)
+            noise_snr_max = getattr(self.config, 'ecg_augmentation_noise_snr_max', 40.0)
+            wander_min = getattr(self.config, 'ecg_augmentation_wander_min', 0.01)
+            wander_max = getattr(self.config, 'ecg_augmentation_wander_max', 0.05)
             augmentor = ECGAugmentor(
                 prob=getattr(self.config, 'ecg_augmentation_prob', 0.5),
                 amplitude_scale_range=(amp_min, amp_max),
+                noise_snr_range=(noise_snr_min, noise_snr_max),
+                wander_amplitude_range=(wander_min, wander_max),
             )
             if self.config.is_ref_device:
                 print(
                     f"[LLM Finetuning] ECG augmentation enabled "
-                    f"(prob={augmentor.prob}, amplitude_range=({amp_min}, {amp_max}))"
+                    f"(prob={augmentor.prob}, amplitude_range=({amp_min}, {amp_max}), "
+                    f"noise_snr=({noise_snr_min}, {noise_snr_max}), "
+                    f"wander_amp=({wander_min}, {wander_max}))"
                 )
 
         # Check for multi-dataset paths

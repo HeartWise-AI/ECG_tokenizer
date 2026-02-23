@@ -111,6 +111,10 @@ ecg_augmentation_enabled: true
 ecg_augmentation_prob: 0.5
 ecg_augmentation_amplitude_min: 0.8
 ecg_augmentation_amplitude_max: 1.2
+ecg_augmentation_noise_snr_min: 15.0
+ecg_augmentation_noise_snr_max: 40.0
+ecg_augmentation_wander_min: 0.01
+ecg_augmentation_wander_max: 0.15
 # Single-dataset fallback (not used when train_dataset_paths is set)
 train_dataset_path: "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k_weighted.parquet"
 validation_dataset_path: "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"

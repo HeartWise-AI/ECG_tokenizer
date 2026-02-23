@@ -12,9 +12,12 @@ from typing import Tuple
 import numpy as np
 
 
-def gaussian_noise(waveform: np.ndarray) -> np.ndarray:
-    """Add Gaussian noise at a random SNR between 20-40 dB."""
-    snr_db = random.uniform(20.0, 40.0)
+def gaussian_noise(
+    waveform: np.ndarray,
+    snr_range: Tuple[float, float] = (20.0, 40.0),
+) -> np.ndarray:
+    """Add Gaussian noise at a random SNR drawn from *snr_range* (dB)."""
+    snr_db = random.uniform(snr_range[0], snr_range[1])
     signal_power = np.mean(waveform ** 2)
     if signal_power < 1e-12:
         return waveform
@@ -56,14 +59,17 @@ def global_amplitude_scale(
     return (signal * factor).astype(signal.dtype, copy=False)
 
 
-def baseline_wander(waveform: np.ndarray) -> np.ndarray:
+def baseline_wander(
+    waveform: np.ndarray,
+    amplitude_range: Tuple[float, float] = (0.01, 0.05),
+) -> np.ndarray:
     """Add low-frequency sinusoidal baseline drift (0.1-0.5 Hz)."""
     n_samples = waveform.shape[0]
     freq = random.uniform(0.1, 0.5)
     # Assume 500 Hz sampling rate for 2500 samples = 5 seconds
     t = np.arange(n_samples) / 500.0
     phase = random.uniform(0, 2 * np.pi)
-    amplitude = random.uniform(0.01, 0.05)
+    amplitude = random.uniform(amplitude_range[0], amplitude_range[1])
     drift = amplitude * np.sin(2 * np.pi * freq * t + phase)
     # Apply to random subset of leads
     n_leads = waveform.shape[1]
@@ -111,6 +117,10 @@ class ECGAugmentor:
             Set to None to disable. When enabled, this is always applied
             (independent of prob) to simulate cross-dataset gain mismatch.
         amplitude_scale_seed: Seed for the global amplitude scale RNG.
+        noise_snr_range: (min_dB, max_dB) for Gaussian noise SNR.
+            Lower values = louder noise.
+        wander_amplitude_range: (min, max) for baseline wander amplitude.
+            Higher values = more visible drift.
     """
 
     def __init__(
@@ -118,14 +128,23 @@ class ECGAugmentor:
         prob: float = 0.5,
         amplitude_scale_range: Tuple[float, float] | None = (0.8, 1.2),
         amplitude_scale_seed: int | None = None,
+        noise_snr_range: Tuple[float, float] = (20.0, 40.0),
+        wander_amplitude_range: Tuple[float, float] = (0.01, 0.05),
     ):
         self.prob = prob
         self.amplitude_scale_range = amplitude_scale_range
         self.amplitude_rng = np.random.default_rng(amplitude_scale_seed) if amplitude_scale_range else None
+        self.noise_snr_range = noise_snr_range
+        self.wander_amplitude_range = wander_amplitude_range
+        self._build_transforms()
+
+    def _build_transforms(self):
+        """Build the list of augmentation transforms with bound parameters."""
+        from functools import partial
         self.transforms = [
-            gaussian_noise,
+            partial(gaussian_noise, snr_range=self.noise_snr_range),
             amplitude_scale,
-            baseline_wander,
+            partial(baseline_wander, amplitude_range=self.wander_amplitude_range),
             temporal_shift,
             lead_dropout,
         ]

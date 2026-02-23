@@ -193,6 +193,10 @@ class LLMFinetuningConfig(HeartWiseConfig):
     ecg_augmentation_prob: float = 0.5                     # Per-sample augmentation probability
     ecg_augmentation_amplitude_min: float = 0.8            # Global amplitude scale lower bound
     ecg_augmentation_amplitude_max: float = 1.2            # Global amplitude scale upper bound
+    ecg_augmentation_noise_snr_min: float = 20.0           # Gaussian noise SNR lower bound (dB, lower=louder)
+    ecg_augmentation_noise_snr_max: float = 40.0           # Gaussian noise SNR upper bound (dB)
+    ecg_augmentation_wander_min: float = 0.01              # Baseline wander amplitude lower bound
+    ecg_augmentation_wander_max: float = 0.05              # Baseline wander amplitude upper bound
 
     # CF evaluation configuration (early-signal, evaluation-only)
     use_cf_eval: bool = False
