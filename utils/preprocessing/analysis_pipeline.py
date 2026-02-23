@@ -4,7 +4,6 @@ import re
 
 import numpy as np
 import pandas as pd
-from scipy.signal import resample as scipy_resample
 from tqdm import tqdm
 
 from utils.constants import PTBXL_POWER_RATIO
@@ -15,8 +14,6 @@ from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 class AnalysisPipeline:
     TARGET_LENGTH = 2500
     TARGET_LEADS = 12
-    # Fixed powerline harmonics removal ranges (Hz) for deterministic preprocessing.
-    FIXED_FLATTEN_RANGES = ((59.5, 60.5), (69.5, 70.5))
 
     @staticmethod
     def _resolve_path_column(df: pd.DataFrame, path_column: str | None) -> str:
@@ -27,7 +24,7 @@ class AnalysisPipeline:
         if not path_columns:
             raise ValueError("No column with 'path' or 'file' in its name found in the dataframe")
 
-        for preferred in ("ecg_path", "waveform_path_original", "waveform_path_psa", "xml_path", "ECG_path"):
+        for preferred in ("ecg_path", "filepath", "waveform_path_original", "waveform_path_psa", "xml_path", "ECG_path"):
             if preferred in path_columns:
                 return preferred
         return path_columns[0]
@@ -50,9 +47,14 @@ class AnalysisPipeline:
         if current_length == target_length:
             return signal.astype(np.float32, copy=False)
         if current_length < 2:
-            raise ValueError(f"Signal length must be >= 2 for resampling; got {current_length}")
+            raise ValueError(f"Signal length must be >= 2 for interpolation; got {current_length}")
 
-        return scipy_resample(signal, target_length, axis=0).astype(np.float32)
+        old_x = np.linspace(0.0, 1.0, num=current_length, dtype=np.float64)
+        new_x = np.linspace(0.0, 1.0, num=target_length, dtype=np.float64)
+        out = np.empty((target_length, signal.shape[1]), dtype=np.float32)
+        for lead_idx in range(signal.shape[1]):
+            out[:, lead_idx] = np.interp(new_x, old_x, signal[:, lead_idx]).astype(np.float32, copy=False)
+        return out
 
     @classmethod
     def _canonicalize_signal(cls, signal: np.ndarray) -> np.ndarray:
@@ -116,8 +118,7 @@ class AnalysisPipeline:
         print(f"Detected path column: {ecg_path_col}")
         print(
             f"Using deterministic preprocessing: per-sample spectral normalization "
-            f"(target_power={PTBXL_POWER_RATIO}), "
-            f"flatten_ranges={list(cls.FIXED_FLATTEN_RANGES)}"
+            f"(target_power={PTBXL_POWER_RATIO})"
         )
 
         processed_rows: list[pd.Series] = []
