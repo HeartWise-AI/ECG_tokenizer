@@ -85,21 +85,14 @@ class AnalysisPipeline:
         signal: np.ndarray,
     ) -> np.ndarray:
         # Per-sample spectral power normalization: match lead-0 average spectral
-        # power to the PTB-XL reference, then remove powerline harmonics.
+        # power to the PTB-XL reference.
         scaled = ecg_signal_processor.normalize_signal_spectral_power(
             signal.astype(np.float32, copy=False),
             target_power=PTBXL_POWER_RATIO,
             reference_lead=0,
         )
 
-        cleaned = np.empty_like(scaled, dtype=np.float32)
-        for lead_idx in range(cls.TARGET_LEADS):
-            cleaned[:, lead_idx] = ecg_signal_processor.flatten_fft_peak(
-                scaled[:, lead_idx],
-                flatten_ranges=list(cls.FIXED_FLATTEN_RANGES),
-            ).astype(np.float32, copy=False)
-
-        return cleaned
+        return scaled
 
     @classmethod
     def save_and_preprocess_data(
