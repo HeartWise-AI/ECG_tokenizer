@@ -20,7 +20,7 @@ from collections import defaultdict, Counter
 from dataclasses import dataclass
 from typing import Optional, Set, List, Dict, Any, Tuple
 from tqdm import tqdm
-from ecg_prompt_maker import ECGPromptMaker
+from ecg_prompt_maker import ECGPromptMaker, QAFeatureFlags, _log_qa_feature_flags
 from ecg_answer_generator import ECGAnswerGenerator
 
 from dataset_generation.siglip_shared import (
@@ -559,14 +559,14 @@ def _top_off_sample(
 
 PROMPT_MAKER_WORKER = None
 PROMPT_MAX_PER_ECG = None
+PROMPT_QA_FLAGS = None
 
 
-def _init_prompt_worker(max_prompts_per_ecg: Optional[int]) -> None:
-    """Initializer for multiprocessing prompt worker."""
-
-    global PROMPT_MAKER_WORKER, PROMPT_MAX_PER_ECG
+def _init_prompt_worker(max_prompts_per_ecg: Optional[int], qa_feature_flags: Optional[QAFeatureFlags] = None) -> None:
+    global PROMPT_MAKER_WORKER, PROMPT_MAX_PER_ECG, PROMPT_QA_FLAGS
     PROMPT_MAKER_WORKER = ECGPromptMaker()
     PROMPT_MAX_PER_ECG = max_prompts_per_ecg
+    PROMPT_QA_FLAGS = qa_feature_flags
     random.seed()
     np.random.seed()
 
@@ -644,7 +644,7 @@ def _prompt_worker(row_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
         raise RuntimeError("Prompt worker not initialised")
 
     row_series = pd.Series(row_dict)
-    prompts = PROMPT_MAKER_WORKER.generate_prompts_for_ecg(row_series)
+    prompts = PROMPT_MAKER_WORKER.generate_prompts_for_ecg(row_series, PROMPT_QA_FLAGS)
     prompts = _prioritize_prompts(prompts, PROMPT_MAX_PER_ECG)
 
     results: List[Dict[str, Any]] = []
@@ -661,6 +661,7 @@ def _generate_prompts_serial(
     df_sampled: pd.DataFrame,
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> List[Dict[str, Any]]:
     prompt_maker = ECGPromptMaker()
     all_prompts: List[Dict[str, Any]] = []
@@ -669,7 +670,7 @@ def _generate_prompts_serial(
     ecgs_processed = 0
 
     for _, row in tqdm(df_sampled.iterrows(), total=len(df_sampled), desc="   Generating prompts"):
-        prompts = prompt_maker.generate_prompts_for_ecg(row)
+        prompts = prompt_maker.generate_prompts_for_ecg(row, qa_feature_flags)
         ecgs_processed += 1
 
         prompts = _prioritize_prompts(prompts, max_prompts_per_ecg)
@@ -699,12 +700,13 @@ def _generate_prompts_parallel(
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
     workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> List[Dict[str, Any]]:
     records = df_sampled.to_dict(orient='records')
     all_prompts: List[Dict[str, Any]] = []
 
     ctx = mp.get_context("spawn")
-    with ctx.Pool(processes=workers, initializer=_init_prompt_worker, initargs=(max_prompts_per_ecg,)) as pool:
+    with ctx.Pool(processes=workers, initializer=_init_prompt_worker, initargs=(max_prompts_per_ecg, qa_feature_flags)) as pool:
         iterator = pool.imap_unordered(_prompt_worker, records, chunksize=32)
         for prompt_list in tqdm(iterator, total=len(records), desc="   Generating prompts"):
             if prompt_list:
@@ -723,11 +725,12 @@ def generate_prompts_for_dataset(
     sample_size: Optional[int],
     max_prompts_per_ecg: Optional[int],
     prompt_workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> pd.DataFrame:
     if prompt_workers and prompt_workers > 1:
-        prompts = _generate_prompts_parallel(df_sampled, sample_size, max_prompts_per_ecg, prompt_workers)
+        prompts = _generate_prompts_parallel(df_sampled, sample_size, max_prompts_per_ecg, prompt_workers, qa_feature_flags)
     else:
-        prompts = _generate_prompts_serial(df_sampled, sample_size, max_prompts_per_ecg)
+        prompts = _generate_prompts_serial(df_sampled, sample_size, max_prompts_per_ecg, qa_feature_flags)
 
     if sample_size and len(prompts) > sample_size:
         prompts = prompts[:sample_size]
@@ -741,9 +744,9 @@ def generate_prompts_for_dataset(
 ANSWER_GENERATOR_WORKER = None
 
 
-def _init_answer_worker(dataset: str) -> None:
+def _init_answer_worker(dataset: str, qa_feature_flags: Optional[QAFeatureFlags] = None) -> None:
     global ANSWER_GENERATOR_WORKER
-    ANSWER_GENERATOR_WORKER = ECGAnswerGenerator(language='en', dataset=dataset)
+    ANSWER_GENERATOR_WORKER = ECGAnswerGenerator(language='en', dataset=dataset, qa_feature_flags=qa_feature_flags)
     random.seed()
     np.random.seed()
 
@@ -762,8 +765,9 @@ def generate_answers_for_dataset(
     df_with_prompts: pd.DataFrame,
     dataset_type: str,
     answer_workers: int,
+    qa_feature_flags: Optional[QAFeatureFlags] = None,
 ) -> tuple[pd.DataFrame, int]:
-    if dataset_type in ['mimic-iv', 'combined']:
+    if dataset_type in ['mimic-iv', 'combined', 'custom']:
         answer_dataset = 'mimic'
     elif dataset_type == 'mhi':
         answer_dataset = 'mhi'
@@ -774,7 +778,7 @@ def generate_answers_for_dataset(
 
     if answer_workers and answer_workers > 1:
         ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=answer_workers, initializer=_init_answer_worker, initargs=(answer_dataset,)) as pool:
+        with ctx.Pool(processes=answer_workers, initializer=_init_answer_worker, initargs=(answer_dataset, qa_feature_flags)) as pool:
             updated_records = list(
                 tqdm(
                     pool.imap(_answer_worker, records, chunksize=64),
@@ -783,7 +787,7 @@ def generate_answers_for_dataset(
                 )
             )
     else:
-        answer_gen = ECGAnswerGenerator(language='en', dataset=answer_dataset)
+        answer_gen = ECGAnswerGenerator(language='en', dataset=answer_dataset, qa_feature_flags=qa_feature_flags)
         updated_records = []
         for _, row in tqdm(df_with_prompts.iterrows(), total=len(df_with_prompts), desc="   Generating answers"):
             row_dict = row.to_dict()
@@ -1001,6 +1005,7 @@ def generate_siglip_alignment_dataset(
         'waveform_name',
         'Split',
         'split',
+        'ecg_path',
     }
     if 'waveform_path_psa' in available_cols:
         needed_cols.add('waveform_path_psa')
@@ -1018,9 +1023,12 @@ def generate_siglip_alignment_dataset(
         raise ValueError("Merged dataframe is empty after selecting required columns")
 
     if 'waveform_path_psa' not in df.columns:
-        if 'npy_path' not in df.columns:
-            raise ValueError("Missing required ECG path column ('waveform_path_psa' or 'npy_path') after column selection")
-        df['waveform_path_psa'] = df['npy_path'].astype(str)
+        if 'npy_path' not in df.columns and 'ecg_path' not in df.columns:
+            raise ValueError("Missing required ECG path column ('waveform_path_psa', 'npy_path', or 'ecg_path') after column selection")
+        if 'waveform_path_psa' not in df.columns and 'ecg_path' in df.columns:
+            df['waveform_path_psa'] = df['ecg_path'].astype(str)
+        if 'waveform_path_psa' not in df.columns and 'npy_path' in df.columns:
+            df['waveform_path_psa'] = df['npy_path'].astype(str)
 
     if include_diagnosis and diagnosis_column not in df.columns:
         print(
@@ -1643,6 +1651,8 @@ def process_dataset(
     prompt_workers: int = 1,
     answer_workers: int = 1,
     preserve_common_rhythms: bool = True,
+    custom_parquet_path: Optional[str] = None,
+    disable_categories: Optional[List[str]] = None,
 ):
     """Process a single dataset (train or test)
     
@@ -1691,7 +1701,12 @@ def process_dataset(
     print(f"   Columns: {list(df.columns)[:10]}...")
     
     # 3. Load and merge demographic data based on dataset type
-    if dataset_type == 'combined':
+    if dataset_type == 'custom':
+        print(f"\n2. Using custom dataset as-is (no demographic merge)...")
+        df_merged = df.copy()
+        df_merged['dataset_source'] = 'custom'
+
+    elif dataset_type == 'combined':
         # Process combined dataset - load both MIMIC and MHI data
         print(f"\n2. Processing COMBINED dataset...")
         
@@ -1854,7 +1869,7 @@ def process_dataset(
         
         # Clean up
         df_merged = df_merged.drop(columns=['npy_id'], errors='ignore')
-        df_merged['dataset_source'] = 'mimic-iv'
+        df_merged['dataset_source'] = 'custom' if dataset_type == 'custom' else 'mimic-iv'
         
     elif dataset_type == 'mhi':
         print(f"\n2. Loading MHI data (1.7M rows, this may take a moment)...")
@@ -2008,12 +2023,16 @@ def process_dataset(
             # Mark as borderline if any limit column >= 1 and not already pathological
             df_merged.loc[(df_merged[col] >= 1) & (df_merged['ecg_type'] == 'normal'), 'ecg_type'] = 'borderline'
     
-    # Report ecg_type distribution
     ecg_type_counts = df_merged['ecg_type'].value_counts()
     print(f"   ECG type distribution:")
     for ecg_type, count in ecg_type_counts.items():
         print(f"     {ecg_type}: {count} ({100*count/len(df_merged):.1f}%)")
-    
+
+    qa_feature_flags = QAFeatureFlags.detect(df_merged)
+    qa_feature_flags = QAFeatureFlags.apply_overrides(qa_feature_flags, disable_categories)
+    print(f"\n2b. QA feature flags (column-based):")
+    _log_qa_feature_flags(qa_feature_flags)
+
     # 4. Calculate how many ECGs we need for the target number of questions
     # For combined mode, handle sampling differently
     if dataset_type == 'combined' and (mimic_samples or mhi_samples):
@@ -2324,6 +2343,7 @@ def process_dataset(
         sample_size=sample_size,
         max_prompts_per_ecg=max_prompts_per_ecg,
         prompt_workers=prompt_workers,
+        qa_feature_flags=qa_feature_flags,
     )
 
     print(f"   Total prompts generated: {len(df_with_prompts):,}")
@@ -2363,6 +2383,7 @@ def process_dataset(
         df_with_prompts,
         dataset_type=dataset_type,
         answer_workers=answer_workers,
+        qa_feature_flags=qa_feature_flags,
     )
     if dropped_count > 0:
         print(f"     Dropped {dropped_count} questions with no available data")
@@ -2412,6 +2433,17 @@ def process_dataset(
         df_with_answers['age_at_ecg'] = pd.to_numeric(df_with_answers['age_at_ecg'], errors='coerce')
     if 'rr_interval' in df_with_answers.columns:
         df_with_answers['rr_interval'] = pd.to_numeric(df_with_answers['rr_interval'], errors='coerce')
+
+    # Harmonize path column for deduplication
+    if 'waveform_path_psa' not in df_with_answers.columns:
+        if 'ecg_path' in df_with_answers.columns:
+            df_with_answers['waveform_path_psa'] = df_with_answers['ecg_path']
+            if 'waveform_path_psa' not in columns_to_keep:
+                columns_to_keep.append('waveform_path_psa')
+        elif 'npy_path' in df_with_answers.columns:
+            df_with_answers['waveform_path_psa'] = df_with_answers['npy_path']
+            if 'waveform_path_psa' not in columns_to_keep:
+                columns_to_keep.append('waveform_path_psa')
     
     # Final safety-net: deduplicate on ECG path + prompt to prevent residual duplicates
     dedup_subset = ['waveform_path_psa', 'prompt']
@@ -2462,6 +2494,7 @@ def main(
     siglip_random_seed: int = 0,
     siglip_implneg_sample_size: int = 64,
     siglip_max_hardneg_per_group: int | None = 3,
+    output_dir: str = "/volume/ECG_tokenizer/output",
     prompt_workers: int = 1,
     answer_workers: int = 1,
     siglip_train_ecgs: Optional[int] = None,
@@ -2469,6 +2502,8 @@ def main(
     siglip_test_ecgs: Optional[int] = None,
     siglip_max_positive_per_label: Optional[int] = None,
     preserve_common_rhythms: bool = True,
+    custom_parquet_path: Optional[str] = None,
+    disable_categories: Optional[str] = None,
 ):
     """Main function to process both train and test datasets
     
@@ -2483,15 +2518,21 @@ def main(
         mhi_train_samples: For combined mode, number of MHI training samples
         mimic_test_samples: For combined mode, number of MIMIC test samples
         mhi_test_samples: For combined mode, number of MHI test samples
+        output_dir: Base directory for QA parquet outputs
         prompt_workers: Number of worker processes for prompt generation
         answer_workers: Number of worker processes for answer generation
         preserve_common_rhythms: If True, retain Sinusal/Regular labels in outputs
     """
     
+    disable_list = [s.strip() for s in (disable_categories or "").split(",") if s.strip()] or None
+    if disable_list:
+        print(f"Disable QA categories: {disable_list}")
+
     print("GENERATING TRAIN AND TEST DATASETS", flush=True)
     print("=" * 80)
     print(f"Dataset type: {dataset_type.upper()}")
-    print(f"Target sizes: Train={train_samples:,}, Test={test_samples:,}")
+    if dataset_type != 'custom':
+        print(f"Target sizes: Train={train_samples:,}, Test={test_samples:,}")
     print(f"Max normal percentage: {max_normal_percentage*100:.1f}%")
     print(f"Min samples per diagnosis: {min_samples_per_diagnosis}")
     
@@ -2552,29 +2593,37 @@ def main(
         total_test = (mimic_test_samples or 0) + (mhi_test_samples or 0)
         total_train = (mimic_train_samples or 0) + (mhi_train_samples or 0)
         
-        test_output = f'/volume/ECG_tokenizer/output/combined_test_qa_m{(mimic_test_samples or 0)//1000}k_h{(mhi_test_samples or 0)//1000}k.parquet'
-        train_output = f'/volume/ECG_tokenizer/output/combined_train_qa_m{(mimic_train_samples or 0)//1000}k_h{(mhi_train_samples or 0)//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'preprocessed_combined_test_qa.parquet')
+        train_output = str(Path(output_dir) / f'preprocessed_combined_train_qa.parquet')
         
         print("\nNote: Creating combined dataset with samples from both MIMIC and MHI")
         
     elif dataset_type == 'mimic-iv':
         test_input = '/media/data1/datasets/ECG_Tokenizer/parquets/test/mimic_mhi_psa_test_updated.parquet'
-        test_output = f'/volume/ECG_tokenizer/output/mimic_test_qa_{test_samples//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'mimic_test_qa_{test_samples//1000}k.parquet')
 
         train_input = '/media/data1/datasets/ECG_Tokenizer/parquets/train/mimic_mhi_psa_train_updated.parquet'
-        train_output = f'/volume/ECG_tokenizer/output/mimic_train_qa_{train_samples//1000}k.parquet'
+        train_output = str(Path(output_dir) / f'mimic_train_qa_{train_samples//1000}k.parquet')
     
     elif dataset_type == 'mhi':
         # For MHI, use v1.6 parquet with Split column filtering
         mhi_base_path = '/media/data1/muse_ge/ECG_ad20241231_metadata.v1.6._with_translation_ROXs42Bb.cleaned.parquet'
         test_input = mhi_base_path  # Will be filtered by Split='test' in process_dataset
-        test_output = f'/volume/ECG_tokenizer/output/mhi_test_qa_{test_samples//1000}k.parquet'
+        test_output = str(Path(output_dir) / f'mhi_test_qa_{test_samples//1000}k.parquet')
 
         train_input = mhi_base_path  # Will be filtered by Split='train' in process_dataset
-        train_output = f'/volume/ECG_tokenizer/output/mhi_train_qa_{train_samples//1000}k.parquet'
+        train_output = str(Path(output_dir) / f'mhi_train_qa_{train_samples//1000}k.parquet')
 
         print("\nNote: Using MHI v1.6 parquet with Split column filtering")
-    
+
+    elif dataset_type == 'custom':
+        if custom_parquet_path is None:
+            raise ValueError("For dataset_type 'custom', please provide --custom_parquet_path")
+        test_input = custom_parquet_path
+        train_input = custom_parquet_path
+        test_output = str(Path(output_dir) / 'custom_test_qa.parquet')
+        train_output = str(Path(output_dir) / 'custom_train_qa.parquet')
+
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 
@@ -2590,14 +2639,75 @@ def main(
             mhi_test_samples = None
             mimic_train_samples = None
             mhi_train_samples = None
+
+        # Custom mode: process once and write a single file
+        if dataset_type == 'custom':
+            single_output = str(Path(output_dir) / 'preprocessed_qa.parquet')
+            df_all = process_dataset(
+                train_input,
+                single_output,
+                "custom",
+                sample_size=None,
+                dataset_type=dataset_type,
+                max_prompts_per_ecg=max_prompts_per_ecg,
+                max_normal_percentage=max_normal_percentage,
+                min_samples_per_diagnosis=min_samples_per_diagnosis,
+                mimic_samples=None,
+                mhi_samples=None,
+                prompt_workers=prompt_workers,
+                answer_workers=answer_workers,
+                preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
+            )
+
+            # Ensure waveform_name exists for summary
+            if 'waveform_name' not in df_all.columns:
+                for col in ('waveform_path_psa', 'npy_path', 'ecg_path'):
+                    if col in df_all.columns:
+                        df_all = df_all.copy()
+                        df_all['waveform_name'] = df_all[col].astype(str).apply(lambda p: os.path.basename(p))
+                        break
+
+            print(f"\n{'='*80}")
+            print("FINAL SUMMARY")
+            print(f"{'='*80}")
+            print(f"Custom dataset: {len(df_all)} prompts from {df_all['waveform_name'].nunique()} ECGs")
+            print(f"\nFile saved:")
+            print(f"  {single_output}")
+
+            if generate_siglip_alignment:
+                print("\nTriggering SigLIP alignment export...")
+                output_dir_aln = siglip_output_dir or 'ecg_text_alignment'
+                generate_siglip_alignment_dataset(
+                    parquet_path=siglip_parquet_path,
+                    output_dir=output_dir_aln,
+                    include_qa=siglip_include_qa,
+                    w_pos=siglip_pos_weight,
+                    w_hardneg=siglip_hardneg_weight,
+                    w_implneg=siglip_implneg_weight,
+                    sample_size=siglip_sample_size,
+                    random_seed=siglip_random_seed,
+                    implneg_sample_size=siglip_implneg_sample_size,
+                    max_hardneg_per_group=siglip_max_hardneg_per_group,
+                    train_ecgs=siglip_train_ecgs,
+                    val_ecgs=siglip_val_ecgs,
+                    test_ecgs=siglip_test_ecgs,
+                    max_positive_per_label=siglip_max_positive_per_label,
+                )
+
+            return
         
-        # Process test dataset first (smaller) - but skip if test_samples is 0
-        if test_sample_size > 0:
+        # Process test dataset first (smaller) - allow all rows for custom
+        effective_test_sample_size = test_sample_size
+        if dataset_type == 'custom':
+            effective_test_sample_size = None  # use all available
+        if test_sample_size > 0 or dataset_type == 'custom':
             test_df = process_dataset(
                 test_input,
                 test_output,
                 "test",
-                sample_size=test_sample_size,
+                sample_size=effective_test_sample_size,
                 dataset_type=dataset_type,
                 max_prompts_per_ecg=max_prompts_per_ecg,
                 max_normal_percentage=max_normal_percentage,
@@ -2607,17 +2717,22 @@ def main(
                 prompt_workers=prompt_workers,
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
             )
         else:
             print("Skipping test dataset (test_samples=0)")
         
-        # Process train dataset - but skip if train_samples is 0
-        if train_sample_size > 0:
+        # Process train dataset - allow all rows for custom
+        effective_train_sample_size = train_sample_size
+        if dataset_type == 'custom':
+            effective_train_sample_size = None  # use all available
+        if train_sample_size > 0 or dataset_type == 'custom':
             train_df = process_dataset(
                 train_input,
                 train_output,
                 "train",
-                sample_size=train_sample_size,
+                sample_size=effective_train_sample_size,
                 dataset_type=dataset_type,
                 max_prompts_per_ecg=max_prompts_per_ecg,
                 max_normal_percentage=max_normal_percentage,
@@ -2627,17 +2742,37 @@ def main(
                 prompt_workers=prompt_workers,
                 answer_workers=answer_workers,
                 preserve_common_rhythms=preserve_common_rhythms,
+                custom_parquet_path=custom_parquet_path,
+                disable_categories=disable_list,
             )
         else:
             print("Skipping train dataset (train_samples=0)")
         
         # Final summary
+        def _ensure_waveform_name(df: pd.DataFrame) -> pd.DataFrame:
+            if 'waveform_name' in df.columns:
+                return df
+            candidate = None
+            for col in ('waveform_path_psa', 'npy_path', 'ecg_path'):
+                if col in df.columns:
+                    candidate = col
+                    break
+            if candidate:
+                df = df.copy()
+                df['waveform_name'] = df[candidate].astype(str).apply(lambda p: os.path.basename(p))
+            return df
+
+        if 'test_df' in locals() and test_df is not None:
+            test_df = _ensure_waveform_name(test_df)
+        if 'train_df' in locals() and train_df is not None:
+            train_df = _ensure_waveform_name(train_df)
+
         print(f"\n{'='*80}")
         print("FINAL SUMMARY")
         print(f"{'='*80}")
-        if test_sample_size > 0:
+        if test_sample_size > 0 or dataset_type == 'custom':
             print(f"Test dataset: {len(test_df)} prompts from {test_df['waveform_name'].nunique()} ECGs")
-        if train_sample_size > 0:
+        if train_sample_size > 0 or dataset_type == 'custom':
             print(f"Train dataset: {len(train_df)} prompts from {train_df['waveform_name'].nunique()} ECGs")
         
         print(f"\nFiles saved:")
@@ -2688,8 +2823,8 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="mimic-iv",
-        choices=["mimic-iv", "mhi", "combined"],
-        help="Dataset type: 'mimic-iv', 'mhi', or 'combined' for both"
+        choices=["mimic-iv", "mhi", "combined", "custom"],
+        help="Dataset type: 'mimic-iv', 'mhi', 'combined', or 'custom' for a user-provided parquet"
     )
     parser.add_argument(
         "--train_samples",
@@ -2821,6 +2956,24 @@ if __name__ == "__main__":
         help="Maximum hard negatives to keep per exclusivity group"
     )
     parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/volume/ECG_tokenizer/output",
+        help="Base directory to write QA parquet outputs"
+    )
+    parser.add_argument(
+        "--custom_parquet_path",
+        type=str,
+        default=None,
+        help="Path to custom parquet when --dataset custom"
+    )
+    parser.add_argument(
+        "--disable_categories",
+        type=str,
+        default=None,
+        help="Comma-separated QA categories to disable (e.g. heart_rate,lvef,afib_risk)"
+    )
+    parser.add_argument(
         "--siglip_train_ecgs",
         type=int,
         default=None,
@@ -2874,6 +3027,7 @@ if __name__ == "__main__":
         siglip_random_seed=args.siglip_random_seed,
         siglip_implneg_sample_size=args.siglip_implneg_sample_size,
         siglip_max_hardneg_per_group=args.siglip_max_hardneg_per_group,
+        output_dir=args.output_dir,
         prompt_workers=args.prompt_workers,
         answer_workers=args.answer_workers,
         siglip_train_ecgs=args.siglip_train_ecgs,
@@ -2881,4 +3035,6 @@ if __name__ == "__main__":
         siglip_test_ecgs=args.siglip_test_ecgs,
         siglip_max_positive_per_label=args.siglip_max_positive_per_label,
         preserve_common_rhythms=not args.drop_common_rhythms,
+        custom_parquet_path=args.custom_parquet_path,
+        disable_categories=args.disable_categories,
     )

@@ -19,22 +19,25 @@ from utils.constants import (
     DEEPECG_DIAGNOSIS_TRANSLATION,
     DEEPECG_PATHOLOGICAL_LIMIT,
 )
+from ecg_prompt_maker import QAFeatureFlags
 
-# Compile regex patterns at module level for better performance
 LEAD_NAME_PATTERN = re.compile(r'(V\d+|aV[RLF]|I{1,3})(?=[Vv]|aV|I{1,3})')
 
 
 class ECGAnswerGenerator:
     """Generate appropriate answers for different ECG prompt types"""
-    
-    def __init__(self, 
-                 language: str = 'en',
-                 dataset: str = 'mimic'):
-        """Initialize with category definitions and translations
-        
+
+    def __init__(
+        self,
+        language: str = 'en',
+        dataset: str = 'mimic',
+        qa_feature_flags: Optional[QAFeatureFlags] = None,
+    ):
+        """
         Args:
             language: 'en' for English, 'fr' for French
             dataset: Dataset name ('mimic' or others) for metadata merging
+            qa_feature_flags: When set, heart rate / interval content is only added when flags permit.
         """
         
         # Load category definitions from constants
@@ -81,11 +84,11 @@ class ECGAnswerGenerator:
             'OTHER'
         ]
 
-        # Precompute pathological/limit label sets for classification answers
         limit_config = DEEPECG_PATHOLOGICAL_LIMIT.get('deepecg', {})
         self.pathological_labels = set(limit_config.get('pathological', []))
         self.limit_labels = set(limit_config.get('limit', []))
-    
+        self.qa_feature_flags = qa_feature_flags
+
     def get_active_findings(self, row: pd.Series) -> Dict[str, List[str]]:
         """
         Extract active findings from the row organized by category.
@@ -167,19 +170,16 @@ class ECGAnswerGenerator:
     def generate_interpretation_answer(self, row: pd.Series) -> str:
         """
         Generate a full ECG interpretation report.
-        This is for 'interpretation' type prompts.
         Uses the REPORT column if available, otherwise falls back to individual findings.
-        Includes heart rate when available.
+        Includes heart rate when available and when qa_feature_flags.has_heart_rate (or no flags set).
         """
         heart_rate = self.calculate_heart_rate(row)
-        
-        # Prefer dataset-provided free-text report over category enumeration
+        include_hr = self.qa_feature_flags is None or self.qa_feature_flags.has_heart_rate
+
         report = self.column_mapper.get_value(row, 'report', default=None)
         if report is not None and str(report).strip():
             report = str(report).strip()
-            
-            # Add heart rate if available (but not if it's 0/artifacts)
-            if heart_rate and heart_rate > 0:
+            if include_hr and heart_rate and heart_rate > 0:
                 # Check if report already contains heart rate info
                 if 'HR:' not in report and 'heart rate' not in report.lower():
                     # Find the first semicolon or end of first statement to insert HR
@@ -204,23 +204,17 @@ class ECGAnswerGenerator:
         active_findings = self.get_active_findings(row)
         
         if not active_findings:
-            # Normal ECG
-            if heart_rate and heart_rate > 0:
+            if include_hr and heart_rate and heart_rate > 0:
                 return f"Normal sinus rhythm (HR: {heart_rate} bpm); Normal ECG"
-            else:
-                return "Normal sinus rhythm; Normal ECG"
-        
-        # Build structured report
+            return "Normal sinus rhythm; Normal ECG"
+
         report_parts = []
-        heart_rate_added = False  # Track if we've already added HR
-        
-        # Add findings by category priority
+        heart_rate_added = False
         for category in self.category_order:
             if category in active_findings:
                 for finding in active_findings[category]:
                     formatted = self.format_finding_name(finding)
-                    # Add heart rate only once to the first rhythm finding (if not artifacts)
-                    if category == 'RHYTHM' and heart_rate and heart_rate > 0 and not heart_rate_added and 'rhythm' in formatted.lower():
+                    if include_hr and category == 'RHYTHM' and heart_rate and heart_rate > 0 and not heart_rate_added and 'rhythm' in formatted.lower():
                         formatted += f" (HR: {heart_rate} bpm)"
                         heart_rate_added = True
                     report_parts.append(formatted)
@@ -381,7 +375,8 @@ class ECGAnswerGenerator:
         active_findings = self.get_active_findings(row)
         prompt_text = row.get('prompt', '').lower()
         heart_rate = self.calculate_heart_rate(row)
-        
+        include_hr = self.qa_feature_flags is None or self.qa_feature_flags.has_heart_rate
+
         # Extract category from prompt_category (e.g., "category_rhythm" -> "RHYTHM")
         category_map = {
             'rhythm': 'RHYTHM',
@@ -964,8 +959,7 @@ class ECGAnswerGenerator:
                                 else:
                                     return "No - no atrial enlargement"
 
-                            # Add heart rate to first rhythm finding only (if not artifacts)
-                            if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
+                            if include_hr and mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                                 findings_with_hr = []
                                 hr_added = False
                                 for f in findings:
@@ -979,25 +973,20 @@ class ECGAnswerGenerator:
                                 response = f"Yes - {'; '.join(findings)}"
                             return response
                 else:
-                    # Tailor negative response for atrial-focused questions even when no findings in category
                     is_atrial_question = any(t in prompt_text for t in ['atrial', 'atrium'])
                     if mapped_category == 'CHAMBER ENLARGEMENT' and is_atrial_question:
                         if asking_for_abnormalities:
                             return "No - no atrial abnormality"
-                        else:
-                            return "No - no atrial enlargement"
+                        return "No - no atrial enlargement"
                     response = self._get_negative_response(mapped_category)
-                    # Add heart rate for rhythm questions even when normal (if not artifacts)
-                    if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
+                    if include_hr and mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                         response = response.replace("normal sinus rhythm", f"normal sinus rhythm (HR: {heart_rate} bpm)")
                     return response
-        
+
         else:
-            # Not a YES/NO question - describe what's present
             if mapped_category and mapped_category in active_findings:
                 findings = [self.format_finding_name(f) for f in active_findings[mapped_category]]
-                # Add heart rate to first rhythm finding only (if not artifacts)
-                if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
+                if include_hr and mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
                     findings_with_hr = []
                     hr_added = False
                     for f in findings:
@@ -1010,12 +999,10 @@ class ECGAnswerGenerator:
                 else:
                     response = "; ".join(findings)
                 return response
-            else:
-                response = self._get_negative_response(mapped_category)
-                # Add heart rate for rhythm questions even when normal (if not artifacts)
-                if mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
-                    response = response.replace("normal sinus rhythm", f"normal sinus rhythm (HR: {heart_rate} bpm)")
-                return response
+            response = self._get_negative_response(mapped_category)
+            if include_hr and mapped_category == 'RHYTHM' and heart_rate and heart_rate > 0 and is_rhythm_question:
+                response = response.replace("normal sinus rhythm", f"normal sinus rhythm (HR: {heart_rate} bpm)")
+            return response
     
     def _get_negative_response(self, category: str) -> str:
         """Get appropriate negative response for a category"""
@@ -1674,17 +1661,17 @@ class ECGAnswerGenerator:
                         except (ValueError, TypeError):
                             continue
             
-            # Only add category if it has findings
             if present_findings:
                 json_output[json_category] = present_findings
-        
-        # Add heart rate if available (rounded to integer, but not if artifacts)
-        heart_rate = self.calculate_heart_rate(row)
-        if heart_rate and heart_rate > 0:
-            json_output["heart_rate_bpm"] = int(round(heart_rate))
-        elif heart_rate == 0:
-            json_output["heart_rate_bpm"] = "artifacts"
-        
+
+        include_hr = self.qa_feature_flags is None or self.qa_feature_flags.has_heart_rate
+        if include_hr:
+            heart_rate = self.calculate_heart_rate(row)
+            if heart_rate and heart_rate > 0:
+                json_output["heart_rate_bpm"] = int(round(heart_rate))
+            elif heart_rate == 0:
+                json_output["heart_rate_bpm"] = "artifacts"
+
         # Add ECG classification
         ecg_type = row.get('ecg_type', 'unknown')
         json_output["ecg_classification"] = ecg_type

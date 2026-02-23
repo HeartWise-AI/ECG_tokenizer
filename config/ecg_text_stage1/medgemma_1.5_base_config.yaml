@@ -1,0 +1,123 @@
+# MedGemma 1.5-4B Stage-1 Q-Former Training Configuration
+#
+# This config aligns ECG features with MedGemma 1.5's text representations.
+# Key difference from base_config.yaml:
+# - Uses google/medgemma-1.5-4b-it instead of google/medgemma-4b-it
+# - Updated wandb project for tracking
+
+pipeline_project: !!str "ECG_Text_Stage1"
+runner_name: !!str "ECG_Text_Stage1_Runner"
+bridge_name: !!str "ECGQFormerBridgeStage1"
+run_mode: !!str "train"
+seed: !!int 42
+base_checkpoint_path: !!str "checkpoints"
+
+# Logging - separate project for MedGemma 1.5 runs
+wandb_project: !!str "ecg_text_stage1_medgemma1.5"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool true
+
+# Pretrained tokenizer components
+pretrained_encoder_checkpoint: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+
+# ============================================================
+# KEY CHANGE: Use MedGemma 1.5-4B instead of MedGemma 4B
+# ============================================================
+text_encoder_model_name: !!str "google/medgemma-1.5-4b-it"
+text_encoder_output_dim: !!int 768
+text_encoder_dropout: !!float 0.2
+text_encoder_freeze_ratio: !!float 1.0
+
+# Data sources
+text_bank_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/text_bank.csv"
+mapping_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/ecg_text_labels.csv"
+mapping_split: !!str "train"
+validation_text_bank_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/text_bank.csv"
+validation_mapping_csv: !!str "/volume/ECG_tokenizer/output/siglip_alignment_translated/ecg_text_labels.csv"
+validation_mapping_split: !!str "val"
+
+# ECG parameters
+waveform_length: !!int 2500
+num_leads: !!int 12
+normalize_waveforms: !!bool false
+lead_stats: !!null
+
+# Dataloader
+batch_size: !!int 120
+num_workers: !!int 20
+num_epochs: !!int 10
+gradient_accumulation_steps: !!int 1
+
+# Optimizer
+optimizer:
+  type: !!str "AdamW"
+  lr: !!float 1.0e-4
+  weight_decay: !!float 1.0e-2
+lr: !!float 1.0e-4
+weight_decay: !!float 1.0e-2
+
+# Bridge configuration (same as best MedGemma 4B run j4bb0w33)
+bridge_hidden_size: !!int 768
+bridge_num_layers: !!int 6
+bridge_num_heads: !!int 12
+bridge_dropout: !!float 0.1
+bridge_max_seq_len: !!int 128
+bridge_num_special_tokens: !!int 4
+bridge_bias_last_codebook: !!float 0.5
+bridge_codebook_dropout: !!float 0.0
+num_query_tokens: !!int 32
+num_codebooks_kept: !!int 1
+codebook_offset: !!int -1
+num_quantizers: !!int 8
+codebook_size: !!int 512
+cross_every: !!int 2
+
+# Loss weights
+etc_weight: !!float 1.0
+etm_weight: !!float 1.0
+etg_weight: !!float 1.0
+etg_delay_steps: !!int 2000
+etg_warmup_steps: !!int 4000
+etm_hard_neg_k: !!int 1
+etm_warmup_steps: !!int 2000
+max_text_length: !!int 128
+
+# Runtime
+use_quantized_inputs: !!bool true
+dtype: !!str "bf16"
+log_every_steps: !!int 10
+checkpoint_every: !!int 1
+checkpoint_dir: !!null
+
+# Tail class handling
+tail_enable: !!bool true
+tail_select_mode: !!str "topN"
+tail_top_n: !!int 50
+tail_min_positives: !!int 10
+tail_alpha_boost: !!float 1.0
+tail_include_regex:
+  - "^LBL_.*$"
+  - "^QA_.*_yes$"
+  - ".*bundle.*branch.*block.*"
+  - ".*rhythm.*"
+tail_exclude_regex:
+  - "^QA_.*_no$"
+
+# Text encoder tuning
+text_encoder_lr_mult: !!float 0.0
+text_encoder_wd_mult: !!float 1.0
+
+# Contrastive learning settings
+max_positives_per_ecg: !!int 10
+siglip_bank_negatives: !!int 5
+bank_refresh_every_steps: !!int 256
+bank_refresh_batch_size: !!int 2048
+focal_infonce: !!bool true
+focal_gamma_pos: !!float 2.0
+focal_gamma_neg: !!float 0.0
+focal_alpha_default: !!float 1.0
+
+# Enable ETG (teacher-forcing) in validation on a subset and save outputs
+validate_with_etg: !!bool true
+validate_etg_fraction: !!float 0.10
+validate_etg_save: !!bool true

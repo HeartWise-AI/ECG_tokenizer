@@ -5,6 +5,7 @@ from .bert_classifier_config import BertReportClassifierConfig
 from .linear_probing_config import ECGTokenizerLinearProbingConfig
 from .siglip_phase1_config import SiglipPhase1Config
 from .ecg_text_stage1_config import ECGTextStage1Config
+from .dpo_finetuning_config import DPOFinetuningConfig
 
 __all__ = [
     "HeartWiseConfig", 
@@ -14,4 +15,5 @@ __all__ = [
     "ECGTokenizerLinearProbingConfig", 
     "SiglipPhase1Config",
     "ECGTextStage1Config",
+    "DPOFinetuningConfig",
 ]

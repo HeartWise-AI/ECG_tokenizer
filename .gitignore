@@ -24,3 +24,5 @@ ECG_Tokenizer/
 ECG_tokenizer/
 tmp/
 classical_baseline/output/
+hooks/
+*.npy

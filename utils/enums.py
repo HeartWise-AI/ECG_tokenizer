@@ -36,6 +36,7 @@ class ProjectName(str, Enum):
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    ECG_TOKENIZER_DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
     
@@ -48,6 +49,7 @@ class RunnerName(str, Enum):
     BERT_REPORT_CLASSIFIER = "Bert_Report_Classifier"
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing_Runner"
+    DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1_Runner"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1_Runner"
     
@@ -60,6 +62,7 @@ class ConfigName(str, Enum):
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
+    ECG_TOKENIZER_DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
     

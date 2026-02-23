@@ -12,10 +12,154 @@ import json
 import pandas as pd
 import numpy as np
 import random
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from dataset_column_mappings import DatasetColumnMapper
 from utils.constants import DEEPECG_CATEGORIES
+
+# Column names that unlock optional QA categories (user must add to initial CSV)
+HEART_RATE_COLS = [
+    'heart_rate',
+    'rr_interval',
+    'RestingECG_OriginalRestingECGMeasurements_VentricularRate',
+]
+PR_INTERVAL_COLS = [
+    'pr_interval',
+    'RestingECG_OriginalRestingECGMeasurements_PInterval',
+]
+PR_INTERVAL_PAIR = ('p_onset', 'qrs_onset')
+QT_INTERVAL_COLS = [
+    'qt_interval',
+    'qtc_interval',
+    'RestingECG_OriginalRestingECGMeasurements_QTInterval',
+]
+QT_INTERVAL_PAIR = ('qrs_onset', 't_end')
+
+DISABLE_CATEGORY_TO_FLAGS = {
+    'heart_rate': ['has_heart_rate'],
+    'ecg_interval': ['has_heart_rate', 'has_pr_interval', 'has_qt_interval'],
+    'intervals': ['has_pr_interval', 'has_qt_interval'],
+    'structural_heart_disease': ['has_shd'],
+    'shd': ['has_shd'],
+    'lvef': ['has_lvef'],
+    'acs_severity': ['has_acs'],
+    'acs': ['has_acs'],
+    'culprit_artery': ['has_acs_pci'],
+    'afib_risk': ['has_afib_risk'],
+    'afib': ['has_afib_risk'],
+}
+
+
+def _log_qa_feature_flags(flags: "QAFeatureFlags") -> None:
+    enabled = []
+    if flags.has_bert_columns:
+        enabled.append("interpretation, json_interpretation, category_*, classification, localization_*, etc.")
+    if flags.has_heart_rate:
+        enabled.append("ecg_interval (heart rate); heart_rate_bpm in JSON")
+    if flags.has_pr_interval or flags.has_qt_interval:
+        enabled.append("ecg_interval (PR/QT)")
+    if flags.has_shd:
+        enabled.append("structural_heart_disease")
+    if flags.has_lvef:
+        enabled.append("lvef")
+    if flags.has_acs:
+        enabled.append("acs_severity")
+    if flags.has_acs_pci:
+        enabled.append("culprit_artery")
+    if flags.has_afib_risk:
+        enabled.append("afib_risk")
+    print("QA feature flags (enabled categories):")
+    for s in enabled:
+        print(f"  + {s}")
+    if not enabled:
+        print("  (none beyond required BERT/report-based)")
+
+
+@dataclass
+class QAFeatureFlags:
+    has_bert_columns: bool
+    has_report: bool
+    has_ecg_type: bool
+    has_heart_rate: bool
+    has_pr_interval: bool
+    has_qt_interval: bool
+    has_shd: bool
+    has_lvef: bool
+    has_acs: bool
+    has_acs_pci: bool
+    has_afib_risk: bool
+
+    @classmethod
+    def detect(cls, df: pd.DataFrame) -> "QAFeatureFlags":
+        cols = set(df.columns)
+        bert_condition_names = []
+        for conditions in DEEPECG_CATEGORIES.values():
+            bert_condition_names.extend(conditions)
+        has_bert = any(
+            c in cols or f"{c}_bert_model" in cols
+            for c in bert_condition_names
+        )
+        has_report = any(c in cols for c in ('report', 'reports', 'diagnosis'))
+        has_ecg_type = 'ecg_type' in cols
+        has_hr = any(c in cols for c in HEART_RATE_COLS)
+        has_pr = (
+            any(c in cols for c in PR_INTERVAL_COLS)
+            or (PR_INTERVAL_PAIR[0] in cols and PR_INTERVAL_PAIR[1] in cols)
+            or any('RestingECG' in str(c) and 'PInterval' in str(c) for c in cols)
+        )
+        has_qt = (
+            any(c in cols for c in QT_INTERVAL_COLS)
+            or (QT_INTERVAL_PAIR[0] in cols and QT_INTERVAL_PAIR[1] in cols)
+            or any('RestingECG' in str(c) and 'QTInterval' in str(c) for c in cols)
+        )
+        has_shd = 'echonext_shd' in cols
+        has_lvef = 'deepecho_Visually_Estimated_EF' in cols
+        has_acs = 'acs_condition_severity' in cols
+        has_acs_pci = 'acs_pci_regions' in cols
+        has_afib = 'afib_label_2y' in cols and 'afib_label_5y' in cols
+        return cls(
+            has_bert_columns=has_bert,
+            has_report=has_report,
+            has_ecg_type=has_ecg_type,
+            has_heart_rate=has_hr,
+            has_pr_interval=has_pr,
+            has_qt_interval=has_qt,
+            has_shd=has_shd,
+            has_lvef=has_lvef,
+            has_acs=has_acs,
+            has_acs_pci=has_acs_pci,
+            has_afib_risk=has_afib,
+        )
+
+    @classmethod
+    def apply_overrides(
+        cls, flags: "QAFeatureFlags", disable_categories: Optional[List[str]] = None
+    ) -> "QAFeatureFlags":
+        if not disable_categories:
+            return flags
+        overrides = {}
+        for name in disable_categories:
+            name = name.strip().lower()
+            flag_names = DISABLE_CATEGORY_TO_FLAGS.get(name)
+            if flag_names:
+                for fn in flag_names:
+                    overrides[fn] = False
+        if not overrides:
+            return flags
+        return cls(
+            has_bert_columns=overrides.get('has_bert_columns', flags.has_bert_columns),
+            has_report=overrides.get('has_report', flags.has_report),
+            has_ecg_type=overrides.get('has_ecg_type', flags.has_ecg_type),
+            has_heart_rate=overrides.get('has_heart_rate', flags.has_heart_rate),
+            has_pr_interval=overrides.get('has_pr_interval', flags.has_pr_interval),
+            has_qt_interval=overrides.get('has_qt_interval', flags.has_qt_interval),
+            has_shd=overrides.get('has_shd', flags.has_shd),
+            has_lvef=overrides.get('has_lvef', flags.has_lvef),
+            has_acs=overrides.get('has_acs', flags.has_acs),
+            has_acs_pci=overrides.get('has_acs_pci', flags.has_acs_pci),
+            has_afib_risk=overrides.get('has_afib_risk', flags.has_afib_risk),
+        )
 
 
 class ECGPromptMaker:
@@ -172,14 +316,16 @@ class ECGPromptMaker:
             ]
         }
         
-        # JSON interpretation prompts
-        # Make schema explicit so the model knows expected keys (including OTHER for full visibility)
+        self._json_base_keys = [
+            "RHYTHM", "CONDUCTION", "CHAMBER_ENLARGEMENT",
+            "INFARCT_ISCHEMIA", "PERICARDITIS", "OTHER",
+        ]
         self.json_prompts = [
-            "Output JSON ONLY with keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification. Values must be lists of present findings (omit missing categories).",
-            "Provide structured JSON output for this ECG analysis using keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
-            "Return ECG findings as JSON with keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
-            "Generate JSON representation of ECG abnormalities. Keys: RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification.",
-            "Output ECG interpretation in JSON format only (keys RHYTHM, CONDUCTION, CHAMBER_ENLARGEMENT, INFARCT_ISCHEMIA, PERICARDITIS, OTHER, heart_rate_bpm, ecg_classification)."
+            "Output JSON ONLY with keys: {keys}. Values must be lists of present findings (omit missing categories).",
+            "Provide structured JSON output for this ECG analysis using keys {keys}.",
+            "Return ECG findings as JSON with keys {keys}.",
+            "Generate JSON representation of ECG abnormalities. Keys: {keys}.",
+            "Output ECG interpretation in JSON format only (keys {keys}).",
         ]
         
         # ECG interval prompts (heart rate and intervals combined)
@@ -312,13 +458,22 @@ class ECGPromptMaker:
         
         # Prompt weights for sampling
         self.prompt_weights = {
-            'interpretation': 0.35,  # 35% interpretation prompts
-            'category': 0.26,        # 26% category-specific (reduced from 30%)
-            'classification': 0.20,  # 20% classification
-            'demographic': 0.15,     # 15% demographic/HR questions
-            'random_finding': 0.04   # 4% random YES/NO finding questions
+            'interpretation': 0.35,
+            'category': 0.26,
+            'classification': 0.20,
+            'demographic': 0.15,
+            'random_finding': 0.04
         }
-    
+
+    def _get_json_prompt(self, flags: Optional[QAFeatureFlags] = None) -> str:
+        keys = list(self._json_base_keys)
+        if flags is None or flags.has_heart_rate:
+            keys.append("heart_rate_bpm")
+        keys.append("ecg_classification")
+        keys_str = ", ".join(keys)
+        tpl = random.choice(self.json_prompts)
+        return tpl.format(keys=keys_str)
+
     def determine_active_categories(self, row: pd.Series) -> Dict[str, List[str]]:
         """
         Determine which categories have positive findings.
@@ -515,10 +670,13 @@ class ECGPromptMaker:
         # Fallback - should not happen if marking is correct
         return None
     
-    def generate_prompts_for_ecg(self, row: pd.Series) -> List[Tuple[str, str, float]]:
+    def generate_prompts_for_ecg(
+        self, row: pd.Series, flags: Optional[QAFeatureFlags] = None
+    ) -> List[Tuple[str, str, float]]:
         """
         Generate multiple prompts for a single ECG.
         Returns list of (prompt, category, weight) tuples.
+        When flags is provided, optional categories (ecg_interval, MHI-specific) are gated by available columns.
         """
         prompts = []
         special_prompt = None
@@ -530,19 +688,16 @@ class ECGPromptMaker:
 
         def prompt_exists(category: str) -> bool:
             return any(existing[1] == category for existing in prompts)
-        
-        # Get ECG characteristics
+
         ecg_type = row.get('ecg_type', 'unknown')
         active_categories = self.determine_active_categories(row)
         num_active_categories = len(active_categories)
         localization_findings = self.check_localization_findings(row)
-        
-        # 1. Always add one interpretation prompt (highest weight)
+
         interp_prompt = random.choice(self.interpretation_prompts)
         prompts.append((interp_prompt, 'interpretation', 1.0))
-        
-        # 1b. Add JSON interpretation prompt (always include for structured output)
-        json_prompt = random.choice(self.json_prompts)
+
+        json_prompt = self._get_json_prompt(flags)
         prompts.append((json_prompt, 'json_interpretation', 0.9))
         
         # 2. Add category-specific prompts for each active category
@@ -586,26 +741,17 @@ class ECGPromptMaker:
         class_weight = 0.8 if ecg_type == 'pathological' else 0.6 if ecg_type == 'borderline' else 0.4
         prompts.append((class_prompt, 'classification', class_weight))
         
-        # 5. Add ECG interval questions (heart rate + intervals) with 5% probability
-        has_ecg_data = False
-        
-        # Check if we have heart rate data
-        if 'rr_interval' in row.index and pd.notna(row.get('rr_interval')):
-            has_ecg_data = True
-        # Check for MHI VentricularRate
-        elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
-            has_ecg_data = True
-        # Check for interval data - MHI dataset
-        elif any('RestingECG' in str(col) and 'Interval' in str(col) for col in row.index):
-            has_ecg_data = True
-        # For MIMIC, check if we have onset/offset columns to calculate
-        elif any(col in row.index for col in ['p_onset', 'qrs_onset', 't_end']):
-            has_ecg_data = True
-        # Check if PR/QT interval columns exist directly
-        elif any(col in row.index for col in ['pr_interval', 'qt_interval', 'qtc_interval']):
-            has_ecg_data = True
-        
-        if has_ecg_data and random.random() < 0.05:  # 5% chance to include ecg_interval question
+        has_interval_data = (
+            flags.has_heart_rate or flags.has_pr_interval or flags.has_qt_interval
+        ) if flags else (
+            any(c in row.index for c in HEART_RATE_COLS)
+            or any(c in row.index for c in PR_INTERVAL_COLS)
+            or (PR_INTERVAL_PAIR[0] in row.index and PR_INTERVAL_PAIR[1] in row.index)
+            or any(c in row.index for c in QT_INTERVAL_COLS)
+            or (QT_INTERVAL_PAIR[0] in row.index and QT_INTERVAL_PAIR[1] in row.index)
+            or any('RestingECG' in str(c) and 'Interval' in str(c) for c in row.index)
+        )
+        if has_interval_data and random.random() < 0.05:
             ecg_interval_prompt = random.choice(self.ecg_interval_prompts)
             prompts.append((ecg_interval_prompt, 'ecg_interval', 0.8))
         
@@ -646,98 +792,53 @@ class ECGPromptMaker:
                 selected_question = self.random_finding_prompts[question_idx]
                 prompts.append((selected_question, 'random_finding_question', 0.85))
         
-        # 7. Add structural heart disease questions for MHI dataset (if echonext_shd is present)
-        # These questions don't affect the normal ECG percentage
-        if 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')):
-            # Check if this is MHI data (has MHI-specific columns or dataset indicator)
-            is_mhi = False
-            if 'dataset' in row.index and row.get('dataset') == 'mhi':
-                is_mhi = True
-            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
-                is_mhi = True
-            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
-                is_mhi = True  # This column is MHI-specific
-            
-            if is_mhi and not prompt_exists('structural_heart_disease'):
-                shd_prompt = random.choice(self.structural_heart_disease_prompts)
-                prompts.append((shd_prompt, 'structural_heart_disease', 0.99))
-        
-        # 8. Add LVEF questions for MHI dataset (if deepecho_Visually_Estimated_EF is present)
-        if 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')):
-            # Check if this is MHI data
-            is_mhi = False
-            if 'dataset' in row.index and row.get('dataset') == 'mhi':
-                is_mhi = True
-            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
-                is_mhi = True
-            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
-                is_mhi = True
-            
-            if is_mhi and not prompt_exists('lvef'):
-                lvef_prompt = random.choice(self.lvef_prompts)
-                prompts.append((lvef_prompt, 'lvef', 0.97))
-        
-        # 9. Add ACS questions for MHI dataset (if acs_condition_severity is present)
-        if 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')):
-            # Check if this is MHI data
-            is_mhi = False
-            if 'dataset' in row.index and row.get('dataset') == 'mhi':
-                is_mhi = True
-            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
-                is_mhi = True
-            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
-                is_mhi = True
-            
-            if is_mhi and not prompt_exists('acs_severity'):
-                acs_prompt = random.choice(self.acs_severity_prompts)
-                prompts.append((acs_prompt, 'acs_severity', 0.98))  # High priority for acute conditions
-                
-                # Check if it's an acute occlusion to add culprit artery question
-                from utils.constants import ACS_ACUTE_CONDITIONS
-                acs_condition = row.get('acs_condition_severity')
-                
-                # If it's an acute occlusion and we have PCI regions data, add culprit artery question
-                if (acs_condition in ACS_ACUTE_CONDITIONS and 
-                    'acs_pci_regions' in row.index and 
-                    pd.notna(row.get('acs_pci_regions')) and
-                    not prompt_exists('culprit_artery')):
-                    culprit_prompt = random.choice(self.culprit_artery_prompts)
-                    prompts.append((culprit_prompt, 'culprit_artery', 0.96))
-        
-        # 10. Add AFib risk questions for MHI dataset (if afib_label_2y and afib_label_5y are present)
-        if ('afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and
-            'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y'))):
-            # Check if this is MHI data
-            is_mhi = False
-            if 'dataset' in row.index and row.get('dataset') == 'mhi':
-                is_mhi = True
-            elif 'dataset_source' in row.index and row.get('dataset_source') == 'mhi':
-                is_mhi = True
-            elif 'RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index:
-                is_mhi = True
-            
-            if is_mhi and not prompt_exists('afib_risk'):
-                afib_risk_prompt = random.choice(self.afib_risk_prompts)
-                prompts.append((afib_risk_prompt, 'afib_risk', 0.96))
-        
+        is_mhi = (
+            (row.get('dataset') == 'mhi' if 'dataset' in row.index else False)
+            or (row.get('dataset_source') == 'mhi' if 'dataset_source' in row.index else False)
+            or ('RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index)
+        )
+        if is_mhi and (flags is None or flags.has_shd) and 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')) and not prompt_exists('structural_heart_disease'):
+            shd_prompt = random.choice(self.structural_heart_disease_prompts)
+            prompts.append((shd_prompt, 'structural_heart_disease', 0.99))
+
+        if is_mhi and (flags is None or flags.has_lvef) and 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')) and not prompt_exists('lvef'):
+            lvef_prompt = random.choice(self.lvef_prompts)
+            prompts.append((lvef_prompt, 'lvef', 0.97))
+
+        if is_mhi and (flags is None or flags.has_acs) and 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')) and not prompt_exists('acs_severity'):
+            acs_prompt = random.choice(self.acs_severity_prompts)
+            prompts.append((acs_prompt, 'acs_severity', 0.98))
+            from utils.constants import ACS_ACUTE_CONDITIONS
+            acs_condition = row.get('acs_condition_severity')
+            if (acs_condition in ACS_ACUTE_CONDITIONS and (flags is None or flags.has_acs_pci)
+                    and 'acs_pci_regions' in row.index and pd.notna(row.get('acs_pci_regions')) and not prompt_exists('culprit_artery')):
+                culprit_prompt = random.choice(self.culprit_artery_prompts)
+                prompts.append((culprit_prompt, 'culprit_artery', 0.96))
+
+        if is_mhi and (flags is None or flags.has_afib_risk) and 'afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and 'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y')) and not prompt_exists('afib_risk'):
+            afib_risk_prompt = random.choice(self.afib_risk_prompts)
+            prompts.append((afib_risk_prompt, 'afib_risk', 0.96))
+
         return prompts
     
-    def process_dataframe(self, df: pd.DataFrame, max_prompts_per_ecg: int = 5) -> pd.DataFrame:
+    def process_dataframe(
+        self,
+        df: pd.DataFrame,
+        max_prompts_per_ecg: int = 5,
+        flags: Optional[QAFeatureFlags] = None,
+        disable_categories: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
         """
         Process entire dataframe to create multiple rows per ECG with different prompts.
-        
-        Args:
-            df: Input dataframe with ECG data
-            max_prompts_per_ecg: Maximum number of prompts to generate per ECG
-            
-        Returns:
-            Expanded dataframe with multiple prompt rows per ECG
+        When flags is None, detects feature flags from df and applies disable_categories.
         """
+        if flags is None:
+            flags = QAFeatureFlags.detect(df)
+            flags = QAFeatureFlags.apply_overrides(flags, disable_categories)
+        _log_qa_feature_flags(flags)
         all_rows = []
-        
         for idx, row in df.iterrows():
-            # Generate prompts for this ECG
-            prompts = self.generate_prompts_for_ecg(row)
+            prompts = self.generate_prompts_for_ecg(row, flags)
             
             # Apply max_prompts_per_ecg limit to all ECGs equally
             if len(prompts) > max_prompts_per_ecg:

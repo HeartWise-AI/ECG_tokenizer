@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover
 
 from utils.ddp import DistributedUtils
 from transformers import BatchEncoding
-from torch.utils.data import Dataset, DataLoader, default_collate, Subset
+from torch.utils.data import Dataset, DataLoader, ConcatDataset, default_collate, Subset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
 if TYPE_CHECKING:
     from models.types import AutoTokenizerT
@@ -24,12 +24,12 @@ from utils.constants import lead_to_idx, ECG_PATTERNS
 
 class ECGClinicalReportDataset(Dataset):
     def __init__(
-        self, 
-        dataset_path: str, 
+        self,
+        dataset_path: str,
         signal_path_column: str,
         ecg_waveform_length: int,
         ecg_num_leads: int,
-        tokenizer: AutoTokenizerT, 
+        tokenizer: AutoTokenizerT,
         max_length: int = 512,
         instruct_mode: bool = False,
         # Default to 0 so the bridge owns the ECG prefix (BLIP-2 style)
@@ -42,6 +42,7 @@ class ECGClinicalReportDataset(Dataset):
         pattern_columns: Optional[Sequence[str]] = None,
         medgemma_prompt_style: bool = False,
         debug_print_example: bool = False,
+        augmentor: Optional[Any] = None,
     ):
         """
         Args:
@@ -85,6 +86,7 @@ class ECGClinicalReportDataset(Dataset):
         self.medgemma_prompt_style: bool = bool(medgemma_prompt_style)
         self.debug_print_example: bool = bool(debug_print_example)
         self._debug_example_printed: bool = False
+        self.augmentor = augmentor
         self._pattern_column_mask: List[bool] = [col in self.df.columns for col in self.pattern_columns]
         missing_patterns = [col for col, present in zip(self.pattern_columns, self._pattern_column_mask) if not present]
         if missing_patterns:
@@ -187,7 +189,11 @@ class ECGClinicalReportDataset(Dataset):
             if waveform.shape[0] != target_length:
                 # Guard against unexpected padding behaviour
                 waveform = np.resize(waveform, (target_length, waveform.shape[1]))
-            
+
+            # Apply ECG augmentations (on the already-adjusted signal)
+            if self.augmentor is not None:
+                waveform = self.augmentor(waveform)
+
             if waveform.shape[1] != self.ecg_num_leads:
                 return self.__getitem__((idx + 1) % len(self))
             
@@ -702,6 +708,7 @@ def get_distributed_clinical_report_dataloader(
     medgemma_prompt_style: bool = False,
     debug_print_example: bool = False,
     sample_weight_column: Optional[str] = None,
+    augmentor: Optional[Any] = None,
 ):
     """
     Create a distributed DataLoader for ECG clinical report training.
@@ -729,6 +736,7 @@ def get_distributed_clinical_report_dataloader(
         pattern_columns=pattern_columns,
         medgemma_prompt_style=medgemma_prompt_style,
         debug_print_example=debug_print_example,
+        augmentor=augmentor,
     )
 
     # Extract sample weights before any subsetting
@@ -908,6 +916,98 @@ def _attach_dataset_attributes(subset: Subset, base_dataset: ECGClinicalReportDa
         if hasattr(base_dataset, attr):
             setattr(subset, attr, getattr(base_dataset, attr))
     return subset
+
+def get_multi_dataset_distributed_dataloader(
+    dataset_paths: List[str],
+    dataset_weights: List[float],
+    signal_path_column: str,
+    ecg_waveform_length: int,
+    ecg_num_leads: int,
+    tokenizer: AutoTokenizerT,
+    max_token_length: int = 512,
+    batch_size: int = 32,
+    num_workers: int = 16,
+    num_replicas: int = 1,
+    rank: int = 0,
+    shuffle: bool = True,
+    pin_memory: bool = True,
+    instruct_mode: bool = False,
+    num_ecg_tokens: int = 0,
+    ecg_token_start_id: Optional[int] = None,
+    prompt_column: str = "prompt",
+    answer_column: str = "generated_answer",
+    category_column: str = "prompt_category",
+    prefix_tuning: bool = False,
+    pattern_columns: Optional[Sequence[str]] = None,
+    medgemma_prompt_style: bool = False,
+    debug_print_example: bool = False,
+    augmentor: Optional[Any] = None,
+    sampling_seed: Optional[int] = None,
+) -> DataLoader:
+    """Create a distributed DataLoader from multiple dataset parquet files.
+
+    Each dataset is instantiated as a separate ECGClinicalReportDataset and
+    then combined via ConcatDataset.  Per-sample weights are derived from
+    ``dataset_weights`` so that WeightedDistributedSampler balances across
+    datasets during training.
+    """
+    import logging
+
+    datasets: List[ECGClinicalReportDataset] = []
+    for i, path in enumerate(dataset_paths):
+        ds = ECGClinicalReportDataset(
+            dataset_path=path,
+            signal_path_column=signal_path_column,
+            ecg_waveform_length=ecg_waveform_length,
+            ecg_num_leads=ecg_num_leads,
+            tokenizer=tokenizer,
+            max_length=max_token_length,
+            instruct_mode=instruct_mode,
+            num_ecg_tokens=num_ecg_tokens,
+            ecg_token_start_id=ecg_token_start_id,
+            prompt_column=prompt_column,
+            answer_column=answer_column,
+            category_column=category_column,
+            prefix_tuning=prefix_tuning,
+            pattern_columns=pattern_columns,
+            medgemma_prompt_style=medgemma_prompt_style,
+            debug_print_example=(debug_print_example and i == 0),
+            augmentor=augmentor,
+        )
+        datasets.append(ds)
+        if rank == 0:
+            logging.info(f"[MultiDataset] Dataset {i}: {path} -> {len(ds)} samples (weight={dataset_weights[i]:.2f})")
+
+    concat_dataset = ConcatDataset(datasets)
+
+    # Propagate tokenizer attrs so downstream code (e.g. _compute_metrics)
+    # can find them on ConcatDataset the same way as on a single dataset.
+    concat_dataset.tokenizer = datasets[0].tokenizer          # type: ignore[attr-defined]
+    concat_dataset._pt_tokenizer = datasets[0]._pt_tokenizer  # type: ignore[attr-defined]
+
+    # Build per-sample weights from dataset-level weights
+    sample_weights: List[float] = []
+    for ds, weight in zip(datasets, dataset_weights):
+        sample_weights.extend([weight] * len(ds))
+
+    if rank == 0:
+        logging.info(
+            f"[MultiDataset] Total: {len(concat_dataset)} samples across {len(datasets)} datasets"
+        )
+
+    return DistributedUtils.get_distributed_dataloader(
+        dataset=concat_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        num_replicas=num_replicas,
+        rank=rank,
+        shuffle=shuffle,
+        collate_fn=custom_collate_fn,
+        sample_weights=sample_weights,
+        weighted_sampling_seed=sampling_seed or 42,
+    )
+
 
 def custom_collate_fn(batch):
     """

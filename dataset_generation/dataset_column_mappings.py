@@ -121,6 +121,8 @@ DATASET_MAPPINGS = {
     "mimic": MIMIC_COLUMNS,
     "ptbxl": PTBXL_COLUMNS,
     "mhi": MHI_COLUMNS,
+    # Custom dataset: treat columns like MIMIC unless specified otherwise
+    "custom": MIMIC_COLUMNS,
     # "cpsc": CPSC_COLUMNS,  # Uncomment when CPSC mappings are defined
 }
 

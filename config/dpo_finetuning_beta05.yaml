@@ -1,0 +1,26 @@
+pipeline_project: "ECG_Tokenizer_DPO_Finetuning"
+runner_name: "ECG_Tokenizer_DPO_Finetuning"
+model_name: "ECG_Tokenizer_Wrapper"
+run_mode: "train"
+wandb_project: "ECG_tokenizer_DPO"
+wandb_entity: "mhi_ai"
+use_wandb: true
+# Checkpoint to start from (original, not DPO)
+pretrained_tokenizer_path: "checkpoints/BEST_LLM/e4dw86nh_20251220-232839_BEST_QFORMER_8CB/best_model.pt"
+# DPO pairs JSONL - FULL DATASET (28,256 pairs)
+train_pairs_path: "output/dpo_inference/dpo_5gen_dpo_pairs.jsonl"
+# Training - HIGHER BETA
+num_epochs: 2
+batch_size: 4
+lr: 2.0e-5
+beta: 0.5
+num_workers: 4
+grad_accum_steps: 2
+max_grad_norm: 1.0
+precision: "bf16"
+save_interval: 500
+log_interval: 20
+# Trainable subset
+trainable: "lora"
+# Output directory base path
+base_checkpoint_path: "checkpoints"

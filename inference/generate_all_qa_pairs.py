@@ -31,7 +31,17 @@ os.environ.setdefault("WORLD_SIZE", "1")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Shim: transformers ≥5.x merged tokenization_gemma_fast into tokenization_gemma
+# and renamed GemmaTokenizerFast → GemmaTokenizer.  Checkpoints saved with older
+# versions pickle the old module path + class name.
+import types as _types, importlib as _importlib
+_gemma_tok = _importlib.import_module("transformers.models.gemma.tokenization_gemma")
+_shim = _types.ModuleType("transformers.models.gemma.tokenization_gemma_fast")
+_shim.GemmaTokenizerFast = _gemma_tok.GemmaTokenizer  # alias old → new
+sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = _shim
+
 from transformers import AutoTokenizer
+
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
 from utils.files_handler import load_yaml
@@ -49,15 +59,25 @@ def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
     return fallback
 
 
+def _coerce_config(config_obj: Any) -> Any:
+    """Convert dict config to SimpleNamespace for attribute access."""
+    from types import SimpleNamespace
+    if isinstance(config_obj, dict):
+        return SimpleNamespace(**{k: _coerce_config(v) for k, v in config_obj.items()})
+    if isinstance(config_obj, list):
+        return [_coerce_config(item) for item in config_obj]
+    return config_obj
+
+
 def load_model(checkpoint_path: str, device: torch.device):
     """Load model from checkpoint.
-    
+
     Loads both the checkpoint weights and the config.yaml from the checkpoint folder
     to properly configure the bridge (e.g., num_codebooks_kept for 1CB models).
     """
     print(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint_data = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    config = checkpoint_data["config"]
+    config = _coerce_config(checkpoint_data["config"])
     
     # Load config.yaml from checkpoint folder for bridge configuration
     # The config.yaml may have settings not stored in the checkpoint config object
@@ -68,7 +88,11 @@ def load_model(checkpoint_path: str, device: torch.device):
         print(f"Loading config.yaml from {config_yaml_path}...")
         yaml_config = load_yaml(config_yaml_path)
     
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+    # Tokenizer loading (offline-friendly, but backward compatible)
+    base_tokenizer_dir = os.getenv("BASE_TOKENIZER_DIR", "/app/checkpoints/google-medgemma-4b-it")
+    use_local = os.path.isdir(base_tokenizer_dir)
+    tokenizer_source = base_tokenizer_dir if use_local else config.tokenizer_name
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, local_files_only=use_local)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -100,19 +124,32 @@ def load_model(checkpoint_path: str, device: torch.device):
     if num_codebooks_kept is not None:
         print(f"   Bridge config: num_codebooks_kept={num_codebooks_kept}, codebook_offset={codebook_offset}, num_quantizers={num_quantizers}")
     
+    # Detect if checkpoint has LoRA weights even if config says use_lora=False
+    # This can happen with DPO checkpoints that were saved with incomplete config
+    has_lora_weights = any('lora_A' in k or 'lora_B' in k for k in checkpoint_state_dict.keys())
+    use_lora = bool(getattr(config, "use_lora", False)) or has_lora_weights
+
+    if has_lora_weights and not getattr(config, "use_lora", False):
+        print(f"   OVERRIDE: Config use_lora=False but checkpoint has LoRA weights, enabling LoRA")
+
     # Reconstruct LoRA config if training stored scalar fields (common) instead of a full lora_config dict.
+    # Use sensible defaults matching the standard training config when checkpoint has LoRA but no config.
     lora_config = getattr(config, "lora_config", None)
-    if lora_config is None and bool(getattr(config, "use_lora", False)):
+    if lora_config is None and use_lora:
+        # Default target modules for MedGemma/Gemma models
+        default_target_modules = ['q_proj', 'k_proj', 'v_proj', 'o_proj']
         lora_config = {
-            "r": int(getattr(config, "lora_r", 16)),
-            "lora_alpha": int(getattr(config, "lora_alpha", getattr(config, "lora_r", 16))),
-            "lora_dropout": float(getattr(config, "lora_dropout", 0.0)),
-            "target_modules": list(getattr(config, "lora_target_modules", None) or []),
+            "r": int(getattr(config, "lora_r", 32)),
+            "lora_alpha": int(getattr(config, "lora_alpha", 64)),
+            "lora_dropout": float(getattr(config, "lora_dropout", 0.05)),
+            "target_modules": list(getattr(config, "lora_target_modules", None) or default_target_modules),
             "bias": str(getattr(config, "lora_bias", "none")),
         }
+        print(f"   Using LoRA config: r={lora_config['r']}, alpha={lora_config['lora_alpha']}, targets={lora_config['target_modules']}")
         # Persist so downstream code paths can reuse it.
         try:
             setattr(config, "lora_config", lora_config)
+            setattr(config, "use_lora", True)
         except Exception:
             pass
 
@@ -138,7 +175,7 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,  # Don't load stage1 - all weights are in the finetuned checkpoint
-        use_lora=bool(getattr(config, "use_lora", False)),
+        use_lora=use_lora,
         lora_config=lora_config,
         tokenizer=tokenizer,
         ecg_token_start_id=None,
@@ -157,7 +194,7 @@ def load_model(checkpoint_path: str, device: torch.device):
 
     # Put LoRA into inference mode if present (keeps adapters attached; generation works either way).
     try:
-        if bool(getattr(config, "use_lora", False)):
+        if use_lora:
             model.set_lora_inference_mode(True)
     except Exception:
         pass
@@ -258,10 +295,10 @@ def main():
     parser.add_argument("--waveform_column", type=str, default="waveform_path_psa", help="Column with waveform paths")
     parser.add_argument("--question_column", type=str, default="prompt", help="Column with questions")
     parser.add_argument("--answer_column", type=str, default="generated_answer", help="Column with ground truth")
-    parser.add_argument("--device", type=int, default=0, help="GPU device ID")
+    parser.add_argument("--device", type=int, default=2, help="GPU device ID")
     parser.add_argument("--output_prefix", type=str, default="all_qa_generations", 
                         help="Prefix for output files (default: all_qa_generations)")
-    parser.add_argument("--save_interval", type=int, default=1000,
+    parser.add_argument("--save_interval", type=int, default=10,
                         help="Save checkpoint every N samples (default: 1000)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from existing checkpoint if available")
@@ -275,6 +312,19 @@ def main():
     print(f"\nLoading validation data from {args.validation_parquet}...")
     val_df = pd.read_parquet(args.validation_parquet)
     print(f"Total QA pairs: {len(val_df)}")
+
+    waveform_column = args.waveform_column
+    if waveform_column not in val_df.columns and 'ecg_path' in val_df.columns:
+        print(f"Warning: Column '{waveform_column}' not found; falling back to 'ecg_path'.")
+        waveform_column = 'ecg_path'
+    if waveform_column not in val_df.columns:
+        raise KeyError(
+            f"Column '{waveform_column}' not found in validation data. "
+            f"Available columns: {list(val_df.columns)}"
+        )
+
+    if 'waveform_name' not in val_df.columns:
+        val_df['waveform_name'] = val_df[waveform_column].astype(str).apply(lambda p: os.path.basename(p))
     print(f"Unique waveforms: {val_df['waveform_name'].nunique()}")
     
     if args.max_samples:
@@ -309,7 +359,7 @@ def main():
     
     for idx, row in tqdm(val_df.iloc[start_idx:].iterrows(), total=len(val_df)-start_idx, desc="Generating", initial=start_idx):
         waveform_name = row['waveform_name']
-        waveform_path = row[args.waveform_column]
+        waveform_path = row[waveform_column]
         question = row[args.question_column]
         ground_truth = row[args.answer_column]
         prompt_category = row.get('prompt_category', 'unknown')
@@ -413,7 +463,7 @@ def main():
                     bleu1.append(sentence_bleu([ref_tokens], gen_tokens, weights=(1,0,0,0), smoothing_function=smoother.method1))
                     bleu4.append(sentence_bleu([ref_tokens], gen_tokens, weights=(0.25,0.25,0.25,0.25), smoothing_function=smoother.method1))
                     meteor_scores.append(meteor_score([ref_tokens], gen_tokens))
-                except:
+                except Exception:
                     pass
         
         print(f"\nOverall Metrics ({len(rouge1)} samples):")
@@ -444,5 +494,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
