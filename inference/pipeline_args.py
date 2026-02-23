@@ -49,6 +49,7 @@ class PipelineArgs:
     preprocessing_folder: str = "/app/preprocessing"
     preprocessing_n_workers: int = 16
     dataset_name: Optional[str] = None
+    include_optional_100hz_cluster: bool = False
     bert_base_config: str = "config/bert_classifier/base_config.yaml"
     
     # Intermediate outputs
@@ -227,6 +228,11 @@ class PipelineArgs:
             help="Optional dataset name to embed in preprocessing folder and parquet name"
         )
         parser.add_argument(
+            "--include-optional-100hz-cluster",
+            action="store_true",
+            help="Include optional flatten range around 100-101 Hz during preprocessing"
+        )
+        parser.add_argument(
             "--bert-base-config",
             type=str,
             help="BERT base config yaml (for run_bert_classification/analysis)"
@@ -303,6 +309,8 @@ class PipelineArgs:
             instance.preprocessing_n_workers = args.preprocessing_n_workers
         if args.dataset_name:
             instance.dataset_name = args.dataset_name
+        if args.include_optional_100hz_cluster:
+            instance.include_optional_100hz_cluster = True
         if args.bert_base_config:
             instance.bert_base_config = args.bert_base_config
         if args.preprocessing_output:
@@ -344,6 +352,7 @@ class PipelineArgs:
             "num_workers": self.num_workers,
             "preprocessing_folder": self.preprocessing_folder,
             "preprocessing_n_workers": self.preprocessing_n_workers,
+            "include_optional_100hz_cluster": self.include_optional_100hz_cluster,
             "num_classes": self.num_classes,
             "verbose": self.verbose,
         }

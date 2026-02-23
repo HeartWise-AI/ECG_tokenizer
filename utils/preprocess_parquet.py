@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import yaml
 import argparse
+import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.preprocessing.analysis_pipeline import AnalysisPipeline
@@ -28,6 +29,8 @@ def parse_arguments():
                         help='Number of workers for preprocessing')
     parser.add_argument('--path_column', type=str, default=None,
                         help='Optional explicit column containing waveform paths (e.g., ecg_path, xml_path, npy_path)')
+    parser.add_argument('--include_optional_100hz_cluster', action='store_true',
+                        help='Include optional flatten range around 100-101 Hz')
     return parser.parse_args()
 
 def load_config(config_path):
@@ -65,15 +68,22 @@ def find_dataset_files(config, dataset_name=None, file_type=None):
     
     return dataset_files
 
-def swap_leads(signal, lead1, lead2):
+def swap_leads(signal: np.ndarray, lead1: int, lead2: int) -> np.ndarray:
     """Swap two leads in the ECG signal array."""
-    lead1_idx = lead_to_idx[lead1]
-    lead2_idx = lead_to_idx[lead2]
     signal_copy = signal.copy()
-    signal_copy[:, [lead1_idx, lead2_idx]] = signal_copy[:, [lead2_idx, lead1_idx]]
+    signal_copy[:, [lead1, lead2]] = signal_copy[:, [lead2, lead1]]
     return signal_copy
 
-def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_workers, file_type=None, path_column=None):
+def process_dataset(
+    parquet_path,
+    dataset_name,
+    output_folder,
+    row_limit,
+    n_workers,
+    file_type=None,
+    path_column=None,
+    include_optional_100hz_cluster=False,
+):
     dataset_output_folder = os.path.join(output_folder, dataset_name)
     
     # Create a preprocessing subfolder with file_type as suffix if available
@@ -104,9 +114,10 @@ def process_dataset(parquet_path, dataset_name, output_folder, row_limit, n_work
         preprocessing_folder=preprocessing_subfolder,
         preprocessing_n_workers=n_workers,
         swap_leads_fn=swap_leads if needs_lead_swap else None,
-        swap_lead1='aVL',
-        swap_lead2='aVF',
+        swap_lead1=lead_to_idx['aVL'],
+        swap_lead2=lead_to_idx['aVF'],
         path_column=path_column,
+        include_optional_100hz_cluster=include_optional_100hz_cluster,
     )
 
     output_filename = f"{dataset_name}_cleaned.parquet"
@@ -133,6 +144,7 @@ def main():
             n_workers=args.workers,
             file_type=args.file_type,
             path_column=args.path_column,
+            include_optional_100hz_cluster=args.include_optional_100hz_cluster,
         )
         return
 
@@ -177,6 +189,7 @@ def main():
                 n_workers=args.workers,
                 file_type=current_file_type,
                 path_column=args.path_column,
+                include_optional_100hz_cluster=args.include_optional_100hz_cluster,
             )
         except Exception as e:
             print(f"Error processing {key}: {e}")
