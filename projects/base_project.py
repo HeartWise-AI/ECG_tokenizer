@@ -131,7 +131,7 @@ class BaseProject(ABC):
                 _orig_setstate(self, d)
 
             GemmaTokenizer.__setstate__ = _compat_setstate
-        except ImportError:
+        except (ImportError, AttributeError):
             pass
 
         return torch.load(checkpoint_path, map_location='cpu', weights_only=False)

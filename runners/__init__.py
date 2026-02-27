@@ -5,6 +5,7 @@ from .bert_report_classifier_runner import BertReportClassifierRunner
 from .siglip_phase1_runner import SiglipPhase1Runner
 from .ecg_text_stage1_runner import ECGTextStage1Runner
 from .dpo_finetuning_runner import DPOFinetuningRunner
+from .grpo_finetuning_runner import GRPOFinetuningRunner
 
 __all__ = [
     "BaseRunner",
@@ -14,4 +15,5 @@ __all__ = [
     "SiglipPhase1Runner",
     "ECGTextStage1Runner",
     "DPOFinetuningRunner",
+    "GRPOFinetuningRunner",
 ]

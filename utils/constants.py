@@ -445,6 +445,15 @@ BERT_THRESHOLDS = {
     }
 }
 
+# Per-class threshold values as a flat list (index 0-76), for building a tensor.
+# Extracted from BERT_THRESHOLDS entries that have a single "threshold" key,
+# in the same order as ECG_PATTERNS (which matches BERT model output indices).
+BERT_CLASS_THRESHOLDS = [
+    v["threshold"]
+    for k, v in BERT_THRESHOLDS.items()
+    if "threshold" in v
+]
+
 PTBXL_POWER_RATIO = 3.003154
 
 # Dictionary data from deepecg_categories.json
