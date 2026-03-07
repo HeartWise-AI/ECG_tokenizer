@@ -16,12 +16,12 @@ report_column: "report"
 group_size: 4
 epsilon_low: 0.2
 epsilon_high: 0.3
-beta: 0.0 # KL penalty weight (0 = disabled)
+beta: 0.01 # KL penalty weight to prevent policy drift
 # Reward weights
 reward_weights:
-  format: 0.2
-  diagnosis: 0.5
-  evidence: 0.3
+  format: 0.1
+  diagnosis: 0.7
+  evidence: 0.2
 # Generation parameters
 temperature: 1.0
 top_p: 0.95
@@ -29,10 +29,10 @@ max_new_tokens: 1024
 # Training
 num_epochs: 1
 batch_size: 2
-lr: 1.0e-6
+lr: 2.0e-6
 num_workers: 2
 grad_accum_steps: 4
-max_grad_norm: 1.0
+max_grad_norm: 0.5
 precision: "bf16"
 save_interval: 500
 log_interval: 10

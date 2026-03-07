@@ -55,10 +55,13 @@ def _load_medgemma_model(
     for attn_impl in ("flash_attention_2", "sdpa", None):
         for loader in loaders:
             try:
-                kwargs = dict(
-                    torch_dtype=torch_dtype,
-                    trust_remote_code=True,
-                )
+                # transformers >=5.x renamed torch_dtype -> dtype
+                import transformers as _tf
+                _dtype_key = "dtype" if int(_tf.__version__.split(".")[0]) >= 5 else "torch_dtype"
+                kwargs = {
+                    _dtype_key: torch_dtype,
+                    "trust_remote_code": True,
+                }
                 if attn_impl:
                     kwargs["attn_implementation"] = attn_impl
                 model = loader.from_pretrained(model_name, **kwargs)

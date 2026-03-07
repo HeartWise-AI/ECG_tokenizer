@@ -22,6 +22,10 @@ class BertDiagnosisReward:
     Final score = max(Jaccard on raw label strings, BERT F1 on thresholded preds).
     """
 
+    # Classes that fire on nearly every ECG and create spurious F1 overlap.
+    # 0=Sinusal, 1=Regular, 2=Monomorph — these are noise, not diagnoses.
+    IGNORED_CLASSES = {0, 1, 2}
+
     def __init__(self, device: str = "cuda"):
         from transformers import BertTokenizer, BertForSequenceClassification
         from utils.constants import BERT_CLASS_THRESHOLDS
@@ -39,6 +43,10 @@ class BertDiagnosisReward:
         self.thresholds = torch.tensor(
             BERT_CLASS_THRESHOLDS, dtype=torch.float32, device=self.device
         )
+        # Mask: 1.0 for classes we care about, 0.0 for noisy ones
+        self.class_mask = torch.ones(77, dtype=torch.float32, device=self.device)
+        for idx in self.IGNORED_CLASSES:
+            self.class_mask[idx] = 0.0
 
     @torch.no_grad()
     def _predict(self, text: str) -> torch.Tensor:
@@ -51,36 +59,56 @@ class BertDiagnosisReward:
         logits = self.model(**inputs)["logits"]
         return torch.sigmoid(logits[0])
 
+    def _cosine_sim(self, a: torch.Tensor, b: torch.Tensor) -> float:
+        """Cosine similarity on masked probability vectors."""
+        a_m = a * self.class_mask
+        b_m = b * self.class_mask
+        dot = (a_m * b_m).sum()
+        norm = torch.norm(a_m) * torch.norm(b_m)
+        if norm < 1e-8:
+            return 0.0
+        return float((dot / norm).cpu())
+
     def __call__(self, generated_text: str, ground_truth: str) -> float:
-        """Hybrid reward: max(Jaccard, BERT F1 with per-class thresholds)."""
+        """BERT-based diagnosis reward with per-class thresholds.
+
+        Logic:
+        - If neither text activates any BERT class → Jaccard only
+        - If TP=0 and FN>0 (missed everything) → soft cosine on BERT probs
+          (gives continuous signal for bootstrapping GRPO)
+        - Otherwise → average of Jaccard and BERT F1
+        """
         gen_block = _extract_answer_block(generated_text)
         gt_block = _extract_answer_block(ground_truth)
         if gen_block is None or gt_block is None:
             return 0.0
 
-        # Jaccard on exact label strings
         jaccard = _jaccard_on_blocks(gen_block, gt_block)
 
-        # BERT F1 with per-class thresholds
         gen_probs = self._predict(gen_block)
         gt_probs = self._predict(gt_block)
 
-        gen_preds = (gen_probs > self.thresholds).float()
-        gt_preds = (gt_probs > self.thresholds).float()
+        gen_preds = (gen_probs > self.thresholds).float() * self.class_mask
+        gt_preds = (gt_probs > self.thresholds).float() * self.class_mask
 
         tp = (gen_preds * gt_preds).sum()
         fp = (gen_preds * (1 - gt_preds)).sum()
         fn = ((1 - gen_preds) * gt_preds).sum()
 
         if (tp + fp + fn) < 1e-8:
-            # Neither text activates any class — fall back to Jaccard
             return jaccard
+
+        if tp < 1e-8 and fn > 0:
+            # Soft fallback: cosine similarity on raw BERT probs (continuous signal)
+            # Scale by 0.5 so it stays below a real TP match but above hard zero
+            cos = self._cosine_sim(gen_probs, gt_probs)
+            return cos * 0.5
 
         precision = tp / (tp + fp + 1e-8)
         recall = tp / (tp + fn + 1e-8)
         f1 = float((2 * precision * recall / (precision + recall + 1e-8)).cpu())
 
-        return max(jaccard, f1)
+        return (jaccard + f1) / 2.0
 
 
 def format_reward(generated_text: str, ground_truth: str) -> float:
