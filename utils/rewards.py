@@ -213,7 +213,7 @@ def compute_rewards(
     ground_truth: str,
     weights: Optional[Dict[str, float]] = None,
     bert_reward: Optional["BertDiagnosisReward"] = None,
-) -> float:
+) -> Dict[str, float]:
     """Compute weighted combination of all reward signals.
 
     Args:
@@ -225,7 +225,7 @@ def compute_rewards(
             uses BERT F1 for the diagnosis component instead of Jaccard.
 
     Returns:
-        Weighted reward in [0, 1].
+        Dict with keys "total", "format", "diagnosis", "evidence".
     """
     if weights is None:
         weights = {"format": 0.2, "diagnosis": 0.5, "evidence": 0.3}
@@ -239,12 +239,17 @@ def compute_rewards(
 
     total_weight = sum(weights.values())
     if total_weight <= 0:
-        return 0.0
+        total = 0.0
+    else:
+        total = (
+            weights.get("format", 0.0) * r_format
+            + weights.get("diagnosis", 0.0) * r_diagnosis
+            + weights.get("evidence", 0.0) * r_evidence
+        ) / total_weight
 
-    reward = (
-        weights.get("format", 0.0) * r_format
-        + weights.get("diagnosis", 0.0) * r_diagnosis
-        + weights.get("evidence", 0.0) * r_evidence
-    ) / total_weight
-
-    return reward
+    return {
+        "total": total,
+        "format": r_format,
+        "diagnosis": r_diagnosis,
+        "evidence": r_evidence,
+    }

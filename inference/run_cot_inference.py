@@ -162,7 +162,8 @@ for idx in range(len(df_sample)):
     r_fmt = format_reward(gen_text, gt_text)
     r_diag = diagnosis_accuracy_reward(gen_text, gt_text)
     r_evid = key_evidence_reward(gen_text, gt_text)
-    r_combined = compute_rewards(gen_text, gt_text, {"format": 0.2, "diagnosis": 0.5, "evidence": 0.3})
+    r_all = compute_rewards(gen_text, gt_text, {"format": 0.2, "diagnosis": 0.5, "evidence": 0.3})
+    r_combined = r_all["total"]
 
     total_rewards["format"] += r_fmt
     total_rewards["diagnosis"] += r_diag
