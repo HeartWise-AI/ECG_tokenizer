@@ -36,9 +36,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # versions pickle the old module path + class name.
 import types as _types, importlib as _importlib
 _gemma_tok = _importlib.import_module("transformers.models.gemma.tokenization_gemma")
-_shim = _types.ModuleType("transformers.models.gemma.tokenization_gemma_fast")
-_shim.GemmaTokenizerFast = _gemma_tok.GemmaTokenizer  # alias old → new
-sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = _shim
+# Patch __setstate__ only for older transformers (<5.x) where GemmaTokenizer uses SentencePiece
+if hasattr(_gemma_tok.GemmaTokenizer, '__setstate__'):
+    _orig_setstate = _gemma_tok.GemmaTokenizer.__setstate__
+    def _patched_setstate(self, state):
+        if "sp_model_kwargs" not in state:
+            state["sp_model_kwargs"] = {}
+        self.__dict__.update(state)
+        import sentencepiece as spm
+        self.sp_model = spm.SentencePieceProcessor(**state.get("sp_model_kwargs", {}))
+        if "sp_model_proto" in state:
+            self.sp_model.LoadFromSerializedProto(state["sp_model_proto"])
+        elif hasattr(self, "vocab_file") and self.vocab_file:
+            self.sp_model.Load(self.vocab_file)
+    _gemma_tok.GemmaTokenizer.__setstate__ = _patched_setstate
+# Register shim for old pickle paths (GemmaTokenizerFast → GemmaTokenizer)
+if "transformers.models.gemma.tokenization_gemma_fast" not in sys.modules:
+    _shim = _types.ModuleType("transformers.models.gemma.tokenization_gemma_fast")
+    _shim.GemmaTokenizerFast = _gemma_tok.GemmaTokenizer
+    sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = _shim
 
 from transformers import AutoTokenizer
 

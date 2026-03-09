@@ -4,53 +4,57 @@ import torch
 from torch.utils.data import DataLoader
 
 from projects.rl_finetuning_base import RLFinetuningProjectBase
-from utils.config import DPOFinetuningConfig, ECGTokenizerTrainingConfig
+from utils.config import GRPOFinetuningConfig, ECGTokenizerTrainingConfig
 from utils.enums import ProjectName
 from utils.registry import ProjectRegistry
 from utils.wandb_wrapper import WandbWrapper
-from data.dpo_pair_dataset import DPOPairDataset, dpo_collate_fn
+from data.grpo_prompt_dataset import GRPOPromptDataset, grpo_collate_fn
 
 
-torch.serialization.add_safe_globals([DPOFinetuningConfig])
+torch.serialization.add_safe_globals([GRPOFinetuningConfig])
 torch.serialization.add_safe_globals([ECGTokenizerTrainingConfig])
 
 
-@ProjectRegistry.register(ProjectName.ECG_TOKENIZER_DPO_FINETUNING)
-class DPOFinetuningProject(RLFinetuningProjectBase):
-    def __init__(self, config: DPOFinetuningConfig, wandb_wrapper: WandbWrapper):
+@ProjectRegistry.register(ProjectName.ECG_TOKENIZER_GRPO_FINETUNING)
+class GRPOFinetuningProject(RLFinetuningProjectBase):
+    def __init__(self, config: GRPOFinetuningConfig, wandb_wrapper: WandbWrapper):
         super().__init__(config, wandb_wrapper)
-        self.config: DPOFinetuningConfig = config
+        self.config: GRPOFinetuningConfig = config
 
     def _setup_training_objects(self) -> dict[str, Any]:
         checkpoint_path = self.config.pretrained_tokenizer_path
 
         policy_model, tokenizer, checkpoint_config = self._load_model_from_checkpoint(checkpoint_path)
-        ref_model, _, _ = self._load_model_from_checkpoint(checkpoint_path)
+
+        # Only load ref model when KL penalty is active (beta > 0)
+        beta = float(getattr(self.config, "beta", 0.0))
+        if beta > 0:
+            ref_model, _, _ = self._load_model_from_checkpoint(checkpoint_path)
+        else:
+            ref_model = None
+            if self.config.is_ref_device:
+                print("[GRPOFinetuningProject] Skipping ref model (beta=0, KL penalty disabled)")
 
         # Configure LoRA mode
         try:
             if bool(getattr(checkpoint_config, "use_lora", False)):
                 policy_model.set_lora_inference_mode(False)
-                ref_model.set_lora_inference_mode(True)
+                if ref_model is not None:
+                    ref_model.set_lora_inference_mode(True)
         except Exception:
             pass
 
         # Set trainable params
         trainable_mode = str(getattr(self.config, "trainable", "lora")).lower()
-        trainable_regex = getattr(self.config, "trainable_regex", None)
-        self._set_trainable_params(policy_model, trainable_mode, trainable_regex)
+        self._set_trainable_params(policy_model, trainable_mode)
 
-        max_length = int(self.config.max_token_length or getattr(checkpoint_config, "max_token_length", 640))
-        train_dataset = DPOPairDataset(
-            path=self.config.train_pairs_path,
+        train_dataset = GRPOPromptDataset(
+            dataset_path=self.config.train_dataset_path,
             tokenizer=tokenizer,
             config=self.config,
-            max_length=max_length,
-            waveform_key=self.config.waveform_key,
-            prompt_key=self.config.prompt_key,
-            chosen_key=self.config.chosen_key,
-            rejected_key=self.config.rejected_key,
-            weight_key=self.config.weight_key,
+            signal_path_column=self.config.signal_path_column,
+            messages_column=self.config.messages_column,
+            report_column=self.config.report_column,
         )
 
         train_loader = DataLoader(
@@ -59,7 +63,7 @@ class DPOFinetuningProject(RLFinetuningProjectBase):
             shuffle=True,
             num_workers=self.config.num_workers,
             pin_memory=True,
-            collate_fn=dpo_collate_fn,
+            collate_fn=grpo_collate_fn,
         )
 
         optimizer = torch.optim.AdamW(

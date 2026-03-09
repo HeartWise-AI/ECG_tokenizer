@@ -379,6 +379,7 @@ class LLMFinetuningProject(BaseProject):
             or "medgemma" in name_blob
         )
         debug_print_example = bool(getattr(self.config, 'debug_print_example', False))
+        messages_col = getattr(self.config, 'messages_column', None)
         prefix_tuning_enabled = getattr(self.config, 'prefix_tuning', False)
         num_ecg_tokens = getattr(self.config, 'num_ecg_tokens', 128)
         if self._uses_qformer_bridge() or prefix_tuning_enabled:
@@ -444,6 +445,7 @@ class LLMFinetuningProject(BaseProject):
                 debug_print_example=debug_print_example,
                 augmentor=augmentor,
                 sampling_seed=getattr(self.config, 'seed', 42),
+                messages_column=messages_col,
             )
         else:
             # Existing single-dataset path (backward compatible)
@@ -475,6 +477,7 @@ class LLMFinetuningProject(BaseProject):
                 debug_print_example=debug_print_example,
                 sample_weight_column=sample_weight_col,
                 augmentor=augmentor,
+                messages_column=messages_col,
             )
 
         # Check for multi-dataset validation paths
@@ -507,6 +510,7 @@ class LLMFinetuningProject(BaseProject):
                 debug_print_example=debug_print_example,
                 augmentor=None,  # No augmentation for validation
                 sampling_seed=getattr(self.config, "validation_sampling_seed", None),
+                messages_column=messages_col,
             )
         else:
             validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
@@ -535,6 +539,7 @@ class LLMFinetuningProject(BaseProject):
                 sampling_seed=getattr(self.config, "validation_sampling_seed", None),
                 medgemma_prompt_style=medgemma_prompt_style,
                 debug_print_example=debug_print_example,
+                messages_column=messages_col,
             )
 
         phase1_train_dataloader: DataLoader | None = None
@@ -639,6 +644,8 @@ class LLMFinetuningProject(BaseProject):
 
         # For mid-epoch resume (resume_global_step is set), stay in the same epoch
         # For full-epoch resume (no resume_global_step), advance to next epoch
+        # If advancing would exceed num_epochs, reset to 1 (new fine-tuning task
+        # that loads weights from a completed checkpoint).
         resume_global_step = getattr(self.config, 'resume_global_step', None)
         if resume_checkpoint_path and resume_global_step is not None:
             # Mid-epoch resume: continue from the same epoch
@@ -646,6 +653,8 @@ class LLMFinetuningProject(BaseProject):
         elif resume_checkpoint_path:
             # Full-epoch resume: start from next epoch
             start_epoch = resume_epoch + 1
+            if start_epoch > self.config.num_epochs:
+                start_epoch = 1
         else:
             start_epoch = 1
 

@@ -1,40 +1,25 @@
-import math
 import random
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Dict, Optional
 
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from runners.base_runner import BaseRunner
-from utils.enums import RunMode, RunnerName
+from runners.rl_finetuning_base import RLFinetuningRunnerBase
+from utils.enums import RunnerName
 from utils.registry import RunnerRegistry
 from data.dpo_pair_dataset import DPOPairDataset, dpo_collate_fn
 
 
 @RunnerRegistry.register(RunnerName.DPO_FINETUNING)
-class DPOFinetuningRunner(BaseRunner):
-    def __init__(
-        self,
-        config,
-        wandb_wrapper=None,
-        model=None,
-        ref_model=None,
-        train_dataloader: DataLoader | None = None,
-        optimizer: Optional[torch.optim.Optimizer] = None,
-        scheduler: Optional[Any] = None,
-    ):
-        super().__init__(config, wandb_wrapper)
-        self.model = model
-        self.ref_model = ref_model
-        self.train_dataloader = train_dataloader
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.global_step = 0
-        self.start_time = None
+class DPOFinetuningRunner(RLFinetuningRunnerBase):
+    def __init__(self, config, wandb_wrapper=None, model=None, ref_model=None,
+                 train_dataloader: DataLoader | None = None,
+                 optimizer: Optional[torch.optim.Optimizer] = None,
+                 scheduler=None):
+        super().__init__(config, wandb_wrapper, model, ref_model,
+                         train_dataloader, optimizer, scheduler)
         self.eval_dataloader: DataLoader | None = None
-
-        # Accumulators for logging
         self._reset_metrics()
 
     def _reset_metrics(self):
@@ -49,125 +34,6 @@ class DPOFinetuningRunner(BaseRunner):
         self._accum_reward_margin = 0.0
         self._accum_accuracy = 0.0
         self._accum_count = 0
-
-    def _sequence_logp(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        shift_logits = logits[:, :-1, :]
-        shift_labels = labels[:, 1:]
-        mask = shift_labels != -100
-        shift_labels = shift_labels.clamp_min(0)
-        log_probs = torch.log_softmax(shift_logits, dim=-1)
-        token_logp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
-        token_logp = token_logp * mask
-        return token_logp.sum(dim=-1)
-
-    def _sequence_nll(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        shift_logits = logits[:, :-1, :]
-        shift_labels = labels[:, 1:]
-        mask = shift_labels != -100
-        shift_labels = shift_labels.clamp_min(0)
-        log_probs = torch.log_softmax(shift_logits, dim=-1)
-        token_logp = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
-        token_logp = token_logp * mask
-        token_counts = mask.sum(dim=-1).clamp_min(1)
-        nll = -token_logp.sum(dim=-1) / token_counts
-        return nll.mean()
-
-    def _expand_labels_with_ecg(
-        self,
-        decoder,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        labels: torch.Tensor,
-        ecg_embeddings: torch.Tensor,
-    ) -> torch.Tensor:
-        merged = decoder._inject_ecg_after_image_token(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-            ecg_embeddings=ecg_embeddings,
-            embed_layer=decoder.llm_model.get_input_embeddings(),
-        )
-        if merged is not None:
-            _, _, _, labels_out = merged
-            if labels_out is None:
-                raise ValueError("Failed to expand labels with ECG injection.")
-            return labels_out
-
-        prefix_len = int(ecg_embeddings.size(1))
-        if prefix_len <= 0:
-            return labels
-        ignore_pad = torch.full(
-            (labels.size(0), prefix_len),
-            -100,
-            dtype=labels.dtype,
-            device=labels.device,
-        )
-        return torch.cat([ignore_pad, labels], dim=1)
-
-    def _forward_logits_and_labels(
-        self,
-        model,
-        ecg_signal: torch.Tensor,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        labels: torch.Tensor,
-        prompt_input_ids: Optional[torch.Tensor],
-        prompt_attention_mask: Optional[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        ecg_signal = ecg_signal.to(dtype=torch.float32)
-        features = model.encoder(ecg_signal)
-        quantized, indices, _ = model.quantizer(features)
-        quantized_codes = model._extract_primary_codes(indices, model.num_codebooks_kept, model.codebook_offset)
-
-        if not hasattr(model.decoder, "_compute_ecg_embeddings"):
-            raise ValueError("Decoder does not support ECG embeddings for DPO training.")
-
-        ecg_embeddings, _ = model.decoder._compute_ecg_embeddings(
-            quantized,
-            quantized_codes,
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-        )
-
-        outputs = model.decoder(
-            quantized_features=None,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-            quantized_codes=None,
-            ecg_embeddings=ecg_embeddings,
-            prompt_input_ids=prompt_input_ids,
-            prompt_attention_mask=prompt_attention_mask,
-        )
-        logits = outputs["logits"]
-        labels_expanded = self._expand_labels_with_ecg(
-            decoder=model.decoder,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-            ecg_embeddings=ecg_embeddings,
-        )
-        return logits, labels_expanded
-
-    def _run_epoch(
-        self,
-        mode: RunMode,
-        epoch: int,
-        dataloader: DataLoader,
-        step_fn: Callable,
-    ) -> dict[str, float]:
-        raise NotImplementedError
-
-    def _get_text_tokenizer(self):
-        if self.model is None:
-            return None
-        if hasattr(self.model, "_get_text_tokenizer"):
-            try:
-                return self.model._get_text_tokenizer()
-            except Exception:
-                pass
-        decoder = getattr(self.model, "decoder", None)
-        return getattr(decoder, "tokenizer", None)
 
     def _build_eval_dataloader(self) -> Optional[DataLoader]:
         eval_path = getattr(self.config, "eval_pairs_path", None)
@@ -236,24 +102,21 @@ class DPOFinetuningRunner(BaseRunner):
                 rejected_attention_mask = batch["rejected_attention_mask"].to(device)
                 rejected_labels = batch["rejected_labels"].to(device)
 
+                # Cache ECG embeddings for this eval batch
+                ecg_emb = self._encode_ecg(self.model, signal, prompt_input_ids, prompt_attention_mask)
+
                 with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_autocast):
                     logits_c, labels_c = self._forward_logits_and_labels(
-                        self.model,
-                        signal,
-                        chosen_input_ids,
-                        chosen_attention_mask,
-                        chosen_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
+                        self.model, signal,
+                        chosen_input_ids, chosen_attention_mask, chosen_labels,
+                        prompt_input_ids, prompt_attention_mask,
+                        ecg_embeddings=ecg_emb,
                     )
                     logits_r, labels_r = self._forward_logits_and_labels(
-                        self.model,
-                        signal,
-                        rejected_input_ids,
-                        rejected_attention_mask,
-                        rejected_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
+                        self.model, signal,
+                        rejected_input_ids, rejected_attention_mask, rejected_labels,
+                        prompt_input_ids, prompt_attention_mask,
+                        ecg_embeddings=ecg_emb,
                     )
                     logp_c = self._sequence_logp(logits_c, labels_c)
                     logp_r = self._sequence_logp(logits_r, labels_r)
@@ -298,7 +161,6 @@ class DPOFinetuningRunner(BaseRunner):
         for p in self.ref_model.parameters():
             p.requires_grad = False
 
-        # Count trainable parameters
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in self.model.parameters())
         if self.config.is_ref_device:
@@ -327,7 +189,7 @@ class DPOFinetuningRunner(BaseRunner):
             running_loss = 0.0
             epoch_start_time = time.time()
             self._reset_metrics()
-            grad_norm = 0.0  # Initialize for logging before first gradient step
+            grad_norm = 0.0
 
             for step, batch in enumerate(self.train_dataloader):
                 step_start_time = time.time()
@@ -343,46 +205,43 @@ class DPOFinetuningRunner(BaseRunner):
                 rejected_attention_mask = batch["rejected_attention_mask"].to(device)
                 rejected_labels = batch["rejected_labels"].to(device)
 
+                # Cache ECG embeddings per-model (same signal for chosen + rejected)
+                policy_ecg_emb = self._encode_ecg(
+                    self.model, signal, prompt_input_ids, prompt_attention_mask
+                )
+                with torch.no_grad():
+                    ref_ecg_emb = self._encode_ecg(
+                        self.ref_model, signal, prompt_input_ids, prompt_attention_mask
+                    )
+
                 with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_autocast):
                     logits_c, labels_c = self._forward_logits_and_labels(
-                        self.model,
-                        signal,
-                        chosen_input_ids,
-                        chosen_attention_mask,
-                        chosen_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
+                        self.model, signal,
+                        chosen_input_ids, chosen_attention_mask, chosen_labels,
+                        prompt_input_ids, prompt_attention_mask,
+                        ecg_embeddings=policy_ecg_emb,
                     )
                     logits_r, labels_r = self._forward_logits_and_labels(
-                        self.model,
-                        signal,
-                        rejected_input_ids,
-                        rejected_attention_mask,
-                        rejected_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
+                        self.model, signal,
+                        rejected_input_ids, rejected_attention_mask, rejected_labels,
+                        prompt_input_ids, prompt_attention_mask,
+                        ecg_embeddings=policy_ecg_emb,
                     )
                     logp_c = self._sequence_logp(logits_c, labels_c)
                     logp_r = self._sequence_logp(logits_r, labels_r)
 
                     with torch.no_grad():
                         logits_c_ref, labels_c_ref = self._forward_logits_and_labels(
-                            self.ref_model,
-                            signal,
-                            chosen_input_ids,
-                            chosen_attention_mask,
-                            chosen_labels,
-                            prompt_input_ids,
-                            prompt_attention_mask,
+                            self.ref_model, signal,
+                            chosen_input_ids, chosen_attention_mask, chosen_labels,
+                            prompt_input_ids, prompt_attention_mask,
+                            ecg_embeddings=ref_ecg_emb,
                         )
                         logits_r_ref, labels_r_ref = self._forward_logits_and_labels(
-                            self.ref_model,
-                            signal,
-                            rejected_input_ids,
-                            rejected_attention_mask,
-                            rejected_labels,
-                            prompt_input_ids,
-                            prompt_attention_mask,
+                            self.ref_model, signal,
+                            rejected_input_ids, rejected_attention_mask, rejected_labels,
+                            prompt_input_ids, prompt_attention_mask,
+                            ecg_embeddings=ref_ecg_emb,
                         )
                         logp_c_ref = self._sequence_logp(logits_c_ref, labels_c_ref)
                         logp_r_ref = self._sequence_logp(logits_r_ref, labels_r_ref)
@@ -406,7 +265,6 @@ class DPOFinetuningRunner(BaseRunner):
                         reward_margin = (reward_chosen - reward_rejected).mean()
                         accuracy = (logits_diff > 0).float().mean()
 
-                        # Accumulate metrics
                         batch_size = signal.size(0)
                         self._accum_loss += float(loss.detach()) * batch_size
                         self._accum_dpo_loss += float(dpo_loss.detach()) * batch_size
@@ -424,15 +282,10 @@ class DPOFinetuningRunner(BaseRunner):
                 loss_scaled.backward()
 
                 if (step + 1) % grad_accum == 0:
-                    # Compute gradient norm before clipping
-                    grad_norm = 0.0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            grad_norm += p.grad.data.norm(2).item() ** 2
-                    grad_norm = grad_norm ** 0.5
-
                     if max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+                        grad_norm = float(torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm))
+                    else:
+                        grad_norm = float(torch.nn.utils.clip_grad_norm_(self.model.parameters(), float("inf")))
                     self.optimizer.step()
                     self.optimizer.zero_grad(set_to_none=True)
                     if self.scheduler is not None:
@@ -448,17 +301,14 @@ class DPOFinetuningRunner(BaseRunner):
                                 f"pref_margin={metrics['eval/pref_margin']:.3f}"
                             )
 
-                running_loss += float(loss.detach().cpu())
+                running_loss += loss.item()
 
                 # Save checkpoint at intervals
                 if self.global_step > 0 and self.global_step % save_interval == 0:
                     ckpt_path = f"{self.config.output_dir}/dpo_step_{self.global_step}.pt"
                     self._save_checkpoint(
-                        model=self.model,
-                        optimizer=self.optimizer,
-                        epoch=epoch,
-                        loss=running_loss / max(1, step + 1),
-                        checkpoint_path=ckpt_path,
+                        model=self.model, optimizer=self.optimizer, epoch=epoch,
+                        loss=running_loss / max(1, step + 1), checkpoint_path=ckpt_path,
                         step=self.global_step,
                     )
 
@@ -468,12 +318,9 @@ class DPOFinetuningRunner(BaseRunner):
                     elapsed = time.time() - self.start_time
                     samples_per_sec = self._accum_count / max(0.001, step_time * log_interval)
                     progress = (epoch * len(self.train_dataloader) + step + 1) / total_steps
-
-                    # Get current learning rate
                     current_lr = self.optimizer.param_groups[0]["lr"]
 
                     metrics = {
-                        # Training metrics
                         "train/loss": self._accum_loss / self._accum_count,
                         "train/dpo_loss": self._accum_dpo_loss / self._accum_count,
                         "train/chosen_logp": self._accum_chosen_logp / self._accum_count,
@@ -483,10 +330,8 @@ class DPOFinetuningRunner(BaseRunner):
                         "train/reward_margin": self._accum_reward_margin / self._accum_count,
                         "train/accuracy": self._accum_accuracy / self._accum_count,
                         "train/logp_gap": (self._accum_chosen_logp - self._accum_rejected_logp) / self._accum_count,
-                        # Optimization metrics
                         "optim/lr": current_lr,
                         "optim/grad_norm": grad_norm,
-                        # Progress metrics
                         "progress/global_step": float(self.global_step),
                         "progress/epoch": float(epoch),
                         "progress/epoch_step": float(step),
@@ -498,7 +343,6 @@ class DPOFinetuningRunner(BaseRunner):
                         metrics["train/sft_loss"] = self._accum_sft_loss / self._accum_count
                     self._log_metrics(metrics)
 
-                    # Print progress
                     sft_str = ""
                     if sft_weight > 0 and self._accum_sft_loss > 0:
                         sft_str = f" | sft={self._accum_sft_loss / self._accum_count:.4f}"
@@ -513,7 +357,6 @@ class DPOFinetuningRunner(BaseRunner):
                         f"{samples_per_sec:.1f} samples/sec"
                     )
 
-                    # Reset accumulators
                     self._reset_metrics()
 
             # End of epoch logging
@@ -528,15 +371,10 @@ class DPOFinetuningRunner(BaseRunner):
                     "epoch/num": float(epoch),
                 })
 
-            # Save epoch checkpoint
             ckpt_path = f"{self.config.output_dir}/dpo_epoch_{epoch}.pt"
             self._save_checkpoint(
-                model=self.model,
-                optimizer=self.optimizer,
-                epoch=epoch,
-                loss=avg_loss,
-                checkpoint_path=ckpt_path,
-                step=self.global_step,
+                model=self.model, optimizer=self.optimizer, epoch=epoch,
+                loss=avg_loss, checkpoint_path=ckpt_path, step=self.global_step,
             )
 
         # Final logging

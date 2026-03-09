@@ -90,13 +90,13 @@ class Residual_Conv_Encoder(nn.Module):
         # First conv + pool + residual refinement
         x = self.conv1(x)
         x = self.pool1(x)
-        x = nn.GELU()(x)
+        x = torch.nn.functional.gelu(x)
         x = self.block1(x)
-        
+
         # Second conv + pool + residual refinement
         x = self.conv2(x)
         x = self.pool2(x)
-        x = nn.GELU()(x)
+        x = torch.nn.functional.gelu(x)
         x = self.block2(x)
         
         # Third conv + residual refinement

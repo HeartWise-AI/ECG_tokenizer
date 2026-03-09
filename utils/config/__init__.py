@@ -6,14 +6,16 @@ from .linear_probing_config import ECGTokenizerLinearProbingConfig
 from .siglip_phase1_config import SiglipPhase1Config
 from .ecg_text_stage1_config import ECGTextStage1Config
 from .dpo_finetuning_config import DPOFinetuningConfig
+from .grpo_finetuning_config import GRPOFinetuningConfig
 
 __all__ = [
-    "HeartWiseConfig", 
-    "LLMFinetuningConfig", 
+    "HeartWiseConfig",
+    "LLMFinetuningConfig",
     "BertReportClassifierConfig",
     "ECGTokenizerTrainingConfig",
-    "ECGTokenizerLinearProbingConfig", 
+    "ECGTokenizerLinearProbingConfig",
     "SiglipPhase1Config",
     "ECGTextStage1Config",
     "DPOFinetuningConfig",
+    "GRPOFinetuningConfig",
 ]

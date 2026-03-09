@@ -1,4 +1,5 @@
 import os
+import json
 import warnings
 import torch
 import numpy as np
@@ -43,6 +44,7 @@ class ECGClinicalReportDataset(Dataset):
         medgemma_prompt_style: bool = False,
         debug_print_example: bool = False,
         augmentor: Optional[Any] = None,
+        messages_column: Optional[str] = None,
     ):
         """
         Args:
@@ -60,6 +62,8 @@ class ECGClinicalReportDataset(Dataset):
             category_column (str): Column name for prompt categories.
             pattern_columns (Optional[Sequence[str]]): Column names providing multilabel ECG targets.
             medgemma_prompt_style (bool): Use MedGemma-style chat prompts with <image_1> placeholder.
+            messages_column (Optional[str]): Column containing JSON chat messages (system/user/assistant).
+                When set, overrides prompt_column/answer_column with parsed message content.
         """
         try:
             self.df: pd.DataFrame = pd.read_parquet(dataset_path)
@@ -87,6 +91,15 @@ class ECGClinicalReportDataset(Dataset):
         self.debug_print_example: bool = bool(debug_print_example)
         self._debug_example_printed: bool = False
         self.augmentor = augmentor
+        # Chat messages column support: when set, parse JSON messages for prompt/answer
+        self.messages_column: Optional[str] = messages_column
+        if self.messages_column and self.messages_column not in self.df.columns:
+            warnings.warn(
+                f"ECGClinicalReportDataset: messages_column '{self.messages_column}' "
+                f"not found in dataset. Falling back to prompt_column/answer_column.",
+                stacklevel=2,
+            )
+            self.messages_column = None
         self._pattern_column_mask: List[bool] = [col in self.df.columns for col in self.pattern_columns]
         missing_patterns = [col for col, present in zip(self.pattern_columns, self._pattern_column_mask) if not present]
         if missing_patterns:
@@ -154,13 +167,46 @@ class ECGClinicalReportDataset(Dataset):
         
         return waveform
 
+    def _parse_messages(self, raw: Any) -> Optional[Dict[str, str]]:
+        """Parse a JSON chat messages column into system/user/assistant content.
+
+        Returns a dict with keys ``system``, ``user``, ``assistant`` or *None*
+        if parsing fails.
+        """
+        try:
+            msgs = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(msgs, list):
+                return None
+            result: Dict[str, str] = {}
+            for msg in msgs:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role in ("system", "user", "assistant"):
+                    result[role] = content
+            if "assistant" not in result:
+                return None
+            return result
+        except Exception:
+            return None
+
     def __getitem__(self, idx: int) -> dict | None:
         try:
             # Get the row
             row = self.df.iloc[idx]
-            
+
+            # When messages_column is active, derive answer_column availability from it
+            has_messages = (
+                self.messages_column is not None
+                and self.messages_column in self.df.columns
+                and not pd.isnull(row[self.messages_column])
+            )
+
             # Check if the waveform path or answer is missing
-            if pd.isnull(row[self.signal_path_column]) or pd.isnull(row[self.answer_column]):
+            answer_missing = (
+                not has_messages
+                and (self.answer_column not in self.df.columns or pd.isnull(row.get(self.answer_column)))
+            )
+            if pd.isnull(row[self.signal_path_column]) or answer_missing:
                 print(f"Missing {self.signal_path_column} or {self.answer_column} for index {idx}, skipping sample. "
                       f"{self.signal_path_column}: {row.get(self.signal_path_column)}, {self.answer_column}: {row.get(self.answer_column)}")
                 return self.__getitem__((idx + 1) % len(self))
@@ -199,27 +245,66 @@ class ECGClinicalReportDataset(Dataset):
             
             # Tokenization logic
             if self.instruct_mode:
-                prompt_text: str = ""
-                if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
-                    prompt_text = str(row[self.prompt_column])
-                answer_text: str = str(row[self.answer_column])
-                candidate_answers_raw = row.get("candidate_answers")
-                gt_indices_raw = row.get("ground_truth_indices")
-                has_candidates = (
-                    candidate_answers_raw is not None
-                    and not (isinstance(candidate_answers_raw, float) and np.isnan(candidate_answers_raw))
-                )
-                is_cf_record = self.medgemma_prompt_style and has_candidates
-                options: list[str] = []
-                if is_cf_record:
-                    try:
-                        options = [str(x) for x in list(candidate_answers_raw)]
-                    except Exception:
-                        options = []
-                    if not options:
-                        is_cf_record = False
+                # --- Chat messages parsing (overrides prompt/answer columns) ---
+                _parsed_msgs: Optional[Dict[str, str]] = None
+                if has_messages:
+                    _parsed_msgs = self._parse_messages(row[self.messages_column])
 
-                if is_cf_record:
+                if _parsed_msgs is not None:
+                    # Extract structured content from the chat messages
+                    system_message = _parsed_msgs.get(
+                        "system",
+                        "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way.",
+                    )
+                    user_content_raw = _parsed_msgs.get("user", "")
+                    answer_text = _parsed_msgs["assistant"]
+                    # Adapt image placeholder to the model's expected format
+                    if self.medgemma_prompt_style:
+                        user_content = user_content_raw.replace("<image>", "<start_of_image>")
+                        if "<start_of_image>" not in user_content:
+                            user_content = "<start_of_image>\n\n" + user_content
+                    else:
+                        user_content = user_content_raw.replace("<image>", "<image_1>")
+                        if "<image_1>" not in user_content:
+                            user_content = "<image_1> " + user_content
+                    prompt_text = user_content_raw
+                    is_cf_record = False
+                    debug_payload = {
+                        "mode": "chat_messages",
+                        "question": prompt_text,
+                        "canonical_answer": answer_text[:200],
+                    }
+                else:
+                    # --- Standard prompt/answer column path (original logic) ---
+                    system_message = None  # sentinel: set below per branch
+                    user_content = None
+                    is_cf_record = False
+                    debug_payload = None
+
+                # Fall through to original prompt/answer handling when messages were not used
+                if _parsed_msgs is None:
+                    prompt_text: str = ""
+                    if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
+                        prompt_text = str(row[self.prompt_column])
+                    answer_text: str = str(row[self.answer_column])
+
+                    candidate_answers_raw = row.get("candidate_answers")
+                    gt_indices_raw = row.get("ground_truth_indices")
+                    has_candidates = (
+                        candidate_answers_raw is not None
+                        and not (isinstance(candidate_answers_raw, float) and np.isnan(candidate_answers_raw))
+                    )
+                    is_cf_record = self.medgemma_prompt_style and has_candidates
+                    options: list[str] = []
+                    if is_cf_record:
+                        try:
+                            options = [str(x) for x in list(candidate_answers_raw)]
+                        except Exception:
+                            options = []
+                        if not options:
+                            is_cf_record = False
+
+                if _parsed_msgs is None and is_cf_record:
                     candidate_answers = options
                     system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
                     letters = [chr(ord("A") + i) for i in range(min(len(options), 26))]
@@ -260,7 +345,7 @@ class ECGClinicalReportDataset(Dataset):
                         "gt_indices": gt_indices,
                         "canonical_answer": answer_text,
                     }
-                elif self.medgemma_prompt_style:
+                elif _parsed_msgs is None and self.medgemma_prompt_style:
                     system_message = "You are an expert cardiologist. You interpret ECGs and answer in a concise, structured way."
                     if not prompt_text:
                         prompt_text = "Analyze this ECG and list the clinical findings."
@@ -274,7 +359,7 @@ class ECGClinicalReportDataset(Dataset):
                         "question": prompt_text,
                         "canonical_answer": answer_text,
                     }
-                else:
+                elif _parsed_msgs is None:
                     # Construct LLaMA 3.2 chat template with ECG integration
                     # System message for ECG analysis task - optimized for concise medical findings
                     system_message = "An electrocardiogram analysis and question answering tool"
@@ -336,15 +421,16 @@ class ECGClinicalReportDataset(Dataset):
                     print("=== Debug: Full template ===")
                     print(full_template_text)
                 
-                # Tokenize both
-                prompt_encoding = self._pt_tokenizer.encode_plus(
+                # Tokenize both (use __call__ for compatibility with TokenizersBackend)
+                _encode = getattr(self._pt_tokenizer, 'encode_plus', None) or self._pt_tokenizer
+                prompt_encoding = _encode(
                     prompt_template_text,
-                    add_special_tokens=True,  # ensure BOS/EOS around prompt for all templates
+                    add_special_tokens=True,
                     return_tensors=None
                 )
-                full_encoding = self._pt_tokenizer.encode_plus(
+                full_encoding = _encode(
                     full_template_text,
-                    add_special_tokens=True,  # ensure BOS/EOS around full sequence for all templates
+                    add_special_tokens=True,
                     return_tensors=None
                 )
 
@@ -535,12 +621,13 @@ class ECGClinicalReportDataset(Dataset):
                 full_template_text = f"{prompt_template_text} {answer_text}".strip()
 
                 # Tokenize prompt (for generation context) and full text (for labels)
-                prompt_enc: BatchEncoding = self._pt_tokenizer.encode_plus(
+                _encode = getattr(self._pt_tokenizer, 'encode_plus', None) or self._pt_tokenizer
+                prompt_enc: BatchEncoding = _encode(
                     prompt_template_text,
                     add_special_tokens=True,
                     return_tensors=None
                 )
-                full_enc: BatchEncoding = self._pt_tokenizer.encode_plus(
+                full_enc: BatchEncoding = _encode(
                     full_template_text,
                     add_special_tokens=True,
                     return_tensors=None
@@ -709,6 +796,7 @@ def get_distributed_clinical_report_dataloader(
     debug_print_example: bool = False,
     sample_weight_column: Optional[str] = None,
     augmentor: Optional[Any] = None,
+    messages_column: Optional[str] = None,
 ):
     """
     Create a distributed DataLoader for ECG clinical report training.
@@ -737,6 +825,7 @@ def get_distributed_clinical_report_dataloader(
         medgemma_prompt_style=medgemma_prompt_style,
         debug_print_example=debug_print_example,
         augmentor=augmentor,
+        messages_column=messages_column,
     )
 
     # Extract sample weights before any subsetting
@@ -943,6 +1032,7 @@ def get_multi_dataset_distributed_dataloader(
     debug_print_example: bool = False,
     augmentor: Optional[Any] = None,
     sampling_seed: Optional[int] = None,
+    messages_column: Optional[str] = None,
 ) -> DataLoader:
     """Create a distributed DataLoader from multiple dataset parquet files.
 
@@ -973,6 +1063,7 @@ def get_multi_dataset_distributed_dataloader(
             medgemma_prompt_style=medgemma_prompt_style,
             debug_print_example=(debug_print_example and i == 0),
             augmentor=augmentor,
+            messages_column=messages_column,
         )
         datasets.append(ds)
         if rank == 0:

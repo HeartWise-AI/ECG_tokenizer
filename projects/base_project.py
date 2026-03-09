@@ -117,6 +117,23 @@ class BaseProject(ABC):
             f"[{self.__class__.__name__}] Loading checkpoint: {checkpoint_path}"
         )
         
+        # Patch GemmaTokenizer for checkpoint compatibility with newer transformers.
+        # Checkpoints saved with a different transformers version may pickle the
+        # tokenizer with attributes that don't match the current __setstate__.
+        try:
+            from transformers.models.gemma.tokenization_gemma import GemmaTokenizer
+            _orig_setstate = GemmaTokenizer.__setstate__
+
+            def _compat_setstate(self, d):
+                if 'sp_model_proto' not in d:
+                    self.__dict__.update(d)
+                    return
+                _orig_setstate(self, d)
+
+            GemmaTokenizer.__setstate__ = _compat_setstate
+        except (ImportError, AttributeError):
+            pass
+
         return torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     def run(self): 

@@ -37,9 +37,10 @@ class ProjectName(str, Enum):
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     ECG_TOKENIZER_DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
+    ECG_TOKENIZER_GRPO_FINETUNING = "ECG_Tokenizer_GRPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
-    
+
     def __str__(self):
         return self.value
 
@@ -50,12 +51,13 @@ class RunnerName(str, Enum):
     ECG_TOKENIZER_TRAINING = "ECG_Tokenizer_Training_Runner"
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing_Runner"
     DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
+    GRPO_FINETUNING = "ECG_Tokenizer_GRPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1_Runner"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1_Runner"
-    
+
     def __str__(self):
         return self.value
-    
+
 class ConfigName(str, Enum):
     """Enum for different config names."""
     BERT_REPORT_CLASSIFIER = "BERT_Report_Classifier"
@@ -63,6 +65,7 @@ class ConfigName(str, Enum):
     ECG_TOKENIZER_LINEAR_PROBING = "ECG_Tokenizer_Linear_Probing"
     ECG_TOKENIZER_LLM_FINETUNING = "ECG_Tokenizer_LLM_Finetuning"
     ECG_TOKENIZER_DPO_FINETUNING = "ECG_Tokenizer_DPO_Finetuning"
+    ECG_TOKENIZER_GRPO_FINETUNING = "ECG_Tokenizer_GRPO_Finetuning"
     SIGLIP_PHASE1 = "SigLIP_Phase1"
     ECG_TEXT_STAGE1 = "ECG_Text_Stage1"
     
