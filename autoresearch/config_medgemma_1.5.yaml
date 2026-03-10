@@ -36,8 +36,8 @@ use_wandb: false
 max_train_steps: 100
 # --- END AUTORESEARCH OVERRIDES ---
 # Optimizer & scheduler
-llm_lr: 1.0e-4
-adapter_lr: 1.0e-3
+llm_lr: 2.0e-4
+adapter_lr: 2.0e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 1.0e-5
 scheduler_type: "cosine_with_warmup"
@@ -74,7 +74,7 @@ bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
 bridge_codebook_dropout: 0.0
 bridge_cross_every: 2
-instruction_dropout: 0.2
+instruction_dropout: 0.05
 use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
@@ -86,10 +86,10 @@ ecg_codebook_size: 512
 llm_input_embedding_size: 2560
 # LoRA configuration
 use_lora: true
-lora_r: 32
-lora_alpha: 64
+lora_r: 64
+lora_alpha: 128
 lora_dropout: 0.05
-lora_top_k_layers: 12
+lora_top_k_layers: 18
 lora_target_modules:
   - q_proj
   - k_proj
@@ -142,7 +142,7 @@ category_metrics:
   - "meteor"
 pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
-gradient_accumulation_steps: 16
+gradient_accumulation_steps: 8
 dataloader_pin_memory: true
 max_sequence_length: 768
 validation_snapshot_batches: 20
