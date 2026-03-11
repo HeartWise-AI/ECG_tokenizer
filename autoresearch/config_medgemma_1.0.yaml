@@ -37,7 +37,7 @@ max_train_steps: 100
 # --- END AUTORESEARCH OVERRIDES ---
 # Optimizer & scheduler
 llm_lr: 4.0e-4
-adapter_lr: 3.0e-3
+adapter_lr: 2.0e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 1.0e-5
 scheduler_type: "cosine_with_warmup"
@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.05
+num_warmup_percent: 0.02
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: j4bb0w33 (aligned with MedGemma 4b-it)
