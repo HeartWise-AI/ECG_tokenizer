@@ -106,7 +106,7 @@ train_dataset_paths:
   - "/volume/ECG_tokenizer/output/sft_hcm_train.parquet"
   - "/volume/ECG_tokenizer/output/sft_symptom_train.parquet"
   - "/volume/ECG_tokenizer/output/sft_potassium_train.parquet"
-dataset_weights: [1.0, 2.3, 7.3, 60.0]
+dataset_weights: [1.0, 1.0, 1.0, 1.0]
 validation_dataset_paths:
   - "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"
   - "/volume/ECG_tokenizer/output/sft_hcm_test.parquet"
@@ -165,7 +165,7 @@ default_generation_kwargs:
   top_p: 1.0
   top_k: 0
   no_repeat_ngram_size: 5
-  max_new_tokens: 128
+  max_new_tokens: 96
   min_new_tokens: 0
   repetition_penalty: 1.20
   force_json: false
