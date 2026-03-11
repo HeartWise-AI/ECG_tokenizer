@@ -39,7 +39,7 @@ max_train_steps: 100
 llm_lr: 4.0e-4
 adapter_lr: 2.0e-3
 llm_weight_decay: 1.0e-5
-adapter_weight_decay: 1.0e-4
+adapter_weight_decay: 5.0e-4
 scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
 factor: 0.5
@@ -86,8 +86,8 @@ ecg_codebook_size: 512
 llm_input_embedding_size: 2560
 # LoRA configuration
 use_lora: true
-lora_r: 128
-lora_alpha: 256
+lora_r: 96
+lora_alpha: 192
 lora_dropout: 0.0
 lora_top_k_layers: 24
 lora_target_modules:
