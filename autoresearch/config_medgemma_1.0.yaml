@@ -145,7 +145,7 @@ category_metrics:
   - "meteor"
 pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 4
 dataloader_pin_memory: true
 max_sequence_length: 768
 validation_snapshot_batches: 20
@@ -164,7 +164,7 @@ default_generation_kwargs:
   temperature: 0.0
   top_p: 1.0
   top_k: 0
-  no_repeat_ngram_size: 3
+  no_repeat_ngram_size: 5
   max_new_tokens: 96
   min_new_tokens: 0
   repetition_penalty: 1.20
