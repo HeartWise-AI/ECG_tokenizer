@@ -38,8 +38,8 @@ max_train_steps: 100
 # Optimizer & scheduler
 llm_lr: 4.0e-4
 adapter_lr: 2.0e-3
-llm_weight_decay: 1.0e-5
-adapter_weight_decay: 1.0e-5
+llm_weight_decay: 0.0
+adapter_weight_decay: 0.0
 scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
 factor: 0.5
@@ -147,7 +147,7 @@ pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
 gradient_accumulation_steps: 8
 dataloader_pin_memory: true
-max_sequence_length: 640
+max_sequence_length: 768
 validation_snapshot_batches: 20
 validation_snapshot_prefix: "step"
 validation_subset_size: 2000
