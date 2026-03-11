@@ -66,7 +66,7 @@ medgemma_prompt_style: true
 bridge_name: "InstructionAwareECGQFormerBridge"
 bridge_mid_dim: 768
 bridge_num_heads: 8
-bridge_dropout: 0.0
+bridge_dropout: 0.05
 bridge_num_special_tokens: 4
 num_query_tokens: 32
 bridge_qformer_layers: 6
@@ -74,7 +74,7 @@ bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
 bridge_codebook_dropout: 0.05
 bridge_cross_every: 2
-instruction_dropout: 0.0
+instruction_dropout: 0.05
 use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
