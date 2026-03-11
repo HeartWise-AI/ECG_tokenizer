@@ -89,7 +89,7 @@ use_lora: true
 lora_r: 96
 lora_alpha: 192
 lora_dropout: 0.0
-lora_top_k_layers: 18
+lora_top_k_layers: 24
 lora_target_modules:
   - q_proj
   - k_proj
@@ -121,7 +121,7 @@ category_column: "prompt_category"
 # No pattern columns (SFT datasets don't have them)
 pattern_label_columns: []
 num_workers: 24
-batch_size: 24
+batch_size: 16
 signal_path_column: "waveform_path_psa"
 ecg_waveform_length: 2500
 ecg_num_leads: 12
