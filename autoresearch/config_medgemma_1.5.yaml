@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.02
+num_warmup_percent: 0.05
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: z8wuml4t (aligned with MedGemma 1.5)
@@ -72,7 +72,7 @@ num_query_tokens: 32
 bridge_qformer_layers: 6
 bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
-bridge_codebook_dropout: 0.0
+bridge_codebook_dropout: 0.05
 bridge_cross_every: 2
 instruction_dropout: 0.05
 use_cross_attention: false
