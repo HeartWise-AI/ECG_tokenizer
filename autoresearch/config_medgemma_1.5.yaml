@@ -36,7 +36,7 @@ use_wandb: false
 max_train_steps: 100
 # --- END AUTORESEARCH OVERRIDES ---
 # Optimizer & scheduler
-llm_lr: 8.0e-4
+llm_lr: 4.0e-4
 adapter_lr: 4.0e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 1.0e-5
@@ -66,7 +66,7 @@ medgemma_prompt_style: true
 bridge_name: "InstructionAwareECGQFormerBridge"
 bridge_mid_dim: 768
 bridge_num_heads: 8
-bridge_dropout: 0.1
+bridge_dropout: 0.0
 bridge_num_special_tokens: 4
 num_query_tokens: 32
 bridge_qformer_layers: 6
