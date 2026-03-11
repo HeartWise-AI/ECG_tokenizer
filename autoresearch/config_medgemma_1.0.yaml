@@ -164,7 +164,7 @@ default_generation_kwargs:
   temperature: 0.0
   top_p: 1.0
   top_k: 0
-  no_repeat_ngram_size: 5
+  no_repeat_ngram_size: 3
   max_new_tokens: 96
   min_new_tokens: 0
   repetition_penalty: 1.20
