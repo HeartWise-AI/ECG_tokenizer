@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.10
+num_warmup_percent: 0.05
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: j4bb0w33 (aligned with MedGemma 4b-it)
