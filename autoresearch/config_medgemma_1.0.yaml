@@ -121,7 +121,7 @@ category_column: "prompt_category"
 # No pattern columns (SFT datasets don't have them)
 pattern_label_columns: []
 num_workers: 24
-batch_size: 16
+batch_size: 24
 signal_path_column: "waveform_path_psa"
 ecg_waveform_length: 2500
 ecg_num_leads: 12
