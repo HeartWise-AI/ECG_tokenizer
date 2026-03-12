@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.03
+num_warmup_percent: 0.05
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: j4bb0w33 (aligned with MedGemma 4b-it)
@@ -87,13 +87,14 @@ llm_input_embedding_size: 2560
 # LoRA configuration
 use_lora: true
 lora_r: 96
-lora_alpha: 128
+lora_alpha: 192
 lora_dropout: 0.0
-lora_top_k_layers: 20
+lora_top_k_layers: 24
 lora_target_modules:
   - q_proj
   - k_proj
   - v_proj
+  - o_proj
   - gate_proj
   - up_proj
   - down_proj
@@ -124,8 +125,6 @@ batch_size: 16
 signal_path_column: "waveform_path_psa"
 ecg_waveform_length: 2500
 ecg_num_leads: 12
-ecg_augmentation_enabled: true
-ecg_augmentation_prob: 0.5
 metrics:
   - "rouge"
   - "bleu"
