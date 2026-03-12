@@ -37,6 +37,20 @@ QT_INTERVAL_COLS = [
 QT_INTERVAL_PAIR = ('qrs_onset', 't_end')
 
 DISABLE_CATEGORY_TO_FLAGS = {
+    'interpretation': ['has_interpretation', 'has_interpretation_complex'],
+    'interpretation_complex': ['has_interpretation_complex'],
+    'json': ['has_json_interpretation'],
+    'json_interpretation': ['has_json_interpretation'],
+    'classification': ['has_classification'],
+    'category': ['has_category_prompts'],
+    'categories': ['has_category_prompts'],
+    'category_prompt': ['has_category_prompts'],
+    'category_prompts': ['has_category_prompts'],
+    'localization': ['has_localization'],
+    'urgency': ['has_urgency'],
+    'urgency_assessment': ['has_urgency'],
+    'random_finding': ['has_random_finding'],
+    'random_finding_question': ['has_random_finding'],
     'heart_rate': ['has_heart_rate'],
     'ecg_interval': ['has_heart_rate', 'has_pr_interval', 'has_qt_interval'],
     'intervals': ['has_pr_interval', 'has_qt_interval'],
@@ -53,8 +67,22 @@ DISABLE_CATEGORY_TO_FLAGS = {
 
 def _log_qa_feature_flags(flags: "QAFeatureFlags") -> None:
     enabled = []
-    if flags.has_bert_columns:
-        enabled.append("interpretation, json_interpretation, category_*, classification, localization_*, etc.")
+    if flags.has_interpretation:
+        enabled.append("interpretation")
+    if flags.has_json_interpretation:
+        enabled.append("json_interpretation")
+    if flags.has_category_prompts:
+        enabled.append("category_*")
+    if flags.has_localization:
+        enabled.append("localization_*")
+    if flags.has_classification:
+        enabled.append("classification")
+    if flags.has_interpretation_complex:
+        enabled.append("interpretation_complex")
+    if flags.has_urgency:
+        enabled.append("urgency_assessment")
+    if flags.has_random_finding:
+        enabled.append("random_finding_question")
     if flags.has_heart_rate:
         enabled.append("ecg_interval (heart rate); heart_rate_bpm in JSON")
     if flags.has_pr_interval or flags.has_qt_interval:
@@ -81,6 +109,14 @@ class QAFeatureFlags:
     has_bert_columns: bool
     has_report: bool
     has_ecg_type: bool
+    has_interpretation: bool
+    has_json_interpretation: bool
+    has_category_prompts: bool
+    has_localization: bool
+    has_classification: bool
+    has_interpretation_complex: bool
+    has_urgency: bool
+    has_random_finding: bool
     has_heart_rate: bool
     has_pr_interval: bool
     has_qt_interval: bool
@@ -102,6 +138,14 @@ class QAFeatureFlags:
         )
         has_report = any(c in cols for c in ('report', 'reports', 'diagnosis'))
         has_ecg_type = 'ecg_type' in cols
+        has_interpretation = True
+        has_json = True
+        has_category = True
+        has_localization = True
+        has_classification = True
+        has_interpretation_complex = True
+        has_urgency = True
+        has_random_finding = True
         has_hr = any(c in cols for c in HEART_RATE_COLS)
         has_pr = (
             any(c in cols for c in PR_INTERVAL_COLS)
@@ -122,6 +166,14 @@ class QAFeatureFlags:
             has_bert_columns=has_bert,
             has_report=has_report,
             has_ecg_type=has_ecg_type,
+            has_interpretation=has_interpretation,
+            has_json_interpretation=has_json,
+            has_category_prompts=has_category,
+            has_localization=has_localization,
+            has_classification=has_classification,
+            has_interpretation_complex=has_interpretation_complex,
+            has_urgency=has_urgency,
+            has_random_finding=has_random_finding,
             has_heart_rate=has_hr,
             has_pr_interval=has_pr,
             has_qt_interval=has_qt,
@@ -151,6 +203,14 @@ class QAFeatureFlags:
             has_bert_columns=overrides.get('has_bert_columns', flags.has_bert_columns),
             has_report=overrides.get('has_report', flags.has_report),
             has_ecg_type=overrides.get('has_ecg_type', flags.has_ecg_type),
+            has_interpretation=overrides.get('has_interpretation', flags.has_interpretation),
+            has_json_interpretation=overrides.get('has_json_interpretation', flags.has_json_interpretation),
+            has_category_prompts=overrides.get('has_category_prompts', flags.has_category_prompts),
+            has_localization=overrides.get('has_localization', flags.has_localization),
+            has_classification=overrides.get('has_classification', flags.has_classification),
+            has_interpretation_complex=overrides.get('has_interpretation_complex', flags.has_interpretation_complex),
+            has_urgency=overrides.get('has_urgency', flags.has_urgency),
+            has_random_finding=overrides.get('has_random_finding', flags.has_random_finding),
             has_heart_rate=overrides.get('has_heart_rate', flags.has_heart_rate),
             has_pr_interval=overrides.get('has_pr_interval', flags.has_pr_interval),
             has_qt_interval=overrides.get('has_qt_interval', flags.has_qt_interval),
@@ -694,36 +754,35 @@ class ECGPromptMaker:
         num_active_categories = len(active_categories)
         localization_findings = self.check_localization_findings(row)
 
-        interp_prompt = random.choice(self.interpretation_prompts)
-        prompts.append((interp_prompt, 'interpretation', 1.0))
+        if flags is None or flags.has_interpretation:
+            interp_prompt = random.choice(self.interpretation_prompts)
+            prompts.append((interp_prompt, 'interpretation', 1.0))
 
-        json_prompt = self._get_json_prompt(flags)
-        prompts.append((json_prompt, 'json_interpretation', 0.9))
+        if flags is None or flags.has_json_interpretation:
+            json_prompt = self._get_json_prompt(flags)
+            prompts.append((json_prompt, 'json_interpretation', 0.9))
         
         # 2. Add category-specific prompts for each active category
-        if active_categories:
-            # Sort categories by clinical priority
-            priority_order = ['INFARCT, ISCHEMIA', 'RHYTHM', 'CONDUCTION', 
-                            'CHAMBER ENLARGEMENT', 'PERICARDITIS', 'OTHER']
-            
-            sorted_categories = sorted(active_categories.keys(), 
-                                     key=lambda x: priority_order.index(x) 
-                                     if x in priority_order else 999)
-            
-            # Add prompts for each active category (up to 4 to compensate for fewer HR questions)
-            for i, category in enumerate(sorted_categories[:4]):
-                if category in self.category_specific_prompts:
-                    cat_prompt = random.choice(self.category_specific_prompts[category])
-                    # Higher weight for more critical categories
-                    weight = 0.85 if i == 0 else 0.7 if i == 1 else 0.5 if i == 2 else 0.4
-                    prompts.append((cat_prompt, f'category_{category.lower().replace(" ", "_").replace(",", "")}', weight))
-        else:
-            # If no specific findings, add a general rhythm question
-            rhythm_prompt = random.choice(self.category_specific_prompts["RHYTHM"])
-            prompts.append((rhythm_prompt, 'category_rhythm', 0.5))
+        if flags is None or flags.has_category_prompts:
+            if active_categories:
+                priority_order = ['INFARCT, ISCHEMIA', 'RHYTHM', 'CONDUCTION',
+                                'CHAMBER ENLARGEMENT', 'PERICARDITIS', 'OTHER']
+
+                sorted_categories = sorted(active_categories.keys(),
+                                         key=lambda x: priority_order.index(x)
+                                         if x in priority_order else 999)
+
+                for i, category in enumerate(sorted_categories[:4]):
+                    if category in self.category_specific_prompts:
+                        cat_prompt = random.choice(self.category_specific_prompts[category])
+                        weight = 0.85 if i == 0 else 0.7 if i == 1 else 0.5 if i == 2 else 0.4
+                        prompts.append((cat_prompt, f'category_{category.lower().replace(" ", "_").replace(",", "")}', weight))
+            else:
+                rhythm_prompt = random.choice(self.category_specific_prompts["RHYTHM"])
+                prompts.append((rhythm_prompt, 'category_rhythm', 0.5))
         
         # 3. Add localization prompts if relevant findings exist
-        if localization_findings:
+        if (flags is None or flags.has_localization) and localization_findings:
             # Add up to 2 localization prompts for different finding types
             localization_count = 0
             for finding_type, locations in localization_findings.items():
@@ -737,9 +796,10 @@ class ECGPromptMaker:
                     localization_count += 1
         
         # 4. Add classification prompt (more important for abnormal ECGs)
-        class_prompt = random.choice(self.classification_prompts)
-        class_weight = 0.8 if ecg_type == 'pathological' else 0.6 if ecg_type == 'borderline' else 0.4
-        prompts.append((class_prompt, 'classification', class_weight))
+        if flags is None or flags.has_classification:
+            class_prompt = random.choice(self.classification_prompts)
+            class_weight = 0.8 if ecg_type == 'pathological' else 0.6 if ecg_type == 'borderline' else 0.4
+            prompts.append((class_prompt, 'classification', class_weight))
         
         has_interval_data = (
             flags.has_heart_rate or flags.has_pr_interval or flags.has_qt_interval
@@ -756,7 +816,7 @@ class ECGPromptMaker:
             prompts.append((ecg_interval_prompt, 'ecg_interval', 0.8))
         
         # 6. For complex ECGs with multiple categories, add an extra focused prompt
-        if num_active_categories >= 3:
+        if (flags is None or flags.has_interpretation_complex) and num_active_categories >= 3:
             # Add another interpretation prompt focusing on complexity
             complex_prompts = [
                 "What are all the abnormalities in this complex ECG?",
@@ -766,7 +826,7 @@ class ECGPromptMaker:
             prompts.append((random.choice(complex_prompts), 'interpretation_complex', 0.9))
         
         # 5. For critical findings, add urgency assessment
-        if 'INFARCT, ISCHEMIA' in active_categories or 'RHYTHM' in active_categories:
+        if (flags is None or flags.has_urgency) and ('INFARCT, ISCHEMIA' in active_categories or 'RHYTHM' in active_categories):
             if any('Acute MI' in finding or 'ST elevation' in finding 
                    for findings in active_categories.values() for finding in findings):
                 urgency_prompts = [
@@ -780,8 +840,7 @@ class ECGPromptMaker:
         # Use deterministic selection based on ECG identifier for reproducibility
         ecg_id = str(row.get('waveform_name', row.get('npy_id', '')))
         
-        if ecg_id:
-            # Create a deterministic hash-based selection
+        if (flags is None or flags.has_random_finding) and ecg_id:
             import hashlib
             hash_val = int(hashlib.md5((ecg_id + 'random_finding').encode()).hexdigest()[:8], 16)
             
@@ -792,20 +851,24 @@ class ECGPromptMaker:
                 selected_question = self.random_finding_prompts[question_idx]
                 prompts.append((selected_question, 'random_finding_question', 0.85))
         
-        is_mhi = (
-            (row.get('dataset') == 'mhi' if 'dataset' in row.index else False)
-            or (row.get('dataset_source') == 'mhi' if 'dataset_source' in row.index else False)
+        dataset_values = {
+            str(row.get(col)).strip().lower()
+            for col in ('dataset', 'dataset_source')
+            if col in row.index and pd.notna(row.get(col))
+        }
+        is_mhi_like = (
+            bool({'mhi', 'echonext'} & dataset_values)
             or ('RestingECG_OriginalRestingECGMeasurements_VentricularRate' in row.index)
         )
-        if is_mhi and (flags is None or flags.has_shd) and 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')) and not prompt_exists('structural_heart_disease'):
+        if is_mhi_like and (flags is None or flags.has_shd) and 'echonext_shd' in row.index and pd.notna(row.get('echonext_shd')) and not prompt_exists('structural_heart_disease'):
             shd_prompt = random.choice(self.structural_heart_disease_prompts)
             prompts.append((shd_prompt, 'structural_heart_disease', 0.99))
 
-        if is_mhi and (flags is None or flags.has_lvef) and 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')) and not prompt_exists('lvef'):
+        if is_mhi_like and (flags is None or flags.has_lvef) and 'deepecho_Visually_Estimated_EF' in row.index and pd.notna(row.get('deepecho_Visually_Estimated_EF')) and not prompt_exists('lvef'):
             lvef_prompt = random.choice(self.lvef_prompts)
             prompts.append((lvef_prompt, 'lvef', 0.97))
 
-        if is_mhi and (flags is None or flags.has_acs) and 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')) and not prompt_exists('acs_severity'):
+        if is_mhi_like and (flags is None or flags.has_acs) and 'acs_condition_severity' in row.index and pd.notna(row.get('acs_condition_severity')) and not prompt_exists('acs_severity'):
             acs_prompt = random.choice(self.acs_severity_prompts)
             prompts.append((acs_prompt, 'acs_severity', 0.98))
             from utils.constants import ACS_ACUTE_CONDITIONS
@@ -815,7 +878,7 @@ class ECGPromptMaker:
                 culprit_prompt = random.choice(self.culprit_artery_prompts)
                 prompts.append((culprit_prompt, 'culprit_artery', 0.96))
 
-        if is_mhi and (flags is None or flags.has_afib_risk) and 'afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and 'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y')) and not prompt_exists('afib_risk'):
+        if is_mhi_like and (flags is None or flags.has_afib_risk) and 'afib_label_2y' in row.index and pd.notna(row.get('afib_label_2y')) and 'afib_label_5y' in row.index and pd.notna(row.get('afib_label_5y')) and not prompt_exists('afib_risk'):
             afib_risk_prompt = random.choice(self.afib_risk_prompts)
             prompts.append((afib_risk_prompt, 'afib_risk', 0.96))
 

@@ -40,12 +40,17 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --step [preprocess|bert|analysis|efficientnet|qa|llm|all]  Choose which step to run (default: all)"
+    echo "  --qa-disable-categories LIST"
+    echo "                           Comma-separated QA prompt categories to disable"
+    echo "  --qa-max-normal-percentage FLOAT"
+    echo "                           Override QA normal-ECG downsampling cap"
+    echo "  --step [preprocess|bert|analysis|efficientnet|qa|llm|all|preprocess_qa_llm]  Choose which step to run (default: all)"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
     echo "  source run_pipeline.bash --input_file /path/to/data.parquet"
     echo "  source run_pipeline.bash --step efficientnet --input_file /path/to/preprocessed.parquet"
+    echo "  source run_pipeline.bash --step preprocess_qa_llm --input_file /path/to/data.parquet"
     return 0
 }
 
@@ -87,6 +92,7 @@ bert_checkpoint=$(get_param "bert_checkpoint")
 tokenizer_checkpoint=$(get_param "tokenizer_checkpoint")
 bert_base_config=$(get_param "bert_base_config")
 qa_disable_categories=$(get_param "qa_disable_categories")
+qa_max_normal_percentage=$(get_param "qa_max_normal_percentage")
 bert_output=""
 run_step="all"
 use_preprocessing=true
@@ -140,6 +146,26 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -n $2 && ! $2 =~ ^-- ]]; then
                 bert_base_config="$2"
                 shift 2
+            fi
+            ;;
+        --qa-disable-categories)
+            if [[ -n $2 && ! $2 =~ ^-- ]]; then
+                qa_disable_categories="$2"
+                shift 2
+            else
+                echo "Error: --qa-disable-categories requires a non-empty argument."
+                usage
+                return 1
+            fi
+            ;;
+        --qa-max-normal-percentage)
+            if [[ -n $2 && ! $2 =~ ^-- ]]; then
+                qa_max_normal_percentage="$2"
+                shift 2
+            else
+                echo "Error: --qa-max-normal-percentage requires a non-empty argument."
+                usage
+                return 1
             fi
             ;;
         --step)
@@ -209,6 +235,7 @@ qa_output=${output_dir}/preprocessed_qa.parquet
 # =============================================================================
 
 build_args() {
+    local step_override="${1:-$run_step}"
     local args=""
     
     args="$args --input $input_parquet"
@@ -223,7 +250,7 @@ build_args() {
     args="$args --ecg-signals-path $ecg_signals_path"
     args="$args --preprocessing-folder $preprocessing_folder"
     args="$args --preprocessing-n-workers $preprocessing_n_workers"
-    args="$args --step $run_step"
+    args="$args --step $step_override"
     args="$args --bert-output $bert_output"
     
     if [[ -n $dataset_name ]]; then
@@ -249,6 +276,31 @@ fi
     echo "$args"
 }
 
+run_qa_generation() {
+    local qa_input="$1"
+    local qa_cmd=(
+        python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py"
+        --dataset custom
+        --custom_parquet_path "$qa_input"
+        --max_prompts_per_ecg 4
+        --prompt_workers 1
+        --answer_workers 1
+        --output_dir "$output_dir"
+    )
+
+    if [[ -n "$qa_max_normal_percentage" ]]; then
+        qa_cmd+=(--max_normal_percentage "$qa_max_normal_percentage")
+    fi
+    if [[ -n "$qa_disable_categories" ]]; then
+        qa_cmd+=(--disable_categories "$qa_disable_categories")
+    fi
+
+    local qa_cmd_str
+    printf -v qa_cmd_str '%q ' "${qa_cmd[@]}"
+    echo "[RUN] ${qa_cmd_str}"
+    "${qa_cmd[@]}"
+}
+
 run_pipeline() {    
     echo ""
     echo "============================================================"
@@ -270,7 +322,7 @@ run_pipeline() {
     echo "------------------------------------------------------------"
     echo "Required Input Columns:"
     echo "  - ecg_path: ECG signal path"
-    echo "  - reports: Text reports"
+    echo "  - reports: Text reports (placeholders are acceptable for QA-only SHD/LVEF runs)"
     echo "============================================================"
     echo ""
     
@@ -350,14 +402,49 @@ run_pipeline() {
             python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         qa)
-            if [[ ! -f "$bert_output" ]]; then
-                echo "Error: BERT output not found at $bert_output for QA step"
+            mkdir -p "$output_dir"
+            qa_input=""
+            if [[ -n "$input_file" ]]; then
+                if [[ ! -f "$input_parquet" ]]; then
+                    echo "Error: Explicit QA input parquet not found: $input_parquet"
+                    return 1
+                fi
+                if [[ "$input_parquet" != *.parquet ]]; then
+                    echo "Error: QA step expects a parquet file when using --input_file directly: $input_parquet"
+                    return 1
+                fi
+                echo "[INFO] Using explicit QA input parquet: $input_parquet"
+                qa_input="$input_parquet"
+            elif [[ -f "$bert_output" ]]; then
+                echo "[INFO] Using BERT output parquet for QA step: $bert_output"
+                qa_input="$bert_output"
+            else
+                echo "Error: QA step requires either an explicit --input_file parquet or BERT output at $bert_output"
                 return 1
             fi
-            qa_disable_arg=()
-            [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
+            run_qa_generation "$qa_input"
+            ;;
+        preprocess_qa_llm)
+            mkdir -p "$output_dir"
+            preprocess_args=$(build_args preprocess)
+            echo "[RUN] python $python_script $preprocess_args"
+            python "$python_script" $preprocess_args || return 1
+
+            preprocessed_output="${output_dir}/preprocessed.parquet"
+            if [[ ! -f "$preprocessed_output" ]]; then
+                echo "Error: Preprocessing output not found at $preprocessed_output"
+                return 1
+            fi
+
+            run_qa_generation "$preprocessed_output"
+
+            if [[ ! -f "$qa_output" ]]; then
+                echo "Error: QA output not found at $qa_output after preprocess_qa_llm"
+                return 1
+            fi
+
+            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
+            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
             ;;
         llm)
             if [[ ! -f "$qa_output" ]]; then
