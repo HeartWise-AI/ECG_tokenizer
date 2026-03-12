@@ -125,8 +125,6 @@ batch_size: 16
 signal_path_column: "waveform_path_psa"
 ecg_waveform_length: 2500
 ecg_num_leads: 12
-ecg_augmentation_enabled: true
-ecg_augmentation_prob: 0.5
 metrics:
   - "rouge"
   - "bleu"
@@ -148,6 +146,7 @@ category_metrics:
 pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
 gradient_accumulation_steps: 8
+max_grad_norm: 0.5
 dataloader_pin_memory: true
 max_sequence_length: 768
 validation_snapshot_batches: 20
