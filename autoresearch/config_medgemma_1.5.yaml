@@ -72,9 +72,9 @@ num_query_tokens: 32
 bridge_qformer_layers: 6
 bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
-bridge_codebook_dropout: 0.10
+bridge_codebook_dropout: 0.05
 bridge_cross_every: 2
-instruction_dropout: 0.05
+instruction_dropout: 0.10
 use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
