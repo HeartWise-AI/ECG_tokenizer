@@ -40,7 +40,7 @@ llm_lr: 4.0e-4
 adapter_lr: 1.5e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 5.0e-5
-scheduler_type: "linear"
+scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
 factor: 0.5
 optimizer: "AdamW"
@@ -72,7 +72,7 @@ num_query_tokens: 32
 bridge_qformer_layers: 6
 bridge_text_hidden_size: 768
 bridge_bias_last_codebook: 0.5
-bridge_codebook_dropout: 0.05
+bridge_codebook_dropout: 0.0
 bridge_cross_every: 2
 instruction_dropout: 0.05
 use_cross_attention: false
