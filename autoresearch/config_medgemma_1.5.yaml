@@ -88,13 +88,12 @@ llm_input_embedding_size: 2560
 use_lora: true
 lora_r: 96
 lora_alpha: 192
-lora_dropout: 0.02
+lora_dropout: 0.0
 lora_top_k_layers: 24
 lora_target_modules:
   - q_proj
   - k_proj
   - v_proj
-  - o_proj
   - gate_proj
   - up_proj
   - down_proj
