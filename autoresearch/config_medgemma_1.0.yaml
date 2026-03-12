@@ -98,7 +98,7 @@ lora_target_modules:
   - gate_proj
   - up_proj
   - down_proj
-lora_bias: "none"
+lora_bias: "all"
 # Multi-dataset: balanced QA + SFT tasks (HCM, symptom, potassium)
 # Weights chosen to equalize effective samples across datasets
 train_dataset_paths:
@@ -168,8 +168,8 @@ default_generation_kwargs:
   max_new_tokens: 96
   min_new_tokens: 0
   repetition_penalty: 1.20
-  force_json: true
-  min_tokens_guard: 0
+  force_json: false
+  min_tokens_guard: 12
 use_cf_eval: false
 cf_eval_dataset_path: "ecg_cf_eval/test_cf.json"
 cf_eval_interval: 500
