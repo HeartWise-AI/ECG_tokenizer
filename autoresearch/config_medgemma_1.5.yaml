@@ -37,7 +37,7 @@ max_train_steps: 100
 # --- END AUTORESEARCH OVERRIDES ---
 # Optimizer & scheduler
 llm_lr: 4.0e-4
-adapter_lr: 1.2e-3
+adapter_lr: 1.8e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 1.0e-4
 scheduler_type: "cosine_with_warmup"
