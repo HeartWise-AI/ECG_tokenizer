@@ -88,7 +88,7 @@ llm_input_embedding_size: 2560
 use_lora: true
 lora_r: 96
 lora_alpha: 192
-lora_dropout: 0.0
+lora_dropout: 0.02
 lora_top_k_layers: 24
 lora_target_modules:
   - q_proj
@@ -98,7 +98,7 @@ lora_target_modules:
   - gate_proj
   - up_proj
   - down_proj
-lora_bias: "all"
+lora_bias: "none"
 # Multi-dataset: balanced QA + SFT tasks (HCM, symptom, potassium)
 # Weights chosen to equalize effective samples across datasets
 train_dataset_paths:
