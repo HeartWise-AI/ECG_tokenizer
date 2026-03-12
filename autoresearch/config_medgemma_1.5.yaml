@@ -39,7 +39,7 @@ max_train_steps: 100
 llm_lr: 4.0e-4
 adapter_lr: 2.0e-3
 llm_weight_decay: 1.0e-5
-adapter_weight_decay: 2.0e-4
+adapter_weight_decay: 1.0e-4
 scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
 factor: 0.5
@@ -168,8 +168,8 @@ default_generation_kwargs:
   max_new_tokens: 96
   min_new_tokens: 0
   repetition_penalty: 1.20
-  force_json: false
-  min_tokens_guard: 12
+  force_json: true
+  min_tokens_guard: 0
 use_cf_eval: false
 cf_eval_dataset_path: "ecg_cf_eval/test_cf.json"
 cf_eval_interval: 500
