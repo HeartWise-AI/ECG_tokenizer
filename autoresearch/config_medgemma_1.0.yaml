@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.05
+num_warmup_percent: 0.07
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: j4bb0w33 (aligned with MedGemma 4b-it)
@@ -146,7 +146,6 @@ category_metrics:
 pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
 gradient_accumulation_steps: 8
-max_grad_norm: 0.5
 dataloader_pin_memory: true
 max_sequence_length: 768
 validation_snapshot_batches: 20
