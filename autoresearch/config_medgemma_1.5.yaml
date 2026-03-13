@@ -57,7 +57,7 @@ decoder_name: "MedGemma_Decoder"
 tokenizer_name: "google/medgemma-1.5-4b-it"
 huggingface_model_name: "google/medgemma-1.5-4b-it"
 use_auto_processor: false
-max_token_length: 768
+max_token_length: 704
 num_ecg_tokens: 0
 instruct_mode: true
 prefix_tuning: false
