@@ -39,7 +39,7 @@ max_train_steps: 100
 llm_lr: 4.0e-4
 adapter_lr: 1.5e-3
 llm_weight_decay: 1.0e-5
-adapter_weight_decay: 0.0
+adapter_weight_decay: 5.0e-5
 scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
 factor: 0.5
@@ -165,7 +165,7 @@ default_generation_kwargs:
   top_p: 1.0
   top_k: 0
   no_repeat_ngram_size: 5
-  max_new_tokens: 48
+  max_new_tokens: 56
   min_new_tokens: 0
   repetition_penalty: 1.15
   force_json: false
