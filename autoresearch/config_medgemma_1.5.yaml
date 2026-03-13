@@ -46,7 +46,7 @@ factor: 0.5
 optimizer: "AdamW"
 step_size: 1
 gamma: 0.8
-num_warmup_percent: 0.05
+num_warmup_percent: 0.01
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Stage-1: z8wuml4t (aligned with MedGemma 1.5)
@@ -167,7 +167,7 @@ default_generation_kwargs:
   no_repeat_ngram_size: 5
   max_new_tokens: 64
   min_new_tokens: 0
-  repetition_penalty: 1.30
+  repetition_penalty: 1.20
   force_json: false
   min_tokens_guard: 12
 use_cf_eval: false
