@@ -37,7 +37,7 @@ max_train_steps: 100
 # --- END AUTORESEARCH OVERRIDES ---
 # Optimizer & scheduler
 llm_lr: 4.0e-4
-adapter_lr: 2.0e-3
+adapter_lr: 1.5e-3
 llm_weight_decay: 1.0e-5
 adapter_weight_decay: 5.0e-5
 scheduler_type: "cosine_with_warmup"
@@ -106,7 +106,7 @@ train_dataset_paths:
   - "/volume/ECG_tokenizer/output/sft_hcm_train.parquet"
   - "/volume/ECG_tokenizer/output/sft_symptom_train.parquet"
   - "/volume/ECG_tokenizer/output/sft_potassium_train.parquet"
-dataset_weights: [1.0, 1.0, 1.0, 1.0]
+dataset_weights: [1.0, 2.3, 7.3, 60.0]
 validation_dataset_paths:
   - "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"
   - "/volume/ECG_tokenizer/output/sft_hcm_test.parquet"
