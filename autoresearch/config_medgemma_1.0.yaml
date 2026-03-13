@@ -143,7 +143,7 @@ category_metrics:
   - "rouge"
   - "bleu"
   - "meteor"
-pattern_loss_weight: 0.1
+pattern_loss_weight: 0
 pattern_bce_pos_weight: 1.0
 gradient_accumulation_steps: 8
 dataloader_pin_memory: true
@@ -167,7 +167,7 @@ default_generation_kwargs:
   no_repeat_ngram_size: 5
   max_new_tokens: 64
   min_new_tokens: 0
-  repetition_penalty: 1.20
+  repetition_penalty: 1.30
   force_json: false
   min_tokens_guard: 12
 use_cf_eval: false
