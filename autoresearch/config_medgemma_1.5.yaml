@@ -38,7 +38,7 @@ max_train_steps: 100
 # Optimizer & scheduler
 llm_lr: 4.0e-4
 adapter_lr: 1.5e-3
-llm_weight_decay: 1.0e-5
+llm_weight_decay: 0.0
 adapter_weight_decay: 5.0e-5
 scheduler_type: "cosine_with_warmup"
 lr_step_period: 1
@@ -57,7 +57,7 @@ decoder_name: "MedGemma_Decoder"
 tokenizer_name: "google/medgemma-1.5-4b-it"
 huggingface_model_name: "google/medgemma-1.5-4b-it"
 use_auto_processor: false
-max_token_length: 704
+max_token_length: 640
 num_ecg_tokens: 0
 instruct_mode: true
 prefix_tuning: false
