@@ -164,10 +164,10 @@ default_generation_kwargs:
   temperature: 0.0
   top_p: 1.0
   top_k: 0
-  no_repeat_ngram_size: 5
+  no_repeat_ngram_size: 6
   max_new_tokens: 48
   min_new_tokens: 0
-  repetition_penalty: 1.10
+  repetition_penalty: 1.15
   force_json: false
   min_tokens_guard: 12
 use_cf_eval: false
