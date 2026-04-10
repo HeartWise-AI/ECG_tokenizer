@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import transformers
 from typing import Optional, Dict, Any, Union, cast, Tuple
 from models.local_residual_vq import ResidualVQ
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
@@ -11,6 +12,15 @@ import math
 # from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+
+if not hasattr(transformers, "HybridCache") and hasattr(transformers, "DynamicCache"):
+    class _CompatHybridCache(transformers.DynamicCache):
+        # PEFT imports HybridCache from transformers, but some transformers builds
+        # expose DynamicCache/EncoderDecoderCache without exporting HybridCache.
+        def __init__(self, config=None, *args, **kwargs):
+            super().__init__(config=config)
+
+    transformers.HybridCache = _CompatHybridCache
 
 try:
     from peft import LoraConfig, get_peft_model, TaskType
