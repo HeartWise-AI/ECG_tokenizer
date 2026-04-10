@@ -26,3 +26,4 @@ tmp/
 classical_baseline/output/
 hooks/
 *.npy
+.claude/
