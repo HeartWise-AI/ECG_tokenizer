@@ -9,21 +9,18 @@ fully green before any Phase 0+ experiment fires. The champion iteration loop
 exits early with `⚠ BLOCKED: Phase -1 incomplete` if any `-1.x` item is
 unchecked.
 
-## ⚠ Must be filled in before the loop fires
+## Loop parameters (LOCKED)
 
-- **`TRAINING_BUDGET`**: TBD — the user's message was cut off ("train maybe
-  for thr..."). Candidates:
-  - `num_epochs: 3` (3 epochs of the 400k weighted train set ≈ several hours
-    per run on 2× H100)
-  - `max_train_hours: 3`
-  - `max_train_steps: 3000`
-  - something else
-  Until this is set, **do not run experiments 1+**. Experiment 0 (baseline
-  recomputation) is safe to run regardless.
-
-- **`GPUS`**: which GPU indices can this loop use? Default assumption below
-  is `0,1`. Update before launch.
-
+- **`TRAINING_BUDGET`**: `num_epochs: 3`. Every training run (Phase -1.4 and
+  every Phase 1+ experiment) trains for 3 epochs warm-starting from the
+  active reference checkpoint.
+- **`GPUS`**: `0,1` — before each run, the loop checks
+  `nvidia-smi --query-gpu=index,memory.used --format=csv,noheader` and uses
+  whichever subset of `{0,1}` has <5GB occupied. If both are busy, stop with
+  `⚠ GPUS BUSY` — do not kill other jobs.
+- **Scope**: **Tier A only** (the 18 `mhi_ecg` HEARTS tasks). Tier B
+  (shhs_remote long-duration ECG) is dropped for this run — the sliding-window
+  adapter work is parked for a follow-up branch.
 - **Composite weights**: inherit from `autoresearch/prompt.md`:
   `composite = -0.3*loss + 0.25*rougeL + 0.15*meteor + 0.15*bleu4 + 0.15*bertscore_f1`.
   Confirm this is still the right rollup for a fine-tune scenario — a
@@ -45,29 +42,20 @@ and **Phase 2 (frozen test fixtures)** before this phase can run. If it
 hasn't, stop with `⚠ BLOCKED: HEARTS phases 0–2 incomplete` and point the
 user at the HEARTS loop.
 
-### Scope decision — which HEARTS tasks is the model in-scope for?
+### Scope (LOCKED to Tier A)
 
-The ECG_tokenizer+MedGemma model speaks **12-lead 10s ECG** as its
-non-text modality. HEARTS has 110 tasks across 16 modalities (CGM, EEG,
-audio, gaze, EMG, accelerometer, ECG, …). A single model cannot meaningfully
-do them all without per-modality tokenizers.
+Scope was decided up front: **Tier A only** — the 18 `mhi_ecg` HEARTS tasks
+(interpretation, json_interpretation, classification, category_rhythm,
+category_conduction, category_ischemia, category_other,
+localization_st_elevation, localization_q_wave, localization_t_wave,
+heart_rate, qrs_axis, age_gender, afib_risk, lvef, acs_severity,
+culprit_artery, structural_heart_disease).
 
-- [ ] **-1.0 Write `ralph/HEARTS_SCOPE.md`** defining scope tiers:
-  - **Tier A — native** (ECG modality, 12-lead feasible): the 18 new
-    `mhi_ecg` HEARTS tasks (interpretation, classification, localization,
-    LVEF, AFib risk, ACS, culprit artery, SHD, rhythm/conduction/ischemia
-    categories, heart_rate, qrs_axis, age_gender, json_interpretation).
-  - **Tier B — adapted** (long-duration single-lead ECG via sliding-window
-    adapter): `shhs_remote/af_classification`,
-    `shhs_remote/cvd_death_prediction`, `shhs_remote/stroke_prediction`,
-    `shhs_remote/smoker_classification`, `shhs_remote/bmi_comparison`, the
-    three `time_irrv_*` tasks. Requires the window adapter from the HEARTS
-    Phase 5 stretch items.
-  - **Tier C — out-of-scope** (non-ECG modalities): everything else —
-    CGM, EEG, EOG, audio, gaze, EMG, PPG-only, accelerometer. These are
-    NOT trained nor evaluated in this phase. Document the reason.
-  - User must confirm Tier A + Tier B scope before proceeding. If Tier B is
-    dropped, adjust experiments accordingly.
+Tier B (long-duration ECG from `shhs_remote`) is explicitly dropped — the
+sliding-window adapter is not being built in this loop.
+
+Tier C (non-ECG modalities: CGM, EEG, audio, gaze, EMG, accelerometer, PPG)
+is out of scope — the model has no tokenizer for these modalities.
 
 ### Training data assembly
 
@@ -75,36 +63,34 @@ do them all without per-modality tokenizers.
   - For each Tier A task: pull the corresponding rows from the existing QA
     parquets (`output/combined_train_qa_m200k_h200k.parquet`) that match
     the `prompt_category` of the task.
-  - For each Tier B task (if in scope): generate prompts on the fly from the
-    HEARTS training data (not the test fixtures) using the sliding-window
-    adapter. Save a new parquet per task to
-    `output/hearts_training/{task}.parquet`.
-  - Merge all into one weighted parquet `output/hearts_multitask_train.parquet`
-    with a `task_id` column and a category distribution matching roughly
+  - Merge all tasks into one parquet `output/hearts_multitask_train.parquet`
+    with a `task_id` column and a category distribution targeting roughly
     equal per-task sampling (inverse-frequency weights).
-  - Acceptance: parquet row count ≥ 100k, all task_ids represented.
+  - Acceptance: parquet row count ≥ 100k, all 18 Tier A task_ids represented.
 
 - [ ] **-1.2 Build HEARTS validation parquet**
-  - Same tasks, but drawn from `output/combined_test_qa_m5k_h5k.parquet` for
-    Tier A and from held-out HEARTS samples for Tier B. **Must be disjoint
-    from both the training parquet AND the HEARTS frozen test fixtures.**
+  - Same 18 Tier A tasks, drawn from `output/combined_test_qa_m5k_h5k.parquet`.
+    **Must be disjoint from the training parquet AND from the HEARTS frozen
+    test fixtures built in the HEARTS Phase 2 loop.**
   - Save to `output/hearts_multitask_val.parquet`.
 
 ### Training run
 
 - [ ] **-1.3 Create `config/llm_finetuning/medgemma/champion_hearts_multitask.yaml`**
-  - Base: the champion config.
+  - Base: the champion config
+    (`e4dw86nh_20251220-232839_BEST_QFORMER_8CB.yaml.yaml`).
   - Changes:
     - `train_dataset_path: output/hearts_multitask_train.parquet`
     - `validation_dataset_path: output/hearts_multitask_val.parquet`
     - `resume_from_checkpoint: <champion best_model.pt>`
-    - `num_epochs: <TRAINING_BUDGET>` (still TBD from user — see top of file)
-    - `use_wandb: true`, run name `champion_hearts_multitask_e<N>`
-    - Larger `max_token_length` if Tier B tasks need longer prompts.
+    - `num_epochs: 3`
+    - `use_wandb: true`, run name `champion_hearts_multitask`
   - Acceptance: config loads, dry-run data path validation passes.
 
 - [ ] **-1.4 Run training**
-  - Launch: `bash scripts/runner.sh --base_config config/llm_finetuning/medgemma/champion_hearts_multitask.yaml --selected_gpus <GPUS> --use_wandb true --run_mode train --instruct_mode true`
+  - Before launch: check GPU memory. Use whichever of `{0,1}` has <5GB
+    occupied. If both are busy, stop with `⚠ GPUS BUSY`.
+  - Launch: `bash scripts/runner.sh --base_config config/llm_finetuning/medgemma/champion_hearts_multitask.yaml --selected_gpus <free subset of 0,1> --use_wandb true --run_mode train --instruct_mode true`
   - Redirect logs to `ralph/hearts_multitask/train.log`.
   - Save final checkpoint path to `ralph/hearts_multitask/checkpoint_path.txt`.
   - Acceptance: training completes without divergence; val loss monotone or
@@ -126,20 +112,15 @@ do them all without per-modality tokenizers.
   - Results JSONs land in `/volume/HEARTS/results/`. Symlink or copy them
     into `ralph/hearts_multitask/results/` for record-keeping.
 
-- [ ] **-1.7 (Optional, Tier B) Run `shhs_remote` ECG tasks**
-  - Only if Tier B was kept in `-1.0` AND the HEARTS Phase 5.1 window
-    adapter exists. Same command pattern, different task names.
-
 ### Gate decision
 
 - [ ] **-1.8 Compute HEARTS-capable baseline**
-  - Aggregate per-task metrics from `-1.6` (and `-1.7`) into
-    `ralph/HEARTS_BASELINE.json`. Structure mirrors `CHAMPION_BASELINE.json`
-    but adds a `per_hearts_task` section keyed by `(dataset, task)`.
-  - Compare against Tier A's pre-training performance (can be reconstructed
-    by running the champion checkpoint through the same HEARTS harness
-    BEFORE the multitask fine-tune — do this in a sub-step and store as
-    `ralph/HEARTS_CHAMPION_PRE.json`).
+  - Aggregate per-task metrics from `-1.6` into `ralph/HEARTS_BASELINE.json`.
+    Structure mirrors `CHAMPION_BASELINE.json` but adds a `per_hearts_task`
+    section keyed by `(mhi_ecg, task)`.
+  - Compare against Tier A's pre-training performance — reconstruct by
+    running the champion checkpoint through the same HEARTS harness BEFORE
+    the multitask fine-tune and store as `ralph/HEARTS_CHAMPION_PRE.json`.
   - **Gating criterion to unlock Phase 0+:** average Tier A ROUGE-L (or
     accuracy for classification tasks) must improve by ≥ 3 absolute points
     vs `HEARTS_CHAMPION_PRE.json`, AND no Tier A task regresses by > 2
