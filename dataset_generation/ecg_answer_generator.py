@@ -89,6 +89,93 @@ class ECGAnswerGenerator:
         self.limit_labels = set(limit_config.get('limit', []))
         self.qa_feature_flags = qa_feature_flags
 
+        # Load answer variations for diversification
+        self._answer_variations = self._load_answer_variations()
+
+    @staticmethod
+    def _load_answer_variations() -> Dict[str, List[str]]:
+        """Load answer phrasing variations from JSON if available."""
+        variations_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "answer_variations.json"
+        )
+        if os.path.exists(variations_path):
+            import json as _json
+            with open(variations_path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            return data
+        return {}
+
+    def _diversify_answer(self, answer: str) -> str:
+        """Post-process an answer to replace repetitive prefixes with diverse variations."""
+        import random as _rng
+        if not self._answer_variations:
+            return answer
+
+        # Replace "Yes - " prefix with a random variation
+        if answer.startswith("Yes - "):
+            variations = self._answer_variations.get("yes_prefix", ["Yes -"])
+            prefix = _rng.choice(variations)
+            # Ensure spacing is consistent
+            if not prefix.endswith(" "):
+                prefix += " "
+            answer = prefix + answer[6:]  # len("Yes - ") == 6
+
+        # Replace "No - " prefix with a random variation
+        elif answer.startswith("No - "):
+            variations = self._answer_variations.get("no_prefix", ["No -"])
+            prefix = _rng.choice(variations)
+            if not prefix.endswith(" "):
+                prefix += " "
+            answer = prefix + answer[5:]  # len("No - ") == 5
+
+        # Replace classification answer patterns
+        elif answer.startswith("Normal ECG;"):
+            variations = self._answer_variations.get("normal_ecg", [])
+            if variations:
+                # Some variations are full replacements, some are prefix-style
+                rest = answer[len("Normal ECG;"):].strip()
+                if rest and rest != "No significant abnormalities detected":
+                    # Keep the specific findings, just vary the prefix
+                    new_prefix = _rng.choice(variations)
+                    if ";" in new_prefix:
+                        answer = new_prefix.split(";")[0] + "; " + rest
+                    else:
+                        answer = new_prefix + "; " + rest
+                else:
+                    answer = _rng.choice(variations)
+
+        elif answer.startswith("Abnormal ECG;"):
+            variations = self._answer_variations.get("abnormal_ecg", [])
+            if variations:
+                rest = answer[len("Abnormal ECG;"):].strip()
+                # Strip redundant sub-prefix like "Pathological findings:" since
+                # the new prefix template already ends with a colon/intro
+                for sub in ("Pathological findings:", "Minor findings:", "Significant findings:"):
+                    if rest.startswith(sub):
+                        rest = rest[len(sub):].strip()
+                        break
+                new_prefix = _rng.choice(variations)
+                if rest:
+                    answer = new_prefix + " " + rest
+                else:
+                    answer = new_prefix
+
+        elif answer.startswith("Borderline ECG;"):
+            variations = self._answer_variations.get("borderline_ecg", [])
+            if variations:
+                rest = answer[len("Borderline ECG;"):].strip()
+                for sub in ("Minor findings:", "Borderline findings:", "Slight findings:"):
+                    if rest.startswith(sub):
+                        rest = rest[len(sub):].strip()
+                        break
+                new_prefix = _rng.choice(variations)
+                if rest:
+                    answer = new_prefix + " " + rest
+                else:
+                    answer = new_prefix
+
+        return answer
+
     def get_active_findings(self, row: pd.Series) -> Dict[str, List[str]]:
         """
         Extract active findings from the row organized by category.
@@ -2546,9 +2633,9 @@ class ECGAnswerGenerator:
             if is_interpretation or asks_acute_mi:
                 # Avoid duplicating prefix if already present
                 if not base_answer.startswith('*** CONSIDER ACUTE') and not base_answer.startswith('*** ACUTE STEMI'):
-                    return acute_mi_prefix + base_answer
+                    return acute_mi_prefix + self._diversify_answer(base_answer)
 
-        return base_answer
+        return self._diversify_answer(base_answer)
     
     def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """

@@ -1,0 +1,28 @@
+{
+  "overall_score": 0.7682142671053416,
+  "category_aggregates": {
+    "json_interpretation": {
+      "count": 9596,
+      "mean_score": 0.7682142671053416,
+      "std_score": 0.19435795501528022,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "heart_rate_bpm": {
+          "count": 9579,
+          "mae": 3.345129971813342,
+          "mae_std": 10.149457300076817,
+          "pearson": 0.8536681141237488,
+          "spearman": 0.8785876425829953,
+          "icc": 0.849378005335808
+        }
+      }
+    }
+  },
+  "total_examples": 9596,
+  "metadata": {
+    "json_path": "/volume/ECG_tokenizer/analysis/ssn24jkm/inference_json_interp_merged.csv",
+    "json_basename": "inference_json_interp_merged.csv",
+    "run_folder": "ssn24jkm"
+  }
+}

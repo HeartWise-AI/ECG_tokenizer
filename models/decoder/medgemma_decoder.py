@@ -166,6 +166,10 @@ class MedGemmaDecoder(nn.Module):
         self.pattern_loss_weight = float(unused_kwargs.pop("pattern_loss_weight", 0.3))
         if self.pattern_loss_weight < 0:
             self.pattern_loss_weight = 0.0
+        # LVEF soft-decoding loss configuration
+        self.lvef_loss_weight = float(unused_kwargs.pop("lvef_loss_weight", 0.0))
+        self._digit_token_ids: Optional[list[int]] = None
+        self._pct_token_id: Optional[int] = None
         # MedGemma's HF generate() misbehaves for batch>1 when using inputs_embeds; default to micro-batch=1
         # for the generation step (encoding stays batched). Can be overridden via config kwarg.
         self.generation_microbatch_size = int(unused_kwargs.pop("generation_microbatch_size", 1))
@@ -1701,6 +1705,96 @@ class MedGemmaDecoder(nn.Module):
         return embeddings, None
 
     # ------------------------------------------------------------------
+    # LVEF soft-decoding loss
+    # ------------------------------------------------------------------
+    def _ensure_digit_token_ids(self):
+        """Build digit-to-token-id mapping from the tokenizer. Called once lazily."""
+        if self._digit_token_ids is not None:
+            return
+        self._digit_token_ids = []
+        for d in range(10):
+            ids = self.tokenizer.encode(str(d), add_special_tokens=False)
+            assert len(ids) == 1, f"Digit {d} encodes to multiple tokens: {ids}"
+            self._digit_token_ids.append(ids[0])
+        pct_ids = self.tokenizer.encode('%', add_special_tokens=False)
+        self._pct_token_id = pct_ids[0] if pct_ids else None
+
+    def _compute_lvef_soft_loss(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        lvef_gt: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        """
+        Compute differentiable Huber loss between soft-decoded LVEF and ground truth.
+
+        For each LVEF sample: find '%' in labels, extract logits at the two
+        preceding digit positions, softmax over digit token IDs, compute expected
+        value (tens*10 + units), and Huber loss vs ground truth.
+        """
+        self._ensure_digit_token_ids()
+
+        device = logits.device
+        batch_size = logits.size(0)
+        digit_ids = torch.tensor(self._digit_token_ids, device=device)
+        digit_values = torch.arange(10, dtype=torch.float32, device=device)
+
+        losses = []
+
+        for b in range(batch_size):
+            gt = lvef_gt[b].item()
+            if gt != gt:  # NaN check
+                continue
+
+            sample_labels = labels[b]
+            pct_positions = (sample_labels == self._pct_token_id).nonzero(as_tuple=True)[0]
+
+            if len(pct_positions) == 0:
+                continue
+
+            pct_pos = pct_positions[0].item()
+            if pct_pos < 2:
+                continue
+
+            units_pos = pct_pos - 1
+            tens_pos = pct_pos - 2
+
+            # Verify these are actual digit tokens in labels
+            tens_label = sample_labels[tens_pos].item()
+            units_label = sample_labels[units_pos].item()
+            if tens_label not in self._digit_token_ids or units_label not in self._digit_token_ids:
+                continue
+
+            # logits[t] predicts labels[t+1] in HF causal LM
+            tens_logit_pos = tens_pos - 1
+            units_logit_pos = units_pos - 1
+
+            if tens_logit_pos < 0 or units_logit_pos >= logits.size(1):
+                continue
+
+            tens_logits = logits[b, tens_logit_pos, digit_ids]
+            units_logits = logits[b, units_logit_pos, digit_ids]
+
+            tens_probs = torch.softmax(tens_logits.float(), dim=0)
+            units_probs = torch.softmax(units_logits.float(), dim=0)
+
+            predicted_tens = (tens_probs * digit_values).sum()
+            predicted_units = (units_probs * digit_values).sum()
+            predicted_lvef = predicted_tens * 10.0 + predicted_units
+
+            gt_tensor = torch.tensor(gt, dtype=torch.float32, device=device)
+
+            loss = torch.nn.functional.huber_loss(
+                predicted_lvef, gt_tensor, reduction='none', delta=5.0
+            )
+            losses.append(loss)
+
+        if not losses:
+            return None
+
+        return torch.stack(losses).mean()
+
+    # ------------------------------------------------------------------
     # Forward pass
     # ------------------------------------------------------------------
     def forward(
@@ -1879,6 +1973,33 @@ class MedGemmaDecoder(nn.Module):
                 result["pattern_logits"] = logits_pattern
                 result["pattern_targets"] = target
                 result["pattern_loss_unscaled"] = pattern_loss_unscaled
+
+        # --- LVEF soft-decoding loss ---
+        lvef_gt = unused_kwargs.get("lvef_gt")
+        if (
+            self.lvef_loss_weight > 0
+            and lvef_gt is not None
+            and "logits" in result
+        ):
+            lvef_gt_tensor = lvef_gt
+            if not isinstance(lvef_gt_tensor, torch.Tensor):
+                lvef_gt_tensor = torch.as_tensor(lvef_gt_tensor, dtype=torch.float32)
+            lvef_gt_tensor = lvef_gt_tensor.to(device=result["logits"].device)
+
+            if not torch.isnan(lvef_gt_tensor).all():
+                lvef_loss = self._compute_lvef_soft_loss(
+                    logits=result["logits"],
+                    labels=prepared_labels if prepared_labels is not None else base_labels,
+                    lvef_gt=lvef_gt_tensor,
+                )
+                if lvef_loss is not None:
+                    scaled_lvef_loss = lvef_loss * self.lvef_loss_weight
+                    if "loss" in result:
+                        result["loss"] = result["loss"] + scaled_lvef_loss
+                    else:
+                        result["loss"] = scaled_lvef_loss
+                    result["lvef_loss"] = scaled_lvef_loss
+                    result["lvef_loss_unscaled"] = lvef_loss
 
         return result
 

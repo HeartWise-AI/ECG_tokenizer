@@ -45,6 +45,7 @@ class ECGClinicalReportDataset(Dataset):
         debug_print_example: bool = False,
         augmentor: Optional[Any] = None,
         messages_column: Optional[str] = None,
+        prompt_variations_path: Optional[str] = None,
     ):
         """
         Args:
@@ -64,6 +65,8 @@ class ECGClinicalReportDataset(Dataset):
             medgemma_prompt_style (bool): Use MedGemma-style chat prompts with <image_1> placeholder.
             messages_column (Optional[str]): Column containing JSON chat messages (system/user/assistant).
                 When set, overrides prompt_column/answer_column with parsed message content.
+            prompt_variations_path (Optional[str]): Path to JSON file with prompt variations per category.
+                When set, randomly samples a prompt variation for each sample during training.
         """
         try:
             self.df: pd.DataFrame = pd.read_parquet(dataset_path)
@@ -124,6 +127,18 @@ class ECGClinicalReportDataset(Dataset):
         self.prompt_column: str = prompt_column
         self.answer_column: str = answer_column
         self.category_column: str = category_column
+        # Prompt variations: {category: {original_prompt: [variations]}}.
+        # Each variation is only used to replace its specific source prompt.
+        # Generated per-prompt by generate_per_prompt_variations.py.
+        self._prompt_variations: Dict[str, Dict[str, List[str]]] = {}
+        if prompt_variations_path and os.path.isfile(prompt_variations_path):
+            import json as _json
+            with open(prompt_variations_path) as _f:
+                self._prompt_variations = _json.load(_f)
+            _total = sum(len(v) for grp in self._prompt_variations.values() for v in grp.values())
+            _cats = len(self._prompt_variations)
+            _n_prompts = sum(len(g) for g in self._prompt_variations.values())
+            print(f"[PromptVariations] Loaded {_total} variations for {_n_prompts} prompts across {_cats} categories from {prompt_variations_path}")
         if self.instruct_mode:
             # Q-Former or query-only prefix: no textual ECG placeholders
             if self.num_ecg_tokens <= 0:
@@ -286,6 +301,12 @@ class ECGClinicalReportDataset(Dataset):
                     prompt_text: str = ""
                     if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
                         prompt_text = str(row[self.prompt_column])
+                    # Randomly sample a prompt variation matched to the original prompt
+                    if self._prompt_variations and self.category_column in self.df.columns:
+                        cat = str(row.get(self.category_column, ""))
+                        if cat in self._prompt_variations and prompt_text in self._prompt_variations[cat]:
+                            import random
+                            prompt_text = random.choice(self._prompt_variations[cat][prompt_text])
                     answer_text: str = str(row[self.answer_column])
 
                     candidate_answers_raw = row.get("candidate_answers")
@@ -592,7 +613,18 @@ class ECGClinicalReportDataset(Dataset):
                 # Add category information for per-category metrics
                 if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
                     sample_data['prompt_category'] = str(row[self.category_column])
-                
+                    # Add ground truth LVEF for soft-decoding loss
+                    if str(row[self.category_column]) == 'lvef':
+                        lvef_col = 'deepecho_Visually_Estimated_EF'
+                        if lvef_col in self.df.columns and not pd.isnull(row.get(lvef_col)):
+                            sample_data['lvef_gt'] = float(row[lvef_col])
+                        else:
+                            sample_data['lvef_gt'] = float('nan')
+                    else:
+                        sample_data['lvef_gt'] = float('nan')
+                else:
+                    sample_data['lvef_gt'] = float('nan')
+
                 if self.pattern_columns:
                     pattern_values = []
                     for col, present in zip(self.pattern_columns, self._pattern_column_mask):
@@ -612,6 +644,12 @@ class ECGClinicalReportDataset(Dataset):
                 prompt_q = ""
                 if self.prompt_column in self.df.columns and not pd.isnull(row[self.prompt_column]):
                     prompt_q = str(row[self.prompt_column]).strip()
+                # Randomly sample a prompt variation matched to the original prompt
+                if self._prompt_variations and self.category_column in self.df.columns:
+                    cat = str(row.get(self.category_column, ""))
+                    if cat in self._prompt_variations and prompt_q in self._prompt_variations[cat]:
+                        import random
+                        prompt_q = random.choice(self._prompt_variations[cat][prompt_q])
                 answer_text: str = str(row[self.answer_column])
 
                 # Minimal template for non-chat tokenization
@@ -702,6 +740,16 @@ class ECGClinicalReportDataset(Dataset):
 
                 if self.category_column in self.df.columns and not pd.isnull(row[self.category_column]):
                     sample_data['prompt_category'] = str(row[self.category_column])
+                    if str(row[self.category_column]) == 'lvef':
+                        lvef_col = 'deepecho_Visually_Estimated_EF'
+                        if lvef_col in self.df.columns and not pd.isnull(row.get(lvef_col)):
+                            sample_data['lvef_gt'] = float(row[lvef_col])
+                        else:
+                            sample_data['lvef_gt'] = float('nan')
+                    else:
+                        sample_data['lvef_gt'] = float('nan')
+                else:
+                    sample_data['lvef_gt'] = float('nan')
 
                 if self.pattern_columns:
                     pattern_values = []
@@ -797,6 +845,7 @@ def get_distributed_clinical_report_dataloader(
     sample_weight_column: Optional[str] = None,
     augmentor: Optional[Any] = None,
     messages_column: Optional[str] = None,
+    prompt_variations_path: Optional[str] = None,
 ):
     """
     Create a distributed DataLoader for ECG clinical report training.
@@ -826,6 +875,7 @@ def get_distributed_clinical_report_dataloader(
         debug_print_example=debug_print_example,
         augmentor=augmentor,
         messages_column=messages_column,
+        prompt_variations_path=prompt_variations_path,
     )
 
     # Extract sample weights before any subsetting
@@ -1033,6 +1083,7 @@ def get_multi_dataset_distributed_dataloader(
     augmentor: Optional[Any] = None,
     sampling_seed: Optional[int] = None,
     messages_column: Optional[str] = None,
+    prompt_variations_path: Optional[str] = None,
 ) -> DataLoader:
     """Create a distributed DataLoader from multiple dataset parquet files.
 
@@ -1064,6 +1115,7 @@ def get_multi_dataset_distributed_dataloader(
             debug_print_example=(debug_print_example and i == 0),
             augmentor=augmentor,
             messages_column=messages_column,
+            prompt_variations_path=prompt_variations_path,
         )
         datasets.append(ds)
         if rank == 0:

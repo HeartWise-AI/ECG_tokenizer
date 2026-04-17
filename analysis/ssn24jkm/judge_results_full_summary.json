@@ -1,0 +1,264 @@
+{
+  "overall_score": 0.6365297332924432,
+  "category_aggregates": {
+    "category_infarct_ischemia": {
+      "count": 2597,
+      "mean_score": 0.6903735078937235,
+      "std_score": 0.3484490846766453,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "lvef": {
+      "count": 2656,
+      "mean_score": 0.829047439759036,
+      "std_score": 0.2530361494533778,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "lvef": {
+          "count": 2656,
+          "mae": 8.077183734939759,
+          "mae_std": 8.270720086144248,
+          "pearson": 0.5430916065416241,
+          "spearman": 0.506697134955488,
+          "icc": 0.537839375672978
+        }
+      }
+    },
+    "unknown": {
+      "count": 35,
+      "mean_score": 0.04857142857142857,
+      "std_score": 0.12732731402946967,
+      "min_score": 0.0,
+      "max_score": 0.5
+    },
+    "acs_severity": {
+      "count": 1021,
+      "mean_score": 0.5800195886385897,
+      "std_score": 0.4362295036236777,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "subcategory_accuracy": {
+        "Acute Other": {
+          "count": 17,
+          "correct": 3,
+          "accuracy": 0.17647058823529413,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 12,
+            "Acute Complete": 2,
+            "Acute Other": 3
+          }
+        },
+        "Obstructive (No Acute)": {
+          "count": 476,
+          "correct": 455,
+          "accuracy": 0.9558823529411765,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 455,
+            "Chronic Occlusion": 18,
+            "Acute Incomplete": 1,
+            "Acute Other": 2
+          }
+        },
+        "Acute Complete": {
+          "count": 184,
+          "correct": 59,
+          "accuracy": 0.32065217391304346,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 83,
+            "Acute Other": 32,
+            "Acute Complete": 59,
+            "Acute Incomplete": 8,
+            "Chronic Occlusion": 2
+          }
+        },
+        "No Disease": {
+          "count": 100,
+          "correct": 0,
+          "accuracy": 0.0,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 97,
+            "Chronic Occlusion": 3
+          }
+        },
+        "Chronic Occlusion": {
+          "count": 88,
+          "correct": 6,
+          "accuracy": 0.06818181818181818,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 80,
+            "Chronic Occlusion": 6,
+            "Acute Other": 1,
+            "Acute Incomplete": 1
+          }
+        },
+        "Acute Incomplete": {
+          "count": 156,
+          "correct": 4,
+          "accuracy": 0.02564102564102564,
+          "prediction_distribution": {
+            "Acute Complete": 20,
+            "Obstructive (No Acute)": 120,
+            "Acute Other": 11,
+            "Chronic Occlusion": 1,
+            "Acute Incomplete": 4
+          }
+        }
+      }
+    },
+    "afib_risk": {
+      "count": 3121,
+      "mean_score": 0.6504325536686959,
+      "std_score": 0.4723776382802679,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "category_conduction": {
+      "count": 1553,
+      "mean_score": 0.7291693496458468,
+      "std_score": 0.3779742565437695,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "structural_heart_disease": {
+      "count": 3039,
+      "mean_score": 0.6617308325106943,
+      "std_score": 0.4731206376976149,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "ecg_interval": {
+      "count": 16,
+      "mean_score": 0.5625,
+      "std_score": 0.49607837082461076,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "heart_rate": {
+          "count": 667,
+          "mae": 2.5667166416791605,
+          "mae_std": 7.701104995719144,
+          "pearson": 0.9251987824998661,
+          "spearman": 0.9185469670855402,
+          "icc": 0.9242594717467895
+        },
+        "qt_interval": {
+          "count": 3,
+          "mae": 51.333333333333336,
+          "mae_std": 28.85981442921782,
+          "pearson": -0.9285714285714285,
+          "spearman": -0.8660254037844387,
+          "icc": -0.1363040629095676
+        },
+        "qtc_interval": {
+          "count": 2,
+          "mae": 15.5,
+          "mae_std": 0.5,
+          "pearson": 1.0,
+          "spearman": 1.0,
+          "icc": 0.4994797086368366
+        }
+      }
+    },
+    "culprit_artery": {
+      "count": 185,
+      "mean_score": 0.5864864864864865,
+      "std_score": 0.21329102331836602,
+      "min_score": 0.4,
+      "max_score": 1.0
+    },
+    "category_other": {
+      "count": 1283,
+      "mean_score": 0.7064692127825409,
+      "std_score": 0.3872241738598431,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "localization_t_wave": {
+      "count": 5,
+      "mean_score": 0.48,
+      "std_score": 0.039999999999999994,
+      "min_score": 0.4,
+      "max_score": 0.5
+    },
+    "category_rhythm": {
+      "count": 6056,
+      "mean_score": 0.7986294583883752,
+      "std_score": 0.3061022443025824,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "category_chamber_enlargement": {
+      "count": 275,
+      "mean_score": 0.8581818181818182,
+      "std_score": 0.3170838197706256,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "urgency_assessment": {
+      "count": 1,
+      "mean_score": 0.0,
+      "std_score": 0.0,
+      "min_score": 0.0,
+      "max_score": 0.0
+    },
+    "category_pericarditis": {
+      "count": 10,
+      "mean_score": 1.0,
+      "std_score": 0.0,
+      "min_score": 1.0,
+      "max_score": 1.0
+    },
+    "localization_qrs_axis": {
+      "count": 3,
+      "mean_score": 1.0,
+      "std_score": 0.0,
+      "min_score": 1.0,
+      "max_score": 1.0
+    },
+    "interpretation": {
+      "count": 9974,
+      "mean_score": 0.637583344752635,
+      "std_score": 0.28507805529722036,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "classification": {
+      "count": 8341,
+      "mean_score": 0.5084522239539625,
+      "std_score": 0.3307437891293284,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "json_interpretation": {
+      "count": 9591,
+      "mean_score": 0.4966854692643401,
+      "std_score": 0.40397535843766463,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "heart_rate_bpm": {
+          "count": 6169,
+          "mae": 2.933538661047171,
+          "mae_std": 9.935606834310423,
+          "pearson": 0.8589323953256008,
+          "spearman": 0.8908225437859324,
+          "icc": 0.8552380483214101
+        }
+      }
+    },
+    "random_finding_question": {
+      "count": 14,
+      "mean_score": 0.7999999999999999,
+      "std_score": 0.31622776601683794,
+      "min_score": 0.3,
+      "max_score": 1.0
+    }
+  },
+  "total_examples": 49776,
+  "metadata": {
+    "json_path": "/volume/ECG_tokenizer/analysis/ssn24jkm/inference_merged.csv",
+    "json_basename": "inference_merged.csv",
+    "run_folder": "ssn24jkm"
+  }
+}

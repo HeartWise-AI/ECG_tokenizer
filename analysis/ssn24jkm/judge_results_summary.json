@@ -1,0 +1,245 @@
+{
+  "overall_score": 0.6365138895882565,
+  "category_aggregates": {
+    "category_infarct_ischemia": {
+      "count": 1049,
+      "mean_score": 0.679122974261201,
+      "std_score": 0.35616963580881417,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "lvef": {
+      "count": 188,
+      "mean_score": 0.8140957446808511,
+      "std_score": 0.273668403525645,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "lvef": {
+          "count": 188,
+          "mae": 8.436170212765957,
+          "mae_std": 8.408529750602794,
+          "pearson": 0.4834937234673546,
+          "spearman": 0.4185038468275879,
+          "icc": 0.48112803788894365
+        }
+      }
+    },
+    "unknown": {
+      "count": 13,
+      "mean_score": 0.05384615384615384,
+      "std_score": 0.1393136175098064,
+      "min_score": 0.0,
+      "max_score": 0.5
+    },
+    "acs_severity": {
+      "count": 72,
+      "mean_score": 0.5013888888888889,
+      "std_score": 0.43890427188231285,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "subcategory_accuracy": {
+        "Acute Other": {
+          "count": 2,
+          "correct": 0,
+          "accuracy": 0.0,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 2
+          }
+        },
+        "Obstructive (No Acute)": {
+          "count": 32,
+          "correct": 29,
+          "accuracy": 0.90625,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 29,
+            "Chronic Occlusion": 3
+          }
+        },
+        "Acute Complete": {
+          "count": 13,
+          "correct": 1,
+          "accuracy": 0.07692307692307693,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 7,
+            "Acute Other": 4,
+            "Acute Complete": 1,
+            "Acute Incomplete": 1
+          }
+        },
+        "No Disease": {
+          "count": 8,
+          "correct": 0,
+          "accuracy": 0.0,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 8
+          }
+        },
+        "Chronic Occlusion": {
+          "count": 5,
+          "correct": 0,
+          "accuracy": 0.0,
+          "prediction_distribution": {
+            "Obstructive (No Acute)": 5
+          }
+        },
+        "Acute Incomplete": {
+          "count": 12,
+          "correct": 0,
+          "accuracy": 0.0,
+          "prediction_distribution": {
+            "Acute Complete": 2,
+            "Obstructive (No Acute)": 10
+          }
+        }
+      }
+    },
+    "afib_risk": {
+      "count": 237,
+      "mean_score": 0.6312236286919831,
+      "std_score": 0.47293385924701525,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "category_conduction": {
+      "count": 714,
+      "mean_score": 0.715406162464986,
+      "std_score": 0.38397619742129024,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "structural_heart_disease": {
+      "count": 206,
+      "mean_score": 0.6844660194174758,
+      "std_score": 0.46472818687946127,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "ecg_interval": {
+      "count": 6,
+      "mean_score": 0.5,
+      "std_score": 0.5,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "heart_rate": {
+          "count": 296,
+          "mae": 2.029054054054054,
+          "mae_std": 6.603748458245579,
+          "pearson": 0.9459150574155455,
+          "spearman": 0.9491063599916094,
+          "icc": 0.9454012728161045
+        },
+        "qt_interval": {
+          "count": 2,
+          "mae": 63.0,
+          "mae_std": 29.0,
+          "pearson": -1.0,
+          "spearman": -1.0,
+          "icc": -0.11085450346420324
+        },
+        "qtc_interval": {
+          "count": 1,
+          "mae": 15.0,
+          "mae_std": 0.0,
+          "pearson": null,
+          "spearman": null,
+          "icc": null
+        }
+      }
+    },
+    "culprit_artery": {
+      "count": 9,
+      "mean_score": 0.6666666666666667,
+      "std_score": 0.262466929133727,
+      "min_score": 0.4,
+      "max_score": 1.0
+    },
+    "category_other": {
+      "count": 603,
+      "mean_score": 0.7106135986733002,
+      "std_score": 0.38199978503742854,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "localization_t_wave": {
+      "count": 1,
+      "mean_score": 0.5,
+      "std_score": 0.0,
+      "min_score": 0.5,
+      "max_score": 0.5
+    },
+    "category_rhythm": {
+      "count": 2457,
+      "mean_score": 0.7804232804232805,
+      "std_score": 0.3248075475320815,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "category_chamber_enlargement": {
+      "count": 128,
+      "mean_score": 0.83828125,
+      "std_score": 0.3382217037660911,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "category_pericarditis": {
+      "count": 4,
+      "mean_score": 1.0,
+      "std_score": 0.0,
+      "min_score": 1.0,
+      "max_score": 1.0
+    },
+    "localization_qrs_axis": {
+      "count": 2,
+      "mean_score": 1.0,
+      "std_score": 0.0,
+      "min_score": 1.0,
+      "max_score": 1.0
+    },
+    "interpretation": {
+      "count": 2812,
+      "mean_score": 0.6178763274045986,
+      "std_score": 0.28577153527421284,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "classification": {
+      "count": 2718,
+      "mean_score": 0.5132818248712289,
+      "std_score": 0.3315906577142233,
+      "min_score": 0.0,
+      "max_score": 1.0
+    },
+    "json_interpretation": {
+      "count": 2774,
+      "mean_score": 0.5190326183609709,
+      "std_score": 0.39899049633766676,
+      "min_score": 0.0,
+      "max_score": 1.0,
+      "continuous_metrics": {
+        "heart_rate_bpm": {
+          "count": 1862,
+          "mae": 1.5327604726100967,
+          "mae_std": 6.21998708347264,
+          "pearson": 0.9542466756584606,
+          "spearman": 0.9648939876775265,
+          "icc": 0.9537281108127017
+        }
+      }
+    },
+    "random_finding_question": {
+      "count": 7,
+      "mean_score": 0.5999999999999999,
+      "std_score": 0.3464101615137755,
+      "min_score": 0.3,
+      "max_score": 1.0
+    }
+  },
+  "total_examples": 14000,
+  "metadata": {
+    "json_path": "/volume/ECG_tokenizer/analysis/ssn24jkm/inference_merged.csv",
+    "json_basename": "inference_merged.csv",
+    "run_folder": "ssn24jkm"
+  }
+}

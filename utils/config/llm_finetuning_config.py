@@ -116,6 +116,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     messages_column: Optional[str] = None      # JSON chat messages column (overrides prompt/answer columns)
     pattern_label_columns: Tuple[str, ...] = field(default_factory=tuple)  # Multilabel ECG targets
     pattern_loss_weight: float = 0.3
+    lvef_loss_weight: float = 0.0  # Soft-decoding Huber loss for LVEF predictions (0 = disabled)
+    prompt_variations_path: Optional[str] = None  # JSON file with prompt variations per category
 
     # Weighted sampling for minority class upsampling
     use_weighted_sampling: bool = False        # Enable WeightedRandomSampler for training
@@ -216,6 +218,9 @@ class LLMFinetuningConfig(HeartWiseConfig):
     write_val_generations: bool = True            # write val_generations JSON during validation
     # Optional perf knob: skip expensive generation during validation (loss/aux metrics only)
     skip_val_generation: bool = False
+
+    # Stop after N optimizer steps (for autoresearch abbreviated runs)
+    max_train_steps: Optional[int] = None
 
     def __post_init__(self):
         """Flatten legacy nested LoRA configs into flat fields."""

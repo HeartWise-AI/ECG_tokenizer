@@ -1,0 +1,516 @@
+{
+  "macro_auroc": 0.6170792026371316,
+  "micro_auroc": 0.5994112089617707,
+  "macro_auprc": 0.24290583151578207,
+  "micro_auprc": 0.12300828174388481,
+  "n_ecgs": 50,
+  "n_diagnoses_evaluated": 35,
+  "checkpoint": "/media/data1/models/ECG_Tokenizer/e4dw86nh_20251220-232839/best_model.pt",
+  "per_diagnosis": {
+    "Left bundle branch block": {
+      "auroc": 0.9422222222222222,
+      "auprc": 0.5247619047619048,
+      "ppv": 0.1,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.18181818181818182,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.9921040534973145
+    },
+    "Left axis deviation": {
+      "auroc": 0.4553571428571429,
+      "auprc": 0.16204260651629074,
+      "ppv": 0.16,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.27586206896551724,
+      "n_positive": 8,
+      "n_negative": 42,
+      "mean_p_yes": 0.86802077293396
+    },
+    "Left ventricular hypertrophy": {
+      "auroc": 0.534965034965035,
+      "auprc": 0.24724975295167187,
+      "ppv": 0.22,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.36065573770491804,
+      "n_positive": 11,
+      "n_negative": 39,
+      "mean_p_yes": 0.9609200358390808
+    },
+    "Bradycardia": {
+      "auroc": 0.4326241134751773,
+      "auprc": 0.06237373737373737,
+      "ppv": 0.045454545454545456,
+      "npv": 0.9285714285714286,
+      "specificity": 0.5531914893617021,
+      "sensitivity": 0.3333333333333333,
+      "f1": 0.08,
+      "n_positive": 3,
+      "n_negative": 47,
+      "mean_p_yes": 0.47398754954338074
+    },
+    "Q wave (inferior - II, III, aVF)": {
+      "auroc": 0.51875,
+      "auprc": 0.20584616658799962,
+      "ppv": 0.2,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.3333333333333333,
+      "n_positive": 10,
+      "n_negative": 40,
+      "mean_p_yes": 0.987027108669281
+    },
+    "Afib": {
+      "auroc": 0.5133333333333333,
+      "auprc": 0.12483660130718954,
+      "ppv": 0.10638297872340426,
+      "npv": 1.0,
+      "specificity": 0.06666666666666667,
+      "sensitivity": 1.0,
+      "f1": 0.19230769230769232,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.7459274530410767
+    },
+    "Irregularly irregular": {
+      "auroc": 0.6244444444444445,
+      "auprc": 0.16592564523599004,
+      "ppv": 0.10204081632653061,
+      "npv": 1.0,
+      "specificity": 0.022222222222222223,
+      "sensitivity": 1.0,
+      "f1": 0.18518518518518517,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.8635767102241516
+    },
+    "Atrial tachycardia (>= 100 BPM)": {
+      "auroc": 0.9077380952380953,
+      "auprc": 0.8021637510359314,
+      "ppv": 0.3939393939393939,
+      "npv": 0.9411764705882353,
+      "specificity": 0.4444444444444444,
+      "sensitivity": 0.9285714285714286,
+      "f1": 0.5531914893617021,
+      "n_positive": 14,
+      "n_negative": 36,
+      "mean_p_yes": 0.6066217422485352
+    },
+    "Nonspecific intraventricular conduction delay": {
+      "auroc": 0.6224489795918368,
+      "auprc": 0.05,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.9909812211990356
+    },
+    "Premature ventricular complex": {
+      "auroc": 0.7000000000000001,
+      "auprc": 0.183974358974359,
+      "ppv": 0.10869565217391304,
+      "npv": 1.0,
+      "specificity": 0.08888888888888889,
+      "sensitivity": 1.0,
+      "f1": 0.19607843137254902,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.7010522484779358
+    },
+    "Right bundle branch block": {
+      "auroc": 0.6177777777777778,
+      "auprc": 0.1428360911119532,
+      "ppv": 0.1,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.18181818181818182,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.9815501570701599
+    },
+    "Ventricular paced": {
+      "auroc": 0.020408163265306145,
+      "auprc": 0.02040816326530612,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.8051972985267639
+    },
+    "ST elevation (anterior - V3-V4)": {
+      "auroc": 1.0,
+      "auprc": 1.0,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.920992910861969
+    },
+    "ST elevation (septal - V1-V2)": {
+      "auroc": 0.625,
+      "auprc": 0.5256410256410257,
+      "ppv": 0.04878048780487805,
+      "npv": 1.0,
+      "specificity": 0.1875,
+      "sensitivity": 1.0,
+      "f1": 0.09302325581395349,
+      "n_positive": 2,
+      "n_negative": 48,
+      "mean_p_yes": 0.7587422132492065
+    },
+    "1st degree AV block": {
+      "auroc": 0.6511627906976744,
+      "auprc": 0.5065891472868217,
+      "ppv": 0.14285714285714285,
+      "npv": 1.0,
+      "specificity": 0.023255813953488372,
+      "sensitivity": 1.0,
+      "f1": 0.25,
+      "n_positive": 7,
+      "n_negative": 43,
+      "mean_p_yes": 0.8470162749290466
+    },
+    "Premature atrial complex": {
+      "auroc": 0.6553030303030303,
+      "auprc": 0.25528900112233444,
+      "ppv": 0.13043478260869565,
+      "npv": 1.0,
+      "specificity": 0.09090909090909091,
+      "sensitivity": 1.0,
+      "f1": 0.23076923076923078,
+      "n_positive": 6,
+      "n_negative": 44,
+      "mean_p_yes": 0.6981685757637024
+    },
+    "Atrial flutter": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Left anterior fascicular block": {
+      "auroc": 0.7146739130434783,
+      "auprc": 0.34774436090225563,
+      "ppv": 0.08,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.14814814814814814,
+      "n_positive": 4,
+      "n_negative": 46,
+      "mean_p_yes": 0.9053661227226257
+    },
+    "Right axis deviation": {
+      "auroc": 0.8645833333333334,
+      "auprc": 0.3055555555555556,
+      "ppv": 0.04,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.07692307692307693,
+      "n_positive": 2,
+      "n_negative": 48,
+      "mean_p_yes": 0.9142482876777649
+    },
+    "2nd degree AV block - mobitz 1": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "ST depression (inferior - II, III, aVF)": {
+      "auroc": 0.5733695652173914,
+      "auprc": 0.169281045751634,
+      "ppv": 0.08,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.14814814814814814,
+      "n_positive": 4,
+      "n_negative": 46,
+      "mean_p_yes": 0.963255763053894
+    },
+    "Acute pericarditis": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "ST elevation (inferior - II, III, aVF)": {
+      "auroc": 0.7730496453900709,
+      "auprc": 0.20743145743145744,
+      "ppv": 0.06,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.11320754716981132,
+      "n_positive": 3,
+      "n_negative": 47,
+      "mean_p_yes": 0.9797673225402832
+    },
+    "Regularly irregular": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Junctional rhythm": {
+      "auroc": 0.20833333333333334,
+      "auprc": 0.03555967841682127,
+      "ppv": 0.04081632653061224,
+      "npv": 1.0,
+      "specificity": 0.020833333333333332,
+      "sensitivity": 1.0,
+      "f1": 0.0784313725490196,
+      "n_positive": 2,
+      "n_negative": 48,
+      "mean_p_yes": 0.9257581830024719
+    },
+    "Left atrial enlargement": {
+      "auroc": 0.3900709219858156,
+      "auprc": 0.059722222222222225,
+      "ppv": 0.06,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.11320754716981132,
+      "n_positive": 3,
+      "n_negative": 47,
+      "mean_p_yes": 0.8391532897949219
+    },
+    "ST elevation (lateral - I, aVL, V5-V6)": {
+      "auroc": 0.9795918367346939,
+      "auprc": 0.5,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.9207820296287537
+    },
+    "Atrial paced": {
+      "auroc": 0.0,
+      "auprc": 0.02,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.8882454633712769
+    },
+    "Right ventricular hypertrophy": {
+      "auroc": 0.5408163265306123,
+      "auprc": 0.037037037037037035,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.8725733757019043
+    },
+    "Delta wave": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Wolff-Parkinson-White (Pre-excitation syndrome)": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Prolonged QT": {
+      "auroc": 0.7088888888888889,
+      "auprc": 0.19559845559845562,
+      "ppv": 0.0,
+      "npv": 0.8979591836734694,
+      "specificity": 0.9777777777777777,
+      "sensitivity": 0.0,
+      "f1": 0.0,
+      "n_positive": 5,
+      "n_negative": 45,
+      "mean_p_yes": 0.222292959690094
+    },
+    "Q wave (lateral- I, aVL, V5-V6)": {
+      "auroc": 0.7653061224489797,
+      "auprc": 0.06666666666666667,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.9248586297035217
+    },
+    "Supraventricular tachycardia": {
+      "auroc": 0.7959183673469389,
+      "auprc": 0.07142857142857142,
+      "ppv": 0.03225806451612903,
+      "npv": 1.0,
+      "specificity": 0.3877551020408163,
+      "sensitivity": 1.0,
+      "f1": 0.0625,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.5051422119140625
+    },
+    "ST depression (lateral - I, avL, V5-V6)": {
+      "auroc": 0.5570175438596491,
+      "auprc": 0.32990410965303363,
+      "ppv": 0.24,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.3870967741935484,
+      "n_positive": 12,
+      "n_negative": 38,
+      "mean_p_yes": 0.9775744676589966
+    },
+    "2nd degree AV block - mobitz 2": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "U wave": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Left posterior fascicular block": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Right atrial enlargement": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Q wave (septal- V1-V2)": {
+      "auroc": 0.6666666666666666,
+      "auprc": 0.11689291101055807,
+      "ppv": 0.06,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.11320754716981132,
+      "n_positive": 3,
+      "n_negative": 47,
+      "mean_p_yes": 0.9460256099700928
+    },
+    "Q wave (anterior - V3-V4)": {
+      "auroc": 0.7872023809523809,
+      "auprc": 0.31942575339314466,
+      "ppv": 0.16,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.27586206896551724,
+      "n_positive": 8,
+      "n_negative": 42,
+      "mean_p_yes": 0.8796131610870361
+    },
+    "Right superior axis": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Ventricular tachycardia": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "ST elevation (posterior - V7-V8-V9)": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Ectopic atrial rhythm (< 100 BPM)": {
+      "auroc": 0.38020833333333337,
+      "auprc": 0.04285714285714286,
+      "ppv": 0.05,
+      "npv": 1.0,
+      "specificity": 0.20833333333333334,
+      "sensitivity": 1.0,
+      "f1": 0.09523809523809523,
+      "n_positive": 2,
+      "n_negative": 48,
+      "mean_p_yes": 0.6053102612495422
+    },
+    "Third Degree AV Block": {
+      "auroc": 0.546875,
+      "auprc": 0.05718954248366013,
+      "ppv": 0.0425531914893617,
+      "npv": 1.0,
+      "specificity": 0.0625,
+      "sensitivity": 1.0,
+      "f1": 0.08163265306122448,
+      "n_positive": 2,
+      "n_negative": 48,
+      "mean_p_yes": 0.7988078594207764
+    },
+    "Acute MI": {
+      "auroc": 0.8297872340425532,
+      "auprc": 0.594017094017094,
+      "ppv": 0.13333333333333333,
+      "npv": 0.9714285714285714,
+      "specificity": 0.723404255319149,
+      "sensitivity": 0.6666666666666666,
+      "f1": 0.2222222222222222,
+      "n_positive": 3,
+      "n_negative": 47,
+      "mean_p_yes": 0.303361177444458
+    },
+    "Q wave (posterior - V7-V9)": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Bi-atrial enlargement": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "LV pacing": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Brugada": {
+      "auroc": NaN,
+      "n_positive": 0,
+      "n_negative": 50
+    },
+    "Ventricular Rhythm": {
+      "auroc": 0.6938775510204082,
+      "auprc": 0.045454545454545456,
+      "ppv": 0.02,
+      "npv": NaN,
+      "specificity": 0.0,
+      "sensitivity": 1.0,
+      "f1": 0.0392156862745098,
+      "n_positive": 1,
+      "n_negative": 49,
+      "mean_p_yes": 0.8097601532936096
+    }
+  }
+}

@@ -446,6 +446,7 @@ class LLMFinetuningProject(BaseProject):
                 augmentor=augmentor,
                 sampling_seed=getattr(self.config, 'seed', 42),
                 messages_column=messages_col,
+                prompt_variations_path=getattr(self.config, 'prompt_variations_path', None),
             )
         else:
             # Existing single-dataset path (backward compatible)
@@ -478,6 +479,7 @@ class LLMFinetuningProject(BaseProject):
                 sample_weight_column=sample_weight_col,
                 augmentor=augmentor,
                 messages_column=messages_col,
+                prompt_variations_path=getattr(self.config, 'prompt_variations_path', None),
             )
 
         # Check for multi-dataset validation paths
@@ -1151,6 +1153,15 @@ class LLMFinetuningProject(BaseProject):
             ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
             debug_ecg_injection=getattr(self.config, 'debug_ecg_injection', False),
             prefix_tuning=getattr(pretrained_config, 'prefix_tuning', getattr(self.config, 'prefix_tuning', False)),
+            num_visual_tokens=(getattr(pretrained_config, 'num_query_tokens', None)
+                               or getattr(pretrained_config, 'bridge_num_visual_tokens', None)
+                               or getattr(self.config, 'num_query_tokens', None)
+                               or getattr(self.config, 'bridge_num_visual_tokens', None)
+                               or self.config.num_ecg_tokens),
+            bridge_mid_dim=getattr(pretrained_config, 'bridge_mid_dim', getattr(self.config, 'bridge_mid_dim', None)),
+            bridge_num_heads=getattr(pretrained_config, 'bridge_num_heads', getattr(self.config, 'bridge_num_heads', None)),
+            bridge_dropout=getattr(pretrained_config, 'bridge_dropout', getattr(self.config, 'bridge_dropout', 0.0)),
+            bridge_num_special_tokens=getattr(pretrained_config, 'bridge_num_special_tokens', getattr(self.config, 'bridge_num_special_tokens', 4)),
             bridge_qformer_layers=getattr(pretrained_config, 'bridge_qformer_layers', getattr(self.config, 'bridge_qformer_layers', None)),
             bridge_text_hidden_size=getattr(pretrained_config, 'bridge_text_hidden_size', getattr(self.config, 'bridge_text_hidden_size', None)),
             bridge_bias_last_codebook=getattr(pretrained_config, 'bridge_bias_last_codebook', getattr(self.config, 'bridge_bias_last_codebook', None)),
@@ -1160,10 +1171,11 @@ class LLMFinetuningProject(BaseProject):
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': getattr(pretrained_config, 'lora_r', 16),
-                'alpha': getattr(pretrained_config, 'lora_alpha', 32),
-                'dropout': getattr(pretrained_config, 'lora_dropout', 0.1),
+                'lora_alpha': getattr(pretrained_config, 'lora_alpha', 32),
+                'lora_dropout': getattr(pretrained_config, 'lora_dropout', 0.05),
                 'target_modules': getattr(pretrained_config, 'lora_target_modules', None),
-                'bias': getattr(pretrained_config, 'lora_bias', 'none')
+                'bias': getattr(pretrained_config, 'lora_bias', 'none'),
+                'top_k_layers': getattr(pretrained_config, 'lora_top_k_layers', None),
             } if use_lora_for_inference else None,
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
         ).to(self.config.device)
@@ -1173,7 +1185,31 @@ class LLMFinetuningProject(BaseProject):
         # Load the pretrained state dict
         pretrained_state_dict = state_dict['model_state_dict']
         ecg_tokenizer._load_state_dict(pretrained_state_dict, strict=True)
-        
+
+        # Validate bridge weights loaded correctly (catch dimension mismatches)
+        if self.config.is_ref_device and bridge_name_override and 'QFormer' in bridge_name_override:
+            bridge = getattr(ecg_tokenizer.decoder, 'bridge', None)
+            if bridge is not None:
+                ckpt_mid_dim = getattr(pretrained_config, 'bridge_mid_dim', None)
+                model_mid_dim = getattr(bridge, 'mid_dim', None)
+                if ckpt_mid_dim and model_mid_dim and ckpt_mid_dim != model_mid_dim:
+                    raise ValueError(
+                        f"Bridge dimension mismatch: checkpoint has bridge_mid_dim={ckpt_mid_dim} "
+                        f"but model was initialized with {model_mid_dim}. "
+                        f"This will produce garbage outputs. Ensure bridge_mid_dim is passed "
+                        f"correctly during inference setup."
+                    )
+                # Check for bridge keys that were skipped during loading
+                bridge_keys_in_ckpt = [k for k in pretrained_state_dict if 'bridge' in k]
+                bridge_keys_in_model = [k for k, _ in ecg_tokenizer.named_parameters() if 'bridge' in k]
+                bridge_buffers_in_model = [k for k, _ in ecg_tokenizer.named_buffers() if 'bridge' in k]
+                model_bridge_keys = set(bridge_keys_in_model + bridge_buffers_in_model)
+                ckpt_bridge_keys = set(bridge_keys_in_ckpt)
+                missing = ckpt_bridge_keys - model_bridge_keys
+                if missing and len(missing) > 5:
+                    print(f"⚠️ WARNING: {len(missing)} bridge keys from checkpoint were NOT loaded into model. "
+                          f"This may indicate a bridge architecture mismatch.")
+
         # Set LoRA to inference mode if using LoRA
         if use_lora_for_inference:
             ecg_tokenizer.set_lora_inference_mode(True)

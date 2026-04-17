@@ -1730,6 +1730,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
         prompt_attention_mask: Optional[torch.Tensor] = None,
         pattern_targets: Optional[torch.Tensor] = None,
+        lvef_gt: Optional[torch.Tensor] = None,
         **kwargs
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
@@ -1788,7 +1789,9 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                 }
                 if pattern_targets is not None:
                     decoder_inputs['pattern_targets'] = pattern_targets
-                
+                if lvef_gt is not None:
+                    decoder_inputs['lvef_gt'] = lvef_gt
+
                 # Only add quantized_codes for decoders that support it
                 # GPT2 decoder doesn't accept quantized_codes
                 if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:

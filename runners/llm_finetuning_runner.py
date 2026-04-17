@@ -823,6 +823,8 @@ class LLMFinetuningRunner(BaseRunner):
         if mode == RunMode.VALIDATE:
             self._val_agg_preds: list[str] = []
             self._val_agg_refs: list[str] = []
+            self._val_lvef_preds: list[float] = []
+            self._val_lvef_gts: list[float] = []
         
         # Ensure distributed samplers reshuffle appropriately
         self._set_sampler_epoch(
@@ -910,7 +912,11 @@ class LLMFinetuningRunner(BaseRunner):
             pattern_targets: torch.Tensor | None = None
             if 'pattern_targets' in batch:
                 pattern_targets = batch['pattern_targets'].to(self.config.device, dtype=torch.float32)
-            
+
+            lvef_gt: torch.Tensor | None = None
+            if 'lvef_gt' in batch:
+                lvef_gt = batch['lvef_gt'].to(self.config.device, dtype=torch.float32)
+
             prompt_input_ids_tensor: torch.Tensor | None = None
             prompt_attention_mask_tensor: torch.Tensor | None = None
             if 'prompt_input_ids' in batch:
@@ -953,14 +959,16 @@ class LLMFinetuningRunner(BaseRunner):
                     prompt_input_ids=prompt_input_ids_tensor,
                     prompt_attention_mask=prompt_attention_mask_tensor,
                     pattern_targets=pattern_targets,
+                    lvef_gt=lvef_gt,
                 )
             else:
                 outputs = step_fn(
-                    ecg_signal=ecg_signal, 
-                    input_ids=input_ids, 
-                    attention_mask=attention_mask, 
+                    ecg_signal=ecg_signal,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     labels=labels,
                     pattern_targets=pattern_targets,
+                    lvef_gt=lvef_gt,
                 )
 
             if getattr(self.config, 'debug_prompt_stop_after_first_batch', False) and batch_idx == 0:
@@ -1008,7 +1016,13 @@ class LLMFinetuningRunner(BaseRunner):
                     metrics['cf_loss'] = float(cf_loss_value.item())
                 else:
                     metrics['cf_loss'] = float(cf_loss_value)
-            
+            lvef_loss_value = outputs.get('lvef_loss')
+            if lvef_loss_value is not None:
+                if torch.is_tensor(lvef_loss_value):
+                    metrics['lvef_loss'] = float(lvef_loss_value.item())
+                else:
+                    metrics['lvef_loss'] = float(lvef_loss_value)
+
             # Extract learning rate and gradient metrics
             for key, value in outputs.items():  # type: ignore[attr-defined]
                 if key.startswith('lr_'):
@@ -1168,6 +1182,12 @@ class LLMFinetuningRunner(BaseRunner):
                 # Increase step and run CF eval only on optimizer steps (end of accumulation cycle)
                 if bool(outputs.get('did_step', False)):
                     self.global_step += 1
+                    # autoresearch: stop training after max_train_steps
+                    max_train_steps = getattr(self.config, 'max_train_steps', None)
+                    if max_train_steps is not None and self.global_step >= int(max_train_steps):
+                        if self.config.is_ref_device:
+                            print(f"Reached max_train_steps={max_train_steps}, stopping training.")
+                        break
                     # Optional CF evaluation as early signal
                     self._maybe_run_cf_evaluation()
                     self._handle_train_metric_snapshot(
@@ -1236,6 +1256,42 @@ class LLMFinetuningRunner(BaseRunner):
             except Exception as _agg_exc:
                 if self.config.is_ref_device:
                     print(f"Warning: failed to compute aggregated validation metrics: {_agg_exc}")
+
+            # Compute LVEF Pearson correlation and AUROC (GT ≤40%)
+            try:
+                world_size = int(getattr(self.config, 'world_size', 1))
+                local_lvef = (getattr(self, '_val_lvef_preds', []), getattr(self, '_val_lvef_gts', []))
+                lvef_gather: list = [None for _ in range(world_size)]
+                DistributedUtils.all_gather_object(lvef_gather, local_lvef)
+                if self.config.is_ref_device:
+                    all_preds: list[float] = []
+                    all_gts: list[float] = []
+                    for item in lvef_gather:
+                        if item is not None:
+                            all_preds.extend(item[0])
+                            all_gts.extend(item[1])
+                    if len(all_preds) >= 5:
+                        import numpy as _np
+                        from scipy.stats import pearsonr as _pearsonr
+                        preds_arr = _np.array(all_preds)
+                        gts_arr = _np.array(all_gts)
+                        pearson_r, _ = _pearsonr(preds_arr, gts_arr)
+                        mae = float(_np.mean(_np.abs(preds_arr - gts_arr)))
+                        epoch_metrics[f"{mode}/lvef_pearson"] = float(pearson_r)
+                        epoch_metrics[f"{mode}/lvef_mae"] = mae
+                        epoch_metrics[f"{mode}/lvef_n_samples"] = float(len(all_preds))
+                        # AUROC: binary label = GT ≤ 40
+                        binary_labels = (gts_arr <= 40).astype(int)
+                        if binary_labels.sum() > 0 and binary_labels.sum() < len(binary_labels):
+                            from sklearn.metrics import roc_auc_score as _roc_auc
+                            # Higher predicted LVEF → lower risk, so use negative for AUROC
+                            auroc = _roc_auc(binary_labels, -preds_arr)
+                            epoch_metrics[f"{mode}/lvef_auroc_le40"] = float(auroc)
+                        print(f"\n[LVEF] n={len(all_preds)}, Pearson={pearson_r:.4f}, MAE={mae:.2f}, "
+                              f"AUROC(≤40%)={epoch_metrics.get(f'{mode}/lvef_auroc_le40', 'N/A')}")
+            except Exception as _lvef_exc:
+                if self.config.is_ref_device:
+                    print(f"Warning: failed to compute LVEF metrics: {_lvef_exc}")
 
         # === New Block: Log best and worst metrics as HTML to wandb ===
         if (
@@ -1360,6 +1416,10 @@ class LLMFinetuningRunner(BaseRunner):
             f"{RunMode.VALIDATE}/bleu",   # bleu1, bleu4
             f"{RunMode.VALIDATE}/meteor",
             f"{RunMode.VALIDATE}/bertscore",  # bertscore_* if present
+            f"{RunMode.VALIDATE}/lvef_",  # lvef_pearson, lvef_mae, lvef_auroc, lvef_n
+            f"{RunMode.VALIDATE}/structured_",  # structured_f1, structured_precision, structured_recall
+            f"{RunMode.VALIDATE}/json_parse",  # json_parse_rate
+            f"{RunMode.VALIDATE}/hf-",  # hf-f1, hf-prec, hf-rec
         )
         keys = list(epoch_metrics.keys())
         for k in keys:
@@ -1786,6 +1846,12 @@ class LLMFinetuningRunner(BaseRunner):
                 # Anchor validation snapshot logs to current global step (commit=False to avoid step collisions)
                 self.wandb_wrapper.log(log_payload, step=int(self.global_step))
 
+            # Print structured metrics for autoresearch parsing
+            print("\n--- AUTORESEARCH_METRICS ---")
+            for key, value in sorted(log_payload.items()):
+                print(f"{key}: {value:.6f}")
+            print("--- END_AUTORESEARCH_METRICS ---")
+
         DistributedUtils.sync_process_group(
             world_size=self.config.world_size,
             device_ids=self.config.device
@@ -1959,6 +2025,17 @@ class LLMFinetuningRunner(BaseRunner):
                 ids_cpu = ids_cpu[ids_cpu != pad_id]
         decoded = tokenizer.decode(ids_cpu.tolist(), skip_special_tokens=True)
         return self._sanitize_chat_text(decoded)
+
+    @staticmethod
+    def _extract_lvef_from_text(text: str) -> float | None:
+        """Extract LVEF percentage from generated text like 'ejection fraction is 55%'."""
+        import re
+        match = re.search(r'(\d{1,3})\s*%', text)
+        if match:
+            val = float(match.group(1))
+            if 0 <= val <= 100:
+                return val
+        return None
 
     def _extract_prompt_text(
         self,
@@ -2438,7 +2515,7 @@ class LLMFinetuningRunner(BaseRunner):
         return grad_norms
 
     def _train_step(
-        self, 
+        self,
         ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -2446,6 +2523,7 @@ class LLMFinetuningRunner(BaseRunner):
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
         pattern_targets: torch.Tensor | None = None,
+        lvef_gt: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Train a single step of the model.
@@ -2474,6 +2552,7 @@ class LLMFinetuningRunner(BaseRunner):
                 prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
                 prompt_attention_mask=prompt_attention_mask,
                 pattern_targets=pattern_targets,
+                lvef_gt=lvef_gt,
             )
             loss: torch.Tensor = outputs['loss']
             # Keep an unscaled copy for logging; use scaled loss for backward
@@ -2534,13 +2613,16 @@ class LLMFinetuningRunner(BaseRunner):
         if pattern_loss_tensor is not None:
             pattern_loss_value = float(pattern_loss_tensor.detach().item()) if torch.is_tensor(pattern_loss_tensor) else float(pattern_loss_tensor)
             result["pattern_loss"] = pattern_loss_value
+        lvef_loss_tensor = outputs.get("lvef_loss")
+        if lvef_loss_tensor is not None:
+            result["lvef_loss"] = float(lvef_loss_tensor.detach().item()) if torch.is_tensor(lvef_loss_tensor) else float(lvef_loss_tensor)
         grad_norms = self._collect_grad_norms()
         for key, value in grad_norms.items():
             result[f"grad_norm/{key}"] = value
         return result
 
     def _val_step(
-        self, 
+        self,
         ecg_signal: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -2548,6 +2630,7 @@ class LLMFinetuningRunner(BaseRunner):
         prompt_input_ids: torch.Tensor | None = None,
         prompt_attention_mask: torch.Tensor | None = None,
         pattern_targets: torch.Tensor | None = None,
+        lvef_gt: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Validate a single step of the model.
@@ -2570,9 +2653,10 @@ class LLMFinetuningRunner(BaseRunner):
                 prompt_input_ids=prompt_input_ids,  # Pass for cross-attention
                 prompt_attention_mask=prompt_attention_mask,
                 pattern_targets=pattern_targets,
+                lvef_gt=lvef_gt,
             )
             loss: torch.Tensor = outputs['loss']
-            
+
             skip_generation = bool(getattr(self.config, "skip_val_generation", False))
             generated_ids = None
             if not skip_generation:
@@ -2606,6 +2690,9 @@ class LLMFinetuningRunner(BaseRunner):
             pattern_loss_tensor = outputs.get("pattern_loss")
             if pattern_loss_tensor is not None:
                 result["pattern_loss"] = float(pattern_loss_tensor.detach().item()) if torch.is_tensor(pattern_loss_tensor) else float(pattern_loss_tensor)
+            lvef_loss_tensor = outputs.get("lvef_loss")
+            if lvef_loss_tensor is not None:
+                result["lvef_loss"] = float(lvef_loss_tensor.detach().item()) if torch.is_tensor(lvef_loss_tensor) else float(lvef_loss_tensor)
             pattern_logits = outputs.get("pattern_logits")
             pattern_targets_out = outputs.get("pattern_targets")
             if pattern_logits is not None:
@@ -2933,17 +3020,17 @@ class LLMFinetuningRunner(BaseRunner):
                 else:
                     # Fallback for any unnamed groups
                     lr_metrics[f"checkpoint/lr_group_{id(pg) % 1000}"] = pg["lr"]
-            
-            log_payload = {
-                "checkpoint/epoch": epoch,
-                "checkpoint/loss": loss,
-                **lr_metrics
-            }
-            if step is not None:
-                log_payload["checkpoint/step"] = float(step)
-            # Anchor checkpoint logs to the provided step or current global step
-            step_for_log = int(step) if step is not None else int(getattr(self, 'global_step', 0))
-            self.wandb_wrapper.log(log_payload, step=step_for_log)
+
+                log_payload = {
+                    "checkpoint/epoch": epoch,
+                    "checkpoint/loss": loss,
+                    **lr_metrics
+                }
+                if step is not None:
+                    log_payload["checkpoint/step"] = float(step)
+                # Anchor checkpoint logs to the provided step or current global step
+                step_for_log = int(step) if step is not None else int(getattr(self, 'global_step', 0))
+                self.wandb_wrapper.log(log_payload, step=step_for_log)
 
     def _compute_metrics(
         self,
@@ -3039,6 +3126,18 @@ class LLMFinetuningRunner(BaseRunner):
             if hasattr(self, '_val_agg_preds') and hasattr(self, '_val_agg_refs'):
                     self._val_agg_preds.extend(batch_predictions)
                     self._val_agg_refs.extend(batch_references)
+            # Accumulate LVEF predictions and ground truths for Pearson/AUROC
+            if hasattr(self, '_val_lvef_preds') and hasattr(self, '_val_lvef_gts'):
+                for i, (cat, pred) in enumerate(zip(batch_categories, batch_predictions)):
+                    if cat == 'lvef' and 'lvef_gt' in batch and i < len(batch['lvef_gt']):
+                        gt_val = batch['lvef_gt'][i]
+                        if isinstance(gt_val, torch.Tensor):
+                            gt_val = gt_val.item()
+                        if not (gt_val != gt_val):  # not NaN
+                            pred_val = self._extract_lvef_from_text(pred)
+                            if pred_val is not None:
+                                self._val_lvef_preds.append(pred_val)
+                                self._val_lvef_gts.append(gt_val)
 
         # If no generations are available (e.g., generation skipped for fast eval), skip text metrics
         if not has_generation:
