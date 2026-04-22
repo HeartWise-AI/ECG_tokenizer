@@ -117,7 +117,12 @@ ecg_embed = adapter(features)                        # (B, 2048)
 
 token_embeds = decoder.get_input_embeddings()(input_ids)   # (B, N+1, 2048)
 token_embeds[:, 0, :] = ecg_embed                          # replace <ecg>
-# labels[:, 0] must be -100 (do not supervise the ECG placeholder)
+# labels[:, 0] is -100 (do not supervise the ECG placeholder).
+# Masking responsibility: set inside the decoder wrapper's forward() so the
+# contract is self-contained — the runner/collator pass raw input_ids and a
+# labels tensor that clones input_ids; the wrapper clones and overwrites
+# position 0 with -100 before calling LlamaForCausalLM. Mirrors how
+# gpt2_tokenizer_decoder.py handles it today.
 
 outputs = decoder(inputs_embeds=token_embeds,
                   attention_mask=attention_mask,
@@ -300,11 +305,12 @@ train_dataset_path: combined_train_qa_interpretation_only.parquet
 validation_dataset_path: paper/inputs/combined_test_m25kh25k_interpretation_10k.parquet
 
 # --- eval / checkpointing ---
-metrics: [rouge, bleu, meteor]
-val_every_n_steps: 5000
+metrics: [rouge, bleu, meteor]      # computed only during end-of-training generative eval
+val_every_n_steps: 5000             # teacher-forced loss pass only (cheap)
 save_every_n_steps: 5000
 keep_last_n_ckpts: 3
-save_best_metric: rouge_l
+save_best_metric: val_loss          # promoted to rouge_l after end-of-training generative eval
+run_final_generative_eval: true     # single full generative pass at end of training
 
 # --- generation defaults ---
 generation:
@@ -332,8 +338,24 @@ Both served through the existing `ECGClinicalReportDataset`.
 ## 8. Training operations
 
 Total steps: `ceil(1,491,307 / 16) = 93,207`. Warmup: `round(0.03 × 93,207) =
-2,796` steps. Validation: every 5,000 steps (≈18 validation passes per epoch).
-Checkpoint retention: last 3 + best-by-rouge_l.
+2,796` steps. Checkpoint retention: last 3 + best-by-`val_loss` during training
+(see below), promoted to best-by-`rouge_l` after the end-of-training generative
+eval.
+
+**Validation cadence — two-tier:**
+
+- **Every 5,000 steps (light):** teacher-forced loss over the 10k-row val
+  parquet. ~625 batches × one forward pass ≈ 1–2 min per pass. Used to drive
+  checkpoint selection during training. Logged as `val_loss`.
+- **End of training (heavy):** one full generative eval — `generate_report`
+  over all 10k rows at greedy decode, `max_new_tokens=256`, then ROUGE / BLEU /
+  METEOR. Estimated cost: ~625 batches × ~8 s/batch ≈ 80–90 min. Produces the
+  final reported numbers and `predictions.jsonl`.
+
+Rationale: running full generative decoding every 5k steps would cost ~24 h on
+top of training, nearly doubling wall-clock. Teacher-forced loss is a strong
+proxy for LoRA-SFT convergence and is the standard monitoring signal during
+training; the expensive generative eval only runs when it actually matters.
 
 Two optimizer param groups:
 
@@ -358,7 +380,8 @@ confirm bs=16 fits on H200 at `max_token_length=256`, bf16. If it doesn't, bump
 `grad_accum_steps` rather than reducing effective batch size.
 
 Estimated wall-clock: ~93k steps × ~0.6 s/step ≈ 15–18 h for training, plus
-~5 h total for the 18 validation passes. Under 24 h.
+~20–30 min total for 18 light (loss-only) validation passes, plus ~80–90 min
+for the single end-of-training generative eval. Total under 21 h.
 
 ## 9. Testing plan
 
