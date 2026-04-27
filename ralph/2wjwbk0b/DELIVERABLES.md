@@ -21,14 +21,14 @@ without regressing any per-task score by more than 5 absolute points.
 
 ## Phase 0 — lock the baseline
 
-- [ ] **0.1 Build HEARTS fixtures (once)**
+- [x] **0.1 Build HEARTS fixtures (once)**
   - From `/volume/HEARTS`, run:
     `uv run python scripts/build_mhi_ecg_fixtures.py --max 100 --out-dir /volume/HEARTS/fix_test_cases`
   - Acceptance: 18 task directories under `fix_test_cases/mhi_ecg/`, each
     with ≥ 50 pickles (`heart_rate`, `interpretation`, etc. should have
     100; rare tasks like `culprit_artery` may have fewer).
 
-- [ ] **0.2 Score the unmodified 2wjwbk0b on HEARTS**
+- [x] **0.2 Score the unmodified 2wjwbk0b on HEARTS**
   - Run `ralph/2wjwbk0b/score_hearts_all.py` against
     `checkpoints/BEST_LLM/2wjwbk0b_20260413-224103_ENHANCED/best_model.pt`.
   - Save output to `ralph/2wjwbk0b/BASELINE.json`. Also copy to

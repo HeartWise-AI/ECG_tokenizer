@@ -246,7 +246,21 @@ async def _async_main(args: argparse.Namespace) -> int:
     t0 = time.time()
     for task in TASKS:
         t_task = time.time()
-        result = await _run_task(agent, task, fixtures_dir, args.n_per_task, logs_dir)
+        try:
+            result = await _run_task(agent, task, fixtures_dir, args.n_per_task, logs_dir)
+        except Exception as exc:
+            import traceback as _tb
+
+            err = _tb.format_exc(limit=4)
+            out["per_task_metric"][task] = None
+            out["per_task_score"][task] = 0.0
+            out["per_task_n"][task] = 0
+            out["skipped"][task] = f"raised: {exc}"
+            print(
+                f"  {task:30s} ERROR ({time.time() - t_task:.1f}s): {err.splitlines()[-1]}",
+                file=sys.stderr,
+            )
+            continue
         out["per_task_metric"][task] = _native_metric_value(task, result["metrics"])
         out["per_task_score"][task] = result["score"]
         out["per_task_n"][task] = result["n"]
@@ -254,7 +268,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             out["skipped"][task] = result["skipped"]
         print(
             f"  {task:30s} score={result['score']:.3f} n={result['n']} "
-            f"({time.time()-t_task:.1f}s)",
+            f"({time.time() - t_task:.1f}s)",
             file=sys.stderr,
         )
 
