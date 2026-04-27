@@ -26,8 +26,9 @@ commit, and stop. The hook re-fires.
    each kept experiment).
 
 4. **Pre-flight checks** (refuse to start if any fails):
-   - GPUs `0,1`: each must have <5 GB used. If both busy → stop with
-     `⚠ GPUS BUSY` (do NOT kill other jobs).
+   - GPU `2`: must have <5 GB used. If busy → stop with `⚠ GPU2 BUSY` (do
+     NOT kill other jobs). The loop is single-GPU on GPU 2 only;
+     GPUs 0 and 1 are reserved for the user's other training runs.
    - Active checkpoint file must exist on disk.
    - Last 3 entries in `ralph/2wjwbk0b/results.tsv` must not all be
      `reverted` — if they are, stop and surface as
@@ -48,11 +49,13 @@ commit, and stop. The hook re-fires.
      external HEARTS eval is the only score that matters)
 
 6. **Train.**
-   `bash scripts/runner.sh --base_config ralph/2wjwbk0b/runs/exp_NNN_<slug>/config.yaml --selected_gpus 0,1 --use_wandb true --run_mode train --instruct_mode true`
-   redirected to `ralph/2wjwbk0b/runs/exp_NNN_<slug>/train.log`. If the
-   process exits non-zero, write `⚠ FAILED:` under the deliverable item,
-   commit the log, append a `failed` row to `results.tsv`, mark `[x]`,
-   stop.
+   `bash scripts/runner.sh --base_config ralph/2wjwbk0b/runs/exp_NNN_<slug>/config.yaml --selected_gpus 2 --use_wandb true --run_mode train --instruct_mode true`
+   redirected to `ralph/2wjwbk0b/runs/exp_NNN_<slug>/train.log`. Single-GPU
+   training on GPU 2 only — slower than the original 2-GPU setup (expect
+   ~6-8h per 1-epoch run on the 400k weighted parquet) but avoids
+   contention with other jobs on GPUs 0/1. If the process exits non-zero,
+   write `⚠ FAILED:` under the deliverable item, commit the log, append a
+   `failed` row to `results.tsv`, mark `[x]`, stop.
 
 7. **Locate the produced checkpoint.** The runner writes to
    `checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_MedGemma/<wandb_id>_<ts>/best_model.pt`.
@@ -65,7 +68,7 @@ commit, and stop. The hook re-fires.
        --checkpoint <new checkpoint> \
        --out ralph/2wjwbk0b/runs/exp_NNN_<slug>/scores.json \
        --n-per-task 100 \
-       --device cuda:0
+       --device cuda:2
    ```
    This script runs all 18 `mhi_ecg` tasks via the HEARTS
    `MedGemmaECGAgent`, aggregates per-task metrics, and computes a

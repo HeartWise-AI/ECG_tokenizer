@@ -10,7 +10,10 @@ without regressing any per-task score by more than 5 absolute points.
 - **Reference checkpoint**: `2wjwbk0b_20260413-224103_ENHANCED/best_model.pt`
 - **Iteration training budget**: `num_epochs: 1` (fast). Final promotion
   step uses `num_epochs: 3`.
-- **GPUs**: `0,1` (refuse to start if either is busy).
+- **GPU**: `2` only (single-GPU). GPUs 0 and 1 are reserved for other jobs;
+  the loop refuses to start if GPU 2 is occupied. Single-GPU training is
+  slower (~6-8h per 1-epoch run vs ~3-4h on 2-GPU) — accept the cost in
+  exchange for non-contention.
 - **HEARTS eval set per iteration**: 100 samples per task × 18 tasks (see
   `score_hearts_all.py`).
 - **Per-category regression tolerance**: 0.05 (absolute).
