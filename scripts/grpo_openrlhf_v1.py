@@ -54,6 +54,8 @@ _spec.loader.exec_module(eval_mod)
 
 # Reward function from the OpenRLHF-compatible service
 from services.openrlhf_judge_reward import reward_func, _init_judge_registry
+# Verifiable per-category rewards (deterministic, no LLM judge required)
+from services.verifiable_reward import verify as verifiable_verify
 
 
 def load_train_data(path: str) -> List[Dict]:
@@ -261,6 +263,10 @@ def main():
     p.add_argument("--beta", type=float, default=0.0,
                    help="KL coefficient against a frozen reference policy. "
                         "beta>0 loads a 2nd copy of the model as ref.")
+    p.add_argument("--reward_kind", choices=["judge", "verifiable"],
+                   default="verifiable",
+                   help="judge=LLM-as-a-judge (slow, costs API); "
+                        "verifiable=per-category deterministic verifier (fast, free)")
     p.add_argument("--early_stop_on_regression", action="store_true",
                    help="If an eval score drops more than 0.05 below baseline, "
                         "rollback to baseline and stop.")
@@ -351,13 +357,19 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 temperature=1.0, top_p=0.95)
 
-            # Score via judge
+            # Score candidates — verifiable (default, deterministic) or judge
             label_str = row["label"]
             prompt_str = row["prompt"]
-            queries = [prompt_str + c["decoded"] for c in cands]
-            rewards_out = reward_func(queries, [prompt_str] * len(cands),
-                                       [label_str] * len(cands))
-            rewards = rewards_out["scores"].tolist()
+            label_data = json.loads(label_str)
+            gt_text = label_data.get("ground_truth", "")
+            cat = label_data.get("category", "classification")
+            if args.reward_kind == "verifiable":
+                rewards = [verifiable_verify(c["decoded"], gt_text, cat) for c in cands]
+            else:
+                queries = [prompt_str + c["decoded"] for c in cands]
+                rewards_out = reward_func(queries, [prompt_str] * len(cands),
+                                           [label_str] * len(cands))
+                rewards = rewards_out["scores"].tolist()
             advs = compute_group_advantages(rewards).to(args.device)
 
             # Reduced diagnostic - only print 1 sample per 10 steps
