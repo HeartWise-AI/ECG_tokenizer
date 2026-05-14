@@ -85,13 +85,15 @@ def per_token_logprobs(logits: torch.Tensor, target_ids: torch.Tensor,
     return gathered * shift_mask, shift_mask
 
 
-def compute_group_advantages(rewards: List[float]) -> torch.Tensor:
+def compute_group_advantages(rewards: List[float], clip: float = 2.0) -> torch.Tensor:
+    """Group-normalized advantages, clipped to ±clip to limit gradient magnitude."""
     r = torch.tensor(rewards, dtype=torch.float32)
     if r.numel() <= 1:
         return r * 0.0
     mean = r.mean()
     std = r.std() + 1e-6
-    return (r - mean) / std
+    a = (r - mean) / std
+    return a.clamp(-clip, clip)
 
 
 @torch.no_grad()
@@ -256,6 +258,12 @@ def main():
                    help="Skip baseline eval (saves ~8 min); set --known_baseline")
     p.add_argument("--known_baseline", type=float, default=None,
                    help="Use this as baseline score instead of re-running eval")
+    p.add_argument("--beta", type=float, default=0.0,
+                   help="KL coefficient against a frozen reference policy. "
+                        "beta>0 loads a 2nd copy of the model as ref.")
+    p.add_argument("--early_stop_on_regression", action="store_true",
+                   help="If an eval score drops more than 0.05 below baseline, "
+                        "rollback to baseline and stop.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -269,6 +277,16 @@ def main():
     original_config = _orig_ckpt["config"]
     del _orig_ckpt
     model, tokenizer = eval_mod.load_model(args.checkpoint, args.device)
+
+    # Optional KL anchor: load a frozen reference model
+    ref_model = None
+    if args.beta > 0:
+        print(f"[grpo] loading reference model (beta={args.beta}) ...")
+        ref_model, _ = eval_mod.load_model(args.checkpoint, args.device)
+        for _p in ref_model.parameters():
+            _p.requires_grad = False
+        ref_model.eval()
+        print("[grpo] reference model loaded")
     # Only train LoRA params
     for n, p_ in model.named_parameters():
         p_.requires_grad = ("lora_" in n) or ("lora_A" in n) or ("lora_B" in n)
@@ -301,6 +319,8 @@ def main():
         print(f"[grpo] baseline overall_score = {baseline_score:.4f}")
 
     metrics: List[Dict] = []
+    best_score = -1.0
+    best_step = 0
     for step in range(1, args.max_steps + 1):
         t0 = time.time()
         batch_indices = rng.integers(0, len(train_rows), size=args.batch_size)
@@ -320,7 +340,10 @@ def main():
                 skipped += 1
                 continue
 
-            # Sample candidates (no grad)
+            # KEEP MODEL IN EVAL MODE THROUGHOUT — this freezes BN running
+            # stats (encoder has BN; train mode would drift them away from
+            # SFT-time stats) and disables dropout. LoRA still computes its
+            # delta and gradients flow normally because inference_mode=False.
             model.eval()
             cands = sample_candidates(
                 model, tokenizer, signal, row["prompt"],
@@ -337,25 +360,41 @@ def main():
             rewards = rewards_out["scores"].tolist()
             advs = compute_group_advantages(rewards).to(args.device)
 
-            # Diagnostic: show rewards and a sample generation
-            print(f"[grpo]   prompt='{prompt_str[:50]}' rewards={[f'{r:.2f}' for r in rewards]}")
-            if max(rewards) - min(rewards) < 1e-3:
-                print(f"[grpo]   first gen: '{cands[0]['decoded'][:120]}'")
+            # Reduced diagnostic - only print 1 sample per 10 steps
+            if step % 10 == 1:
+                print(f"[grpo]   prompt='{prompt_str[:50]}' rewards={[f'{r:.2f}' for r in rewards]}")
 
             # Skip degenerate groups (all rewards equal -> zero gradient)
             if abs(advs).max().item() < 1e-6:
                 continue
 
-            # Compute log-probs with grad
-            model.train()
+            # Compute log-probs with grad (model still in eval() — BN frozen,
+            # no dropout; LoRA delta still has gradient through scaling).
             log_probs_list = compute_logprobs_for_candidates(
                 model, signal, cands, args.device)
-            # loss = -mean over candidates of (advantage * sum_logprob / num_gen_tokens)
+
+            # Optional KL anchor: log-probs from frozen ref policy
+            ref_lp_list = None
+            if ref_model is not None:
+                with torch.no_grad():
+                    ref_lp_list = compute_logprobs_for_candidates(
+                        ref_model, signal, cands, args.device)
+
+            # loss = -mean over candidates of (advantage * mean_log_prob) [+ beta * KL]
             group_loss = 0.0
+            kl_estimate = 0.0
             for i, (lp_sum, n_tok) in enumerate(log_probs_list):
                 avg_lp = lp_sum / n_tok
                 group_loss = group_loss + (-advs[i] * avg_lp)
+                if ref_lp_list is not None:
+                    ref_avg_lp = (ref_lp_list[i][0] / ref_lp_list[i][1]).detach()
+                    # Estimate of KL(policy || ref) ~ avg_lp_policy - avg_lp_ref
+                    kl_term = avg_lp - ref_avg_lp
+                    group_loss = group_loss + args.beta * kl_term
+                    kl_estimate += float(kl_term.detach().item())
             group_loss = group_loss / len(log_probs_list)
+            if ref_lp_list is not None:
+                kl_estimate /= len(log_probs_list)
             group_loss.backward()
             step_loss += float(group_loss.detach().item())
             step_reward += float(np.mean(rewards))
@@ -399,6 +438,23 @@ def main():
                   f"delta {score - baseline_score:+.4f})")
             metrics[-1]["eval_overall"] = score
             metrics[-1]["eval_delta"] = score - baseline_score
+            # Save best checkpoint
+            if score > best_score:
+                best_score = score
+                best_step = step
+                best_ckpt_path = out_dir / "best_so_far.pt"
+                torch.save({
+                    "model_state_dict": model.state_dict(),
+                    "config": original_config,
+                    "baseline_score": baseline_score,
+                    "best_step": step,
+                    "best_score": score,
+                    "metrics": metrics,
+                }, best_ckpt_path)
+                print(f"[grpo] saved new best (Δ {score - baseline_score:+.4f}) to {best_ckpt_path}")
+            if args.early_stop_on_regression and score < baseline_score - 0.05:
+                print(f"[grpo] EARLY STOP: eval {score:.4f} regressed > 0.05 below baseline")
+                break
 
     # Save final checkpoint and metrics
     final_ckpt = out_dir / "best_model.pt"

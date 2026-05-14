@@ -1,0 +1,81 @@
+{
+  "overall_score": 0.49212805250305247,
+  "category_aggregates": {
+    "category_conduction": {
+      "count": 10,
+      "mean_score": 0.55
+    },
+    "localization_qrs_axis": {
+      "count": 3,
+      "mean_score": 0.0
+    },
+    "category_chamber_enlargement": {
+      "count": 10,
+      "mean_score": 0.5800000000000001
+    },
+    "ecg_interval": {
+      "count": 10,
+      "mean_score": 0.4
+    },
+    "json_interpretation": {
+      "count": 10,
+      "mean_score": 0.49307500000000004
+    },
+    "classification": {
+      "count": 10,
+      "mean_score": 0.19
+    },
+    "random_finding_question": {
+      "count": 10,
+      "mean_score": 0.77
+    },
+    "localization_t_wave": {
+      "count": 6,
+      "mean_score": 0.25
+    },
+    "structural_heart_disease": {
+      "count": 10,
+      "mean_score": 0.38999999999999996
+    },
+    "category_rhythm": {
+      "count": 10,
+      "mean_score": 0.7200000000000001
+    },
+    "culprit_artery": {
+      "count": 10,
+      "mean_score": 0.47000000000000003
+    },
+    "acs_severity": {
+      "count": 10,
+      "mean_score": 0.64
+    },
+    "urgency_assessment": {
+      "count": 1,
+      "mean_score": 0.0
+    },
+    "afib_risk": {
+      "count": 10,
+      "mean_score": 0.36
+    },
+    "lvef": {
+      "count": 10,
+      "mean_score": 0.8400000000000001
+    },
+    "category_infarct_ischemia": {
+      "count": 10,
+      "mean_score": 0.65
+    },
+    "category_other": {
+      "count": 10,
+      "mean_score": 0.8
+    },
+    "category_pericarditis": {
+      "count": 10,
+      "mean_score": 0.24
+    },
+    "interpretation": {
+      "count": 10,
+      "mean_score": 0.621904761904762
+    }
+  }
+}
