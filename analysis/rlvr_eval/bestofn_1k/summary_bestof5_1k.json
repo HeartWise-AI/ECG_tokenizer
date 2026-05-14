@@ -1,0 +1,81 @@
+{
+  "overall_score": 0.8131909279609274,
+  "category_aggregates": {
+    "json_interpretation": {
+      "count": 50,
+      "mean_score": 0.7883939999999999
+    },
+    "category_infarct_ischemia": {
+      "count": 50,
+      "mean_score": 0.866
+    },
+    "interpretation": {
+      "count": 50,
+      "mean_score": 0.7256190476190476
+    },
+    "culprit_artery": {
+      "count": 50,
+      "mean_score": 0.772
+    },
+    "urgency_assessment": {
+      "count": 1,
+      "mean_score": 0.0
+    },
+    "localization_qrs_axis": {
+      "count": 3,
+      "mean_score": 1.0
+    },
+    "ecg_interval": {
+      "count": 16,
+      "mean_score": 0.75
+    },
+    "lvef": {
+      "count": 50,
+      "mean_score": 0.9469999999999998
+    },
+    "category_conduction": {
+      "count": 50,
+      "mean_score": 0.828
+    },
+    "structural_heart_disease": {
+      "count": 50,
+      "mean_score": 0.98
+    },
+    "category_pericarditis": {
+      "count": 10,
+      "mean_score": 1.0
+    },
+    "afib_risk": {
+      "count": 50,
+      "mean_score": 0.944
+    },
+    "random_finding_question": {
+      "count": 14,
+      "mean_score": 1.0
+    },
+    "localization_t_wave": {
+      "count": 6,
+      "mean_score": 0.5499999999999999
+    },
+    "category_rhythm": {
+      "count": 50,
+      "mean_score": 0.8530000000000001
+    },
+    "category_other": {
+      "count": 50,
+      "mean_score": 0.8720000000000002
+    },
+    "acs_severity": {
+      "count": 50,
+      "mean_score": 0.88
+    },
+    "classification": {
+      "count": 50,
+      "mean_score": 0.672
+    },
+    "category_chamber_enlargement": {
+      "count": 50,
+      "mean_score": 0.934
+    }
+  }
+}
