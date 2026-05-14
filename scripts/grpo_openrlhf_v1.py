@@ -100,7 +100,12 @@ def sample_candidates(model, tokenizer, signal: torch.Tensor,
                        max_new_tokens: int = 128,
                        temperature: float = 1.0, top_p: float = 0.95):
     """Generate n candidates for a single (signal, prompt). Returns list of
-    (full_input_ids, prompt_len, decoded_text) tuples."""
+    {prompt_ids, gen_ids, decoded} dicts.
+
+    NOTE: model.generate_report_with_question returns ONLY the new tokens
+    (not the prompt). We keep prompt_ids and gen_ids separate; the forward
+    pass at backprop time will reconstruct the full sequence.
+    """
     prompt = eval_mod.build_prompt(prompt_text)
     enc = tokenizer(prompt, add_special_tokens=True, return_tensors="pt")
     pids = enc["input_ids"].to(device)
@@ -121,15 +126,14 @@ def sample_candidates(model, tokenizer, signal: torch.Tensor,
         top_p=top_p,
     )
 
-    prompt_len = pids.shape[1]
+    prompt_ids_1d = pids[0]  # single prompt; same for all candidates
     out = []
     for i in range(gen_ids.size(0)):
-        full = gen_ids[i].tolist()
-        # Strip leading pad if any, then keep prompt + generated portion
-        decoded = tokenizer.decode(full[prompt_len:], skip_special_tokens=True).strip()
+        # gen_ids[i] is just the new tokens
+        decoded = tokenizer.decode(gen_ids[i], skip_special_tokens=True).strip()
         out.append({
-            "full_ids": gen_ids[i],
-            "prompt_len": prompt_len,
+            "prompt_ids": prompt_ids_1d,
+            "gen_ids": gen_ids[i],
             "decoded": decoded,
         })
     return out
@@ -138,19 +142,33 @@ def sample_candidates(model, tokenizer, signal: torch.Tensor,
 def compute_logprobs_for_candidates(model, signal: torch.Tensor,
                                      candidates: List[Dict],
                                      device: str) -> List[torch.Tensor]:
-    """Score the actual sampled tokens under the (gradient-enabled) policy."""
-    # Stack candidate ids — they may differ in length; left-align with pad
-    max_len = max(c["full_ids"].size(0) for c in candidates)
+    """Score the actual sampled tokens under the (gradient-enabled) policy.
+
+    Each candidate has prompt_ids (shared) and gen_ids (sampled). Build full
+    sequences (prompt + gen), pad to max length, run forward, gather log-probs
+    of the gen tokens only.
+    """
+    prompt_ids = candidates[0]["prompt_ids"]  # (Lp,) — same for all
+    plen = prompt_ids.size(0)
+    gen_lens = [c["gen_ids"].size(0) for c in candidates]
+    max_gen = max(gen_lens) if gen_lens else 1
+    max_total = plen + max_gen
     pad_id = 0
     n = len(candidates)
-    full_ids = torch.full((n, max_len), pad_id, dtype=torch.long, device=device)
-    attn = torch.zeros((n, max_len), dtype=torch.long, device=device)
-    prompt_lens = []
+
+    full_ids = torch.full((n, max_total), pad_id, dtype=torch.long, device=device)
+    attn = torch.zeros((n, max_total), dtype=torch.long, device=device)
+    gen_token_mask = torch.zeros((n, max_total), dtype=torch.float32, device=device)
+
     for i, c in enumerate(candidates):
-        L = c["full_ids"].size(0)
-        full_ids[i, :L] = c["full_ids"].to(device)
-        attn[i, :L] = 1
-        prompt_lens.append(c["prompt_len"])
+        gids = c["gen_ids"].to(device)
+        L = gids.size(0)
+        full_ids[i, :plen] = prompt_ids.to(device)
+        full_ids[i, plen:plen + L] = gids
+        attn[i, :plen + L] = 1
+        # Only score positions whose NEXT token is a generated one (positions
+        # plen-1 .. plen+L-2 predict tokens plen .. plen+L-1).
+        gen_token_mask[i, plen:plen + L] = 1.0
 
     sig_rep = signal.expand(n, -1, -1) if signal.dim() == 3 else signal.unsqueeze(0).expand(n, -1, -1)
     sig_rep = sig_rep.to(device=device, dtype=torch.float32)
@@ -163,35 +181,37 @@ def compute_logprobs_for_candidates(model, signal: torch.Tensor,
     )
     logits = out["logits"] if isinstance(out, dict) else out[0]
 
-    # Only score positions in the generated portion (after prompt_len)
-    gen_mask = torch.zeros_like(attn, dtype=torch.float32)
-    for i, plen in enumerate(prompt_lens):
-        gen_mask[i, plen:] = attn[i, plen:].float()
-
-    log_probs, shift_mask = per_token_logprobs(logits, full_ids, gen_mask)
-    # Sum log-probs per candidate over generated tokens
+    log_probs, shift_mask = per_token_logprobs(logits, full_ids, gen_token_mask)
+    # log_probs shape (B, T-1). shift_mask same. Sum per candidate.
     return [(log_probs[i].sum(), shift_mask[i].sum().clamp(min=1.0))
             for i in range(n)]
 
 
 def eval_on_subset(model, tokenizer, subset_parquet: str, output_dir: str,
                    label: str, device: str, original_config,
-                   run_judge: bool = True, max_new_tokens: int = 256) -> float:
-    """Run the same eval as rlvr_eval_subset.py and return overall_score."""
+                   run_judge: bool = True, max_new_tokens: int = 256,
+                   use_original_ckpt: str = None) -> float:
+    """Run the same eval as rlvr_eval_subset.py and return overall_score.
+    If use_original_ckpt is provided, eval that path directly (no save/reload).
+    Otherwise saves current model.state_dict() to a temp file and eval that.
+    """
     import subprocess
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save model state temporarily so the eval script can load it
-    tmp_ckpt = out_dir / f"_eval_ckpt_{label}.pt"
-    torch.save({
-        "model_state_dict": model.state_dict(),
-        "config": original_config,
-    }, tmp_ckpt)
+    if use_original_ckpt:
+        tmp_ckpt = Path(use_original_ckpt)
+    else:
+        # Save model state temporarily so the eval script can load it
+        tmp_ckpt = out_dir / f"_eval_ckpt_{label}.pt"
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "config": original_config,
+        }, tmp_ckpt)
 
     cmd = [
-        sys.executable, str(ROOT / "scripts" / "rlvr_eval_subset.py"),
+        sys.executable, "-u", str(ROOT / "scripts" / "rlvr_eval_subset.py"),
         "--checkpoint", str(tmp_ckpt),
         "--subset_parquet", subset_parquet,
         "--output_dir", str(out_dir),
@@ -232,6 +252,10 @@ def main():
     p.add_argument("--max_grad_norm", type=float, default=0.5)
     p.add_argument("--eval_every", type=int, default=5)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--skip_baseline_eval", action="store_true",
+                   help="Skip baseline eval (saves ~8 min); set --known_baseline")
+    p.add_argument("--known_baseline", type=float, default=None,
+                   help="Use this as baseline score instead of re-running eval")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -265,12 +289,16 @@ def main():
     rng = np.random.default_rng(args.seed)
 
     # Baseline eval
-    print("[grpo] === baseline eval ===")
-    baseline_score = eval_on_subset(
-        model, tokenizer, args.eval_subset, str(out_dir / "eval_baseline"),
-        label="baseline", device=args.device, original_config=original_config,
-        max_new_tokens=256)
-    print(f"[grpo] baseline overall_score = {baseline_score:.4f}")
+    if args.skip_baseline_eval and args.known_baseline is not None:
+        baseline_score = args.known_baseline
+        print(f"[grpo] === SKIPPED baseline eval; using known {baseline_score:.4f} ===")
+    else:
+        print("[grpo] === baseline eval ===")
+        baseline_score = eval_on_subset(
+            model, tokenizer, args.eval_subset, str(out_dir / "eval_baseline"),
+            label="baseline", device=args.device, original_config=original_config,
+            max_new_tokens=256, use_original_ckpt=args.checkpoint)
+        print(f"[grpo] baseline overall_score = {baseline_score:.4f}")
 
     metrics: List[Dict] = []
     for step in range(1, args.max_steps + 1):
@@ -309,6 +337,11 @@ def main():
             rewards = rewards_out["scores"].tolist()
             advs = compute_group_advantages(rewards).to(args.device)
 
+            # Diagnostic: show rewards and a sample generation
+            print(f"[grpo]   prompt='{prompt_str[:50]}' rewards={[f'{r:.2f}' for r in rewards]}")
+            if max(rewards) - min(rewards) < 1e-3:
+                print(f"[grpo]   first gen: '{cands[0]['decoded'][:120]}'")
+
             # Skip degenerate groups (all rewards equal -> zero gradient)
             if abs(advs).max().item() < 1e-6:
                 continue
@@ -338,8 +371,9 @@ def main():
             print(f"[grpo] step {step}: non-finite grad_norm, skipping")
             optimizer.zero_grad(set_to_none=True)
             continue
-        if grad_norm > 10.0:
-            print(f"[grpo] step {step}: grad_norm {grad_norm:.2f} > 10, skipping")
+        # clip already capped to max_grad_norm; only skip on truly pathological norms
+        if grad_norm > 500.0:
+            print(f"[grpo] step {step}: grad_norm {grad_norm:.2f} > 500, skipping")
             optimizer.zero_grad(set_to_none=True)
             continue
 
