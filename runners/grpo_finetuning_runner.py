@@ -13,6 +13,8 @@ from utils.rewards import (
     BertDiagnosisReward,
     compute_rewards,
 )
+from utils.rewards_binary import compute_binary_rewards
+from utils.rewards_labelset import LabelsetReward, compute_labelset_rewards
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +115,31 @@ class GRPOFinetuningRunner(RLFinetuningRunnerBase):
                 if gen_cfg is not None:
                     gen_cfg.pad_token_id = pad_token_id
 
-        # Initialize BERT diagnosis reward (tiny 0.1B model, stays on same GPU)
-        bert_reward = BertDiagnosisReward(device=str(device))
-        if self.config.is_ref_device:
-            print("[GRPO] Loaded BERT diagnosis classifier for reward computation")
+        # Verifier mode: "bert" | "binary" | "labelset" | "judge"
+        verifier = str(getattr(self.config, "verifier", "bert")).lower()
+        bert_reward = None
+        labelset_reward = None
+        judge_reward = None
+        if verifier == "binary":
+            if self.config.is_ref_device:
+                print("[GRPO] verifier=binary; using compute_binary_rewards")
+        elif verifier == "labelset":
+            ontology_path = getattr(self.config, "ontology_path",
+                                    "/volume/LLM_JUDGE/ontology/ecg_ontology.json")
+            labelset_reward = LabelsetReward(ontology_path=ontology_path)
+            if self.config.is_ref_device:
+                print(f"[GRPO] verifier=labelset; loaded LabelsetReward "
+                      f"({len(labelset_reward.alias_to_canon)} aliases, "
+                      f"{len(labelset_reward.canonicals)} canonicals)")
+        elif verifier == "judge":
+            from utils.rewards_judge import JudgeReward, compute_judge_rewards as _compute_judge_rewards
+            judge_reward = JudgeReward()
+            if self.config.is_ref_device:
+                print("[GRPO] verifier=judge; loaded JudgeReward (LLM_JUDGE registry)")
+        else:
+            bert_reward = BertDiagnosisReward(device=str(device))
+            if self.config.is_ref_device:
+                print("[GRPO] Loaded BERT diagnosis classifier for reward computation")
 
         self.model.train()
         if self.ref_model is not None:
@@ -212,7 +235,19 @@ class GRPOFinetuningRunner(RLFinetuningRunnerBase):
                     for b in range(B):
                         text = tokenizer.decode(gen_ids[b], skip_special_tokens=True)
                         texts_g.append(text)
-                        r = compute_rewards(text, ground_truth_texts[b], reward_weights, bert_reward=bert_reward)
+                        if verifier == "binary":
+                            r = compute_binary_rewards(text, ground_truth_texts[b], reward_weights)
+                        elif verifier == "labelset":
+                            r = compute_labelset_rewards(text, ground_truth_texts[b],
+                                                          reward_weights, labelset_reward=labelset_reward)
+                        elif verifier == "judge":
+                            # Requires dataset to also pass prompt_category in batch["prompt_category"]
+                            from utils.rewards_judge import compute_judge_rewards
+                            cat = batch.get("prompt_category", ["classification"] * B)[b] if "prompt_category" in batch else "classification"
+                            r = compute_judge_rewards(text, ground_truth_texts[b], cat,
+                                                       reward_weights, judge_reward=judge_reward)
+                        else:
+                            r = compute_rewards(text, ground_truth_texts[b], reward_weights, bert_reward=bert_reward)
                         rewards[b, g] = r["total"]
                         batch_r_format += r["format"]
                         batch_r_diagnosis += r["diagnosis"]
@@ -275,8 +310,13 @@ class GRPOFinetuningRunner(RLFinetuningRunnerBase):
                           f"labeled_tokens_per_sample={num_labeled.tolist()}")
 
                 # Cache ECG embeddings for policy model (same signal across all groups)
+                # Switch to eval() during forward passes so dropout is disabled —
+                # without this, old_log_probs and policy_log_probs falsely diverge
+                # at step 0 (same weights, same inputs, different dropout masks)
+                # → fake per-token ratio variance → loss-clip safeguards fire.
                 old_token_logps = []
                 logp_start = time.time()
+                self.model.eval()
                 with torch.no_grad():
                     policy_ecg_emb = self._encode_ecg(
                         self.model, signal, prompt_input_ids, prompt_attention_mask
@@ -291,6 +331,9 @@ class GRPOFinetuningRunner(RLFinetuningRunnerBase):
                             )
                             tlp, tmask = self._token_logp(logits, labels_exp)
                             old_token_logps.append((tlp, tmask))
+                # Stay in eval() for the policy forward below (need gradient but
+                # not stochastic dropout). Backward & optimizer step still update
+                # weights — eval() only disables dropout / batchnorm-stat updates.
                 if step < 3 and self.config.is_ref_device:
                     logp_time = time.time() - logp_start
                     seq_logps = [tlp.sum(dim=-1) for tlp, _ in old_token_logps]
@@ -400,6 +443,10 @@ class GRPOFinetuningRunner(RLFinetuningRunnerBase):
                     self._accum_advantage_mean += float(advantages.mean().detach()) * B
                     self._accum_kl += (batch_kl / group_size) * B
                     self._accum_count += B
+
+                # Re-enable train mode for subsequent generation (where eval is
+                # toggled internally) — we exited the forward block in eval mode.
+                self.model.train()
 
                 # Gradient step
                 if (step + 1) % grad_accum == 0:

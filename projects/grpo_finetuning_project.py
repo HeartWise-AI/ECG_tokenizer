@@ -9,6 +9,8 @@ from utils.enums import ProjectName
 from utils.registry import ProjectRegistry
 from utils.wandb_wrapper import WandbWrapper
 from data.grpo_prompt_dataset import GRPOPromptDataset, grpo_collate_fn
+from data.grpo_binary_dataset import GRPOBinaryDataset, grpo_binary_collate_fn
+from data.grpo_labelset_dataset import GRPOLabelsetDataset, grpo_labelset_collate_fn
 
 
 torch.serialization.add_safe_globals([GRPOFinetuningConfig])
@@ -48,14 +50,46 @@ class GRPOFinetuningProject(RLFinetuningProjectBase):
         trainable_mode = str(getattr(self.config, "trainable", "lora")).lower()
         self._set_trainable_params(policy_model, trainable_mode)
 
-        train_dataset = GRPOPromptDataset(
-            dataset_path=self.config.train_dataset_path,
-            tokenizer=tokenizer,
-            config=self.config,
-            signal_path_column=self.config.signal_path_column,
-            messages_column=self.config.messages_column,
-            report_column=self.config.report_column,
-        )
+        verifier = str(getattr(self.config, "verifier", "bert")).lower()
+        if verifier == "binary":
+            train_dataset = GRPOBinaryDataset(
+                dataset_path=self.config.train_dataset_path,
+                tokenizer=tokenizer,
+                config=self.config,
+                signal_path_column=self.config.signal_path_column,
+                prompt_column=getattr(self.config, "prompt_column", "prompt"),
+                answer_column=getattr(self.config, "answer_column", "generated_answer"),
+                filter_categories=getattr(self.config, "filter_prompt_categories", None),
+            )
+            collate = grpo_binary_collate_fn
+            if self.config.is_ref_device:
+                print(f"[GRPOFinetuningProject] verifier=binary; using GRPOBinaryDataset "
+                      f"({len(train_dataset)} rows after filtering)")
+        elif verifier in ("labelset", "judge"):
+            train_dataset = GRPOLabelsetDataset(
+                dataset_path=self.config.train_dataset_path,
+                tokenizer=tokenizer,
+                config=self.config,
+                signal_path_column=self.config.signal_path_column,
+                prompt_column=getattr(self.config, "prompt_column", "prompt"),
+                answer_column=getattr(self.config, "answer_column", "generated_answer"),
+                filter_categories=getattr(self.config, "filter_prompt_categories", None),
+                max_rows=getattr(self.config, "max_train_rows", None),
+            )
+            collate = grpo_labelset_collate_fn
+            if self.config.is_ref_device:
+                print(f"[GRPOFinetuningProject] verifier={verifier}; using GRPOLabelsetDataset "
+                      f"({len(train_dataset)} rows)")
+        else:
+            train_dataset = GRPOPromptDataset(
+                dataset_path=self.config.train_dataset_path,
+                tokenizer=tokenizer,
+                config=self.config,
+                signal_path_column=self.config.signal_path_column,
+                messages_column=self.config.messages_column,
+                report_column=self.config.report_column,
+            )
+            collate = grpo_collate_fn
 
         train_loader = DataLoader(
             train_dataset,
@@ -63,7 +97,7 @@ class GRPOFinetuningProject(RLFinetuningProjectBase):
             shuffle=True,
             num_workers=self.config.num_workers,
             pin_memory=True,
-            collate_fn=grpo_collate_fn,
+            collate_fn=collate,
         )
 
         optimizer = torch.optim.AdamW(

@@ -47,6 +47,21 @@ if not hasattr(_tok_utils, "Trie"):
         def __setstate__(self, state): pass
     _tok_utils.Trie = _Trie
 
+# Patch GemmaTokenizer.__setstate__ to inject missing sp_model_kwargs (HF 5.x SP-tokenizer pickle compat)
+_gemma_tok = importlib.import_module("transformers.models.gemma.tokenization_gemma")
+if hasattr(_gemma_tok.GemmaTokenizer, "__setstate__"):
+    def _patched_setstate(self, state):
+        if "sp_model_kwargs" not in state:
+            state["sp_model_kwargs"] = {}
+        self.__dict__.update(state)
+        import sentencepiece as spm
+        self.sp_model = spm.SentencePieceProcessor(**state.get("sp_model_kwargs", {}))
+        if "sp_model_proto" in state:
+            self.sp_model.LoadFromSerializedProto(state["sp_model_proto"])
+        elif hasattr(self, "vocab_file") and self.vocab_file:
+            self.sp_model.Load(self.vocab_file)
+    _gemma_tok.GemmaTokenizer.__setstate__ = _patched_setstate
+
 
 # ---------------------------------------------------------------------------
 # 1. Model loading (mirrors llm_finetuning_project._setup_inference_objects)

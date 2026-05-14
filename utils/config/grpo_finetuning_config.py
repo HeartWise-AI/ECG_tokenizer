@@ -36,6 +36,14 @@ class GRPOFinetuningConfig(HeartWiseConfig):
     messages_column: str = "messages"
     report_column: str = "report"
 
+    # RLVR verifier mode: "bert" | "binary" | "labelset"
+    verifier: str = "bert"
+    prompt_column: str = "prompt"
+    answer_column: str = "generated_answer"
+    filter_prompt_categories: Optional[list] = None
+    max_train_rows: Optional[int] = None
+    ontology_path: str = "/volume/LLM_JUDGE/ontology/ecg_ontology.json"
+
     # Training parameters
     num_workers: int = 2
     grad_accum_steps: int = 4

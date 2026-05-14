@@ -30,6 +30,50 @@ try:
 except ImportError:
     pass
 
+# transformers >=5 moved Trie from tokenization_utils to tokenization_python.
+# Older checkpoints pickle a reference to transformers.tokenization_utils.Trie,
+# so expose Trie there for unpickling. We also wrap torch.load to install the
+# shim on every call (in case transformers re-imports the module between here
+# and the actual load).
+def _install_trie_shim():
+    try:
+        import transformers
+        try:
+            from transformers.tokenization_python import Trie as _Trie
+        except ImportError:
+            try:
+                from transformers.tokenization_utils_base import Trie as _Trie
+            except ImportError:
+                return False
+        # Force-set on whichever module is currently registered as transformers.tokenization_utils
+        mod_name = "transformers.tokenization_utils"
+        cur = sys.modules.get(mod_name)
+        if cur is None:
+            import importlib
+            cur = importlib.import_module(mod_name)
+        if not hasattr(cur, 'Trie'):
+            cur.Trie = _Trie
+        # Also set on the underlying file module if different
+        spc = sys.modules.get("transformers.tokenization_utils_sentencepiece")
+        if spc is not None and not hasattr(spc, 'Trie'):
+            spc.Trie = _Trie
+        return True
+    except Exception as _e:
+        print(f"[shim] Trie shim failed: {_e}", flush=True)
+        return False
+
+_install_trie_shim()
+print(f"[shim] Trie installed initially", flush=True)
+
+# Wrap torch.load so every load re-installs the shim first (defensive).
+import torch
+_orig_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    _install_trie_shim()
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+print("[shim] torch.load wrapped to re-install Trie shim", flush=True)
+
 from utils.seed import set_seed
 from utils.ddp import DistributedUtils
 from utils.parser import HeartWiseParser
