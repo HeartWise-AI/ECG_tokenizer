@@ -270,6 +270,9 @@ def main():
     p.add_argument("--early_stop_on_regression", action="store_true",
                    help="If an eval score drops more than 0.05 below baseline, "
                         "rollback to baseline and stop.")
+    p.add_argument("--full_finetune", action="store_true",
+                   help="Unfreeze the whole MedGemma decoder (full FT) instead "
+                        "of LoRA-only. Encoder/quantizer/bridge stay frozen.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -293,12 +296,32 @@ def main():
             _p.requires_grad = False
         ref_model.eval()
         print("[grpo] reference model loaded")
-    # Only train LoRA params
-    for n, p_ in model.named_parameters():
-        p_.requires_grad = ("lora_" in n) or ("lora_A" in n) or ("lora_B" in n)
+    if args.full_finetune:
+        # Full FT: unfreeze the entire MedGemma decoder (base weights + LoRA).
+        # Keep ECG encoder + quantizer + bridge frozen so we don't break the
+        # signal-injection path (those were trained in earlier SFT stages).
+        for n, p_ in model.named_parameters():
+            p_.requires_grad = n.startswith("decoder.llm_model")
+        # Enable gradient checkpointing on the LLM to fit 4B FT in memory
+        try:
+            llm = model.decoder.llm_model
+            if hasattr(llm, "gradient_checkpointing_enable"):
+                llm.gradient_checkpointing_enable()
+                print("[grpo] gradient checkpointing enabled on LLM")
+            if hasattr(llm, "config"):
+                llm.config.use_cache = False
+        except Exception as e:
+            print(f"[grpo] gradient checkpointing setup warning: {e}")
+        mode_str = "FULL FINETUNE (decoder.llm_model unfrozen)"
+    else:
+        # LoRA-only
+        for n, p_ in model.named_parameters():
+            p_.requires_grad = ("lora_" in n) or ("lora_A" in n) or ("lora_B" in n)
+        mode_str = "LoRA-only"
+
     trainable = [p for p in model.parameters() if p.requires_grad]
     n_train = sum(p.numel() for p in trainable)
-    print(f"[grpo] trainable params: {n_train:,}")
+    print(f"[grpo] mode: {mode_str}; trainable params: {n_train:,}")
 
     # Make sure LoRA is active (training mode, not inference)
     try:
@@ -422,9 +445,13 @@ def main():
             print(f"[grpo] step {step}: non-finite grad_norm, skipping")
             optimizer.zero_grad(set_to_none=True)
             continue
-        # clip already capped to max_grad_norm; only skip on truly pathological norms
-        if grad_norm > 500.0:
-            print(f"[grpo] step {step}: grad_norm {grad_norm:.2f} > 500, skipping")
+        # clip_grad_norm_ already scaled the gradient down to max_grad_norm
+        # before this point, so the *applied* update is always safe. The raw
+        # norm is naturally much larger for full-FT (4.3B params) than LoRA
+        # (24M). Only skip on truly pathological / non-finite norms.
+        skip_thresh = 50000.0 if args.full_finetune else 500.0
+        if grad_norm > skip_thresh:
+            print(f"[grpo] step {step}: grad_norm {grad_norm:.2f} > {skip_thresh:.0f}, skipping")
             optimizer.zero_grad(set_to_none=True)
             continue
 

@@ -370,13 +370,36 @@ _ROUTING = {
 }
 
 
+_PREFIX_ARTIFACT_RE = re.compile(r"^\s*[:;,.\-*]+\s*", re.UNICODE)
+
+
+def _prefix_penalty(pred: str) -> float:
+    """0.5x penalty if output starts with junk like ': ', '.', etc.
+    The LLM-as-a-judge penalizes these too. v10 had a hard 0 penalty which
+    broke training; v11 uses 0.5 — strong enough to discourage but doesn't
+    zero out the gradient signal."""
+    if not pred:
+        return 1.0
+    p = pred.lstrip()
+    bad_leaders = [": ", ":\n", ". ", ".\n", ", ", "info:", "answer:", "note:"]
+    for b in bad_leaders:
+        if p.lower().startswith(b):
+            return 0.5
+    if _PREFIX_ARTIFACT_RE.match(pred):
+        return 0.5
+    return 1.0
+
+
 def verify(pred: str, gt: str, category: str) -> float:
     fn = _ROUTING.get(category, verify_ontology_f1)
     try:
-        return float(fn(pred, gt))
+        score = float(fn(pred, gt))
     except Exception as e:
         print(f"[verifiable_reward] error in {category}: {e}")
         return 0.0
+    # Apply prefix penalty — judge will see (and penalize) bad prefixes too.
+    score *= _prefix_penalty(pred)
+    return score
 
 
 # Smoke test
