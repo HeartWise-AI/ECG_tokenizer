@@ -14,8 +14,10 @@ Usage:
 
 import argparse
 import glob
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -56,12 +58,49 @@ def find_new_checkpoints(ckpt_dir: str, seen: set) -> list:
     return found
 
 
+def checkpoint_label(checkpoint: str, ckpt_dir: str) -> str:
+    ckpt_path = Path(checkpoint).resolve()
+    try:
+        rel = ckpt_path.relative_to(Path(ckpt_dir).resolve())
+    except ValueError:
+        rel = ckpt_path.name
+    rel_stem = str(Path(rel).with_suffix(""))
+    safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", rel_stem).strip("_") or ckpt_path.stem
+    digest = hashlib.sha1(str(ckpt_path).encode("utf-8")).hexdigest()[:8]
+    return f"{safe_stem}_{digest}"
+
+
+def _cached_summary_for_checkpoint(summary_path: str, checkpoint: str) -> dict | None:
+    if not os.path.isfile(summary_path):
+        return None
+    with open(summary_path) as f:
+        summary = json.load(f)
+    cached_checkpoint = summary.get("iteration_loop", {}).get("checkpoint_path")
+    checkpoint_abs = str(Path(checkpoint).resolve())
+    if cached_checkpoint == checkpoint_abs:
+        return summary
+    print(
+        f"[iter] Ignoring cached summary {summary_path}: "
+        f"checkpoint metadata {cached_checkpoint!r} != {checkpoint_abs!r}"
+    )
+    return None
+
+
+def _write_summary_checkpoint_metadata(summary_path: str, checkpoint: str) -> dict:
+    with open(summary_path) as f:
+        summary = json.load(f)
+    summary.setdefault("iteration_loop", {})["checkpoint_path"] = str(Path(checkpoint).resolve())
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    return summary
+
+
 def run_eval(checkpoint: str, subset_parquet: str, output_dir: str,
              device: str, label: str) -> dict:
     summary_path = os.path.join(output_dir, f"summary_{label}.json")
-    if os.path.isfile(summary_path):
-        with open(summary_path) as f:
-            return json.load(f)
+    cached_summary = _cached_summary_for_checkpoint(summary_path, checkpoint)
+    if cached_summary is not None:
+        return cached_summary
     os.makedirs(output_dir, exist_ok=True)
     cmd = [
         sys.executable, SCRIPT,
@@ -80,8 +119,7 @@ def run_eval(checkpoint: str, subset_parquet: str, output_dir: str,
     if res.returncode != 0:
         print(f"[iter] WARN: eval for {label} failed (code {res.returncode})")
         return None
-    with open(summary_path) as f:
-        return json.load(f)
+    return _write_summary_checkpoint_metadata(summary_path, checkpoint)
 
 
 def main():
@@ -118,7 +156,7 @@ def main():
         ckpts = find_new_checkpoints(args.ckpt_dir, seen)
         for ckpt in ckpts:
             seen.add(ckpt)
-            label = Path(ckpt).stem
+            label = checkpoint_label(ckpt, args.ckpt_dir)
             print(f"[iter] New checkpoint: {ckpt} (label={label})")
             current = run_eval(
                 ckpt, args.subset_parquet, args.output_dir, args.device, label
