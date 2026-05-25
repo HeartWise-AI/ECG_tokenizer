@@ -495,7 +495,7 @@ def main():
 
     # Parse temperatures
     temperatures = [float(t.strip()) for t in args.temperatures.split(",")]
-    print(f"\n=== Generating {len(temperatures)} candidates per sample ===")
+    print(f"\n=== Generating {args.num_generations} candidates per sample ===")
     print(f"Temperatures: {temperatures}")
 
     mode = "a" if args.resume and start_idx > 0 else "w"
@@ -521,7 +521,7 @@ def main():
             # Generate diverse samples with varied temperatures
             generations = generate_diverse(
                 model, tokenizer, ecg_tensor, question, device,
-                num_samples=len(temperatures),
+                num_samples=args.num_generations,
                 temperatures=temperatures,
             )
 
