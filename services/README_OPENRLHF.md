@@ -13,8 +13,9 @@
    can recover both at scoring time. Produced
    `data/openrlhf_train_v1.jsonl` (4610 rows, balanced across 21 categories).
 3. **`scripts/run_openrlhf_grpo.sh`** — Launch script with the right flag
-   set for our 2-GPU hybrid engine (group_norm advantage = GRPO,
-   colocate_all, low LR 5e-7, KL beta 1e-2, dynamic filtering).
+   set for our 2-GPU split engine (group_norm advantage = GRPO,
+   actor+reference colocated on one training GPU, one vLLM rollout GPU,
+   low LR 5e-7, KL beta 1e-2, dynamic filtering).
 
 ## Still required ⏳
 The single hard piece is wrapping `ECG_Tokenizer_Wrapper` so OpenRLHF's
@@ -53,8 +54,22 @@ The hook is missing because the existing pipeline always goes through
 
 ## Expected runtime when done
 - Engineering effort to finish A+B+C: ~2–3 days of dedicated work.
-- Once it runs: ~3–4 hours for one GRPO epoch over 5000 prompts (N=5
-  samples/prompt) on 2× H200 with hybrid engine.
+- Once it runs: likely several hours for one GRPO epoch over 5000 prompts
+  (N=5 samples/prompt) on 2× H200 with one dedicated vLLM rollout GPU and
+  one actor/reference training GPU.
+
+## GPU placement
+For ECG we should prefer split placement over `--train.colocate_all`:
+- Training GPU: actor + reference via `--train.colocate_actor_ref`,
+  `--actor.num_gpus_per_node 1`, `--ref.num_gpus_per_node 1`.
+- Rollout GPU: vLLM via `--vllm.num_engines 1`,
+  `--vllm.tensor_parallel_size 1`.
+- Avoid `--vllm.enable_sleep` / `--ds.enable_sleep` in this mode; OpenRLHF
+  disables vLLM sleep unless `--train.colocate_all` is active.
+
+This costs some throughput versus colocated hybrid scheduling, but it keeps
+ECG rollout/eval memory off the training GPU and makes failures easier to
+diagnose.
 
 ## Risk profile
 The previous gradient-RLVR attempts on this checkpoint all regressed

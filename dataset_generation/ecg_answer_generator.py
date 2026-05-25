@@ -2261,35 +2261,53 @@ class ECGAnswerGenerator:
         
         return ""  # No acute MI prefix needed
     
+    # EchoNext 7-label SHD components (v1.6 echonext_* columns) -> human phrase.
+    # Listing the present conditions makes structural a graded multi-label task
+    # rather than a bare Yes/No (which gave GRPO no within-group signal).
+    SHD_COMPONENTS = [
+        ("echonext_mitral_regurgitation_moderate_severe", "moderate or severe mitral regurgitation"),
+        ("echonext_aortic_stenosis_moderate_severe",      "moderate or severe aortic stenosis"),
+        ("echonext_aortic_regurgitation_moderate_severe", "moderate or severe aortic regurgitation"),
+        ("echonext_tricuspid_regurgitation_moderate_severe", "moderate or severe tricuspid regurgitation"),
+        ("echonext_lvef_lte_45",                          "reduced LV ejection fraction (LVEF <= 45%)"),
+        ("echonext_rv_systolic_dysfunction_moderate_severe", "moderate or severe RV systolic dysfunction"),
+        ("echonext_lvwt_gte_13",                          "increased LV wall thickness"),
+    ]
+
     def generate_structural_heart_disease_answer(self, row: pd.Series) -> str:
         """
         Generate answer for structural heart disease questions (MHI dataset only).
-        Uses echonext_shd column: >= 1 means present, < 1 means absent.
+        Gate from echonext_shd (>= 1 present); when present, enumerate the
+        echo-confirmed SHD conditions (EchoNext 7-label v1.6 columns) so the
+        reward can be graded on which conditions, not just Yes/No.
         Returns None if data is not available (which should drop the question).
         """
-        # Check if echonext_shd column exists and has data
         if 'echonext_shd' not in row.index:
-            return None  # This question should be dropped
-        
+            return None
         shd_value = row.get('echonext_shd')
-        
-        # If value is null/nan, we can't answer
         if pd.isna(shd_value):
-            return None  # This question should be dropped
-        
+            return None
         try:
-            # Convert to float for comparison
             shd_val = float(shd_value)
-            
-            # echonext_shd >= 1 means structural heart disease is present
-            if shd_val >= 1:
-                return "Yes - structural heart disease is present based on echocardiography"
-            else:
-                return "No - no structural heart disease detected on echocardiography"
-                
         except (ValueError, TypeError):
-            # Can't convert to number, can't answer
-            return None  # This question should be dropped
+            return None
+
+        if shd_val < 1:
+            return "No - no structural heart disease detected on echocardiography"
+
+        # Present: list the specific conditions when the component labels are joined.
+        conditions = []
+        for col, phrase in self.SHD_COMPONENTS:
+            if col in row.index:
+                v = row.get(col)
+                try:
+                    if pd.notna(v) and float(v) >= 1:
+                        conditions.append(phrase)
+                except (ValueError, TypeError):
+                    pass
+        if conditions:
+            return "Yes - structural heart disease; " + "; ".join(conditions)
+        return "Yes - structural heart disease is present based on echocardiography"
     
     def generate_lvef_answer(self, row: pd.Series) -> str:
         """
@@ -2347,51 +2365,55 @@ class ECGAnswerGenerator:
         # Import ACS constants
         from utils.constants import ACS_ACUTE_CONDITIONS
         
-        # Check if it's an acute occlusion and report its type
+        # Acute occlusion: ALWAYS report the occlusion type (complete/incomplete)
+        # AND the culprit vessel when documented. Completeness comes from
+        # acs_condition_severity, so it is available even when the PCI region
+        # (culprit vessel) is not — previously the type was silently dropped in
+        # that case, collapsing the answer toward a bare "Yes". Stating type +
+        # vessel makes this a graded localization+severity task, not a binary gate.
         if acs_condition in ACS_ACUTE_CONDITIONS:
-            # Determine occlusion completeness for messaging
             if acs_condition == 'Acute Complete Coronary Occlusion':
                 occlusion_type_text = 'complete occlusion'
             elif acs_condition == 'Acute Incomplete Coronary Occlusion':
                 occlusion_type_text = 'incomplete occlusion'
             else:
-                occlusion_type_text = None
+                occlusion_type_text = 'acute occlusion'
 
-            # Build culprit phrase if PCI regions are available
-            culprit_phrase = None
+            # Resolve the culprit vessel from the PCI regions, if available.
+            mapped_region = None
             if 'acs_pci_regions' in row.index and pd.notna(row.get('acs_pci_regions')):
                 import ast
                 regions_raw = row.get('acs_pci_regions')
                 try:
                     if isinstance(regions_raw, str):
-                        regions_clean = regions_raw.strip("'\"")
-                        region_list = ast.literal_eval(regions_clean)
+                        region_list = ast.literal_eval(regions_raw.strip("'\""))
                     else:
                         region_list = regions_raw
-
                     if region_list:
                         from utils.constants import ACS_ARTERY_MAPPING
                         primary_region = region_list[0] if isinstance(region_list, list) else str(region_list)
                         mapped_region = ACS_ARTERY_MAPPING.get(primary_region, primary_region)
-                        if occlusion_type_text:
-                            culprit_phrase = f"culprit is the {mapped_region} with {occlusion_type_text}"
-                        else:
-                            culprit_phrase = f"culprit is the {mapped_region}"
                 except (ValueError, SyntaxError, TypeError):
                     pass
 
-            # Compose final affirmative answer including culprit when available
-            if culprit_phrase:
-                return f"Yes - there is acute coronary occlusion; {culprit_phrase}"
-            else:
-                return "Yes - there is acute coronary occlusion; culprit artery is not documented"
+            if mapped_region:
+                return (f"Yes - acute coronary occlusion; {occlusion_type_text}; "
+                        f"culprit is the {mapped_region}")
+            return (f"Yes - acute coronary occlusion; {occlusion_type_text}; "
+                    f"culprit artery not documented")
 
-        # Not an acute occlusion
-        if acs_condition == 'No Coronary Disease':
+        # Not an acute occlusion — report the subtype (graded reward signal).
+        # Check 'Non-Obstructive' before 'Obstructive': the latter is a substring
+        # of the former, so order matters (previously non-obstructive cases were
+        # mislabeled as obstructive).
+        cond = str(acs_condition)
+        if cond == 'No Coronary Disease':
             return "No - no evidence of coronary disease"
-        if 'Obstructive' in acs_condition:
+        if 'Non-Obstructive' in cond or 'Non-obstructive' in cond:
+            return "No - non-obstructive coronary disease without acute occlusion"
+        if 'Obstructive' in cond:
             return "No - obstructive coronary disease without acute occlusion"
-        if 'Chronic' in acs_condition:
+        if 'Chronic' in cond:
             return "No - chronic occlusion without acute findings"
         return "No - no acute coronary occlusion identified"
     

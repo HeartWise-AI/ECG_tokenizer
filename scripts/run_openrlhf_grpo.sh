@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenRLHF GRPO with LLM-judge reward, 2 GPUs hybrid engine.
+# OpenRLHF GRPO with LLM-judge reward, 2 GPUs split engine.
 #
 # STATUS: WIP. The reward function (services/openrlhf_judge_reward.py) and
 # data builder (scripts/build_openrlhf_dataset.py) are done and unit-tested.
@@ -20,30 +20,39 @@
 #
 #   3. Expose `encode_to_soft_tokens(signal)` on ECG_Tokenizer_Wrapper.
 #
+# GPU split:
+#   - `--train.colocate_actor_ref` keeps actor+reference on one training GPU.
+#   - `--vllm.num_engines 1 --vllm.tensor_parallel_size 1` reserves the other
+#     GPU for rollout generation.
+#   - Do not use `--train.colocate_all` for this mode; OpenRLHF's colocated
+#     hybrid engine shares all GPUs between vLLM and DeepSpeed instead.
+#
 # Reference: examples/scripts/train_vlm_math_hybrid_engine.sh (Qwen3.5-VL) shows
-# the multimodal pattern we'd be mirroring.
+# the multimodal pattern we'd be mirroring; this script uses split placement
+# because ECG rollout/eval should not compete with training memory.
 
 set -e
 set -x
 
-WORKDIR=/volume/ECG_tokenizer
-DATASET=$WORKDIR/data/openrlhf_train_v1.jsonl
-CHECKPOINT=$WORKDIR/checkpoints/BEST_LLM/2wjwbk0b_20260413-224103_ENHANCED/best_model.pt
-SAVE_DIR=$WORKDIR/checkpoints/openrlhf_grpo_v1
-REWARD_FUNC=$WORKDIR/services/openrlhf_judge_reward.py
+WORKDIR=${WORKDIR:-/volume/ECG_tokenizer}
+DATASET=${DATASET:-$WORKDIR/data/openrlhf_train_v1.jsonl}
+CHECKPOINT=${CHECKPOINT:-/media/data1/models/ECG_Tokenizer/e4dw86nh_20251220-232839/best_model.pt}
+SAVE_DIR=${SAVE_DIR:-$WORKDIR/checkpoints/openrlhf_grpo_v1}
+REWARD_FUNC=${REWARD_FUNC:-$WORKDIR/services/openrlhf_judge_reward.py}
+# Use two visible GPUs. With GPU1 currently busy on this box, default to 0,2.
+OPENRLHF_GPUS=${OPENRLHF_GPUS:-0,2}
 
 mkdir -p $SAVE_DIR
 cd /volume/OpenRLHF
 
-CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=$WORKDIR \
+CUDA_VISIBLE_DEVICES=$OPENRLHF_GPUS PYTHONPATH=$WORKDIR \
 python3 -m openrlhf.cli.train_ppo_ray \
-   --ref.num_nodes 1 --ref.num_gpus_per_node 2 \
-   --actor.num_nodes 1 --actor.num_gpus_per_node 2 \
-   --vllm.num_engines 2 --vllm.tensor_parallel_size 1 \
-   --vllm.gpu_memory_utilization 0.55 \
-   --vllm.enable_sleep --ds.enable_sleep \
+   --ref.num_nodes 1 --ref.num_gpus_per_node 1 \
+   --actor.num_nodes 1 --actor.num_gpus_per_node 1 \
+   --train.colocate_actor_ref \
+   --vllm.num_engines 1 --vllm.tensor_parallel_size 1 \
+   --vllm.gpu_memory_utilization 0.80 \
    --vllm.sync_backend nccl --vllm.enforce_eager \
-   --train.colocate_all \
    --algo.kl.init_coef 1e-2 --algo.kl.estimator k3 --algo.kl.use_loss \
    --algo.advantage.estimator group_norm \
    --algo.dynamic_filtering_enable \
@@ -63,9 +72,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --ds.zero_stage 3 --ds.param_dtype bf16 \
    --ckpt.output_dir $SAVE_DIR --ckpt.save_steps 25 --ckpt.save_hf
 
-# Expected runtime: ~3-4 hours for 1 epoch over 5000 prompts with N=5.
+# Expected runtime: likely slower than colocated 2-engine mode because this uses
+# one vLLM engine, but it isolates rollout memory from actor/ref training.
 # Eval: after each save_steps boundary, optionally run:
-#   CUDA_VISIBLE_DEVICES=0 python scripts/rlvr_eval_subset.py \
+#   CUDA_VISIBLE_DEVICES=2 python scripts/rlvr_eval_subset.py \
 #     --checkpoint $SAVE_DIR/global_step_25/best_model.pt \
 #     --subset_parquet analysis/rlvr_eval/eval_subset_10per_cat.parquet \
-#     --output_dir analysis/rlvr_eval/openrlhf_v1/step_25 --run_judge
+#     --output_dir analysis/rlvr_eval/openrlhf_v1/step_25 \
+#     --device cuda:0 --run_judge

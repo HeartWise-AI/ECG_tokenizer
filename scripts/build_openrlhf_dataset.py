@@ -19,10 +19,65 @@ Usage:
 import argparse
 import json
 import random
+import sys
 from collections import Counter
 from pathlib import Path
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+try:
+    from utils.constants import BERT_CLASS_THRESHOLDS, ECG_PATTERNS
+except Exception:
+    BERT_CLASS_THRESHOLDS = []
+    ECG_PATTERNS = []
+
+
+_BERT_THRESHOLDS = {
+    label: float(BERT_CLASS_THRESHOLDS[i])
+    for i, label in enumerate(ECG_PATTERNS)
+    if i < len(BERT_CLASS_THRESHOLDS)
+}
+
+
+def _bert_column_names(label: str):
+    yield label
+    yield label.replace(" ", "_")
+    yield label.lower().replace(" ", "_")
+    yield f"{label}_bert_model"
+    yield f"{label.replace(' ', '_')}_bert_model"
+
+
+def _row_bert_payload(row: pd.Series) -> dict:
+    values = {}
+    labels = []
+    for label in ECG_PATTERNS:
+        found = False
+        value = None
+        source = ""
+        for col in _bert_column_names(label):
+            if col in row.index and pd.notna(row[col]):
+                try:
+                    value = float(row[col])
+                except (TypeError, ValueError):
+                    continue
+                source = col
+                found = True
+                break
+        if not found:
+            continue
+        values[label] = value
+        threshold = _BERT_THRESHOLDS.get(label, 0.5)
+        if source.endswith("_bert_model"):
+            active = value > 0.5
+        else:
+            active = value >= threshold if 0.0 < value < 1.0 else value >= 1.0
+        if active:
+            labels.append(label)
+    if not values:
+        return {}
+    return {"bert_labels": labels, "bert_values": values}
 
 
 def build(args):
@@ -63,6 +118,7 @@ def build(args):
                 "label": json.dumps({
                     "category": cat,
                     "ground_truth": str(r["generated_answer"]),
+                    **_row_bert_payload(r),
                 }),
                 "signal_path": str(r["waveform_path_psa"]),
             }

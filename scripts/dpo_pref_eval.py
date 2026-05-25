@@ -66,7 +66,7 @@ def _expand_labels_with_ecg(
         embed_layer=decoder.llm_model.get_input_embeddings(),
     )
     if merged is not None:
-        _, _, _, labels_out = merged
+        labels_out = merged[3]
         if labels_out is None:
             raise ValueError("Failed to expand labels with ECG injection.")
         return labels_out

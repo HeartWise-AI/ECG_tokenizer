@@ -229,6 +229,7 @@ def eval_on_subset(model, tokenizer, subset_parquet: str, output_dir: str,
     print(f"[eval] {' '.join(cmd)}")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT) + ":" + env.get("PYTHONPATH", "")
+    env["ECG_BERT_DEVICE"] = device
     res = subprocess.run(cmd, env=env, cwd=str(ROOT))
     if res.returncode != 0:
         print(f"[eval] FAILED (returncode={res.returncode})")
@@ -248,10 +249,16 @@ def main():
     p.add_argument("--eval_subset", required=True)
     p.add_argument("--output_dir", required=True)
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--eval_device", default=None,
+                   help="Device for validation generation/judge eval subprocesses. "
+                        "Defaults to --device; set e.g. cuda:2 to keep eval off "
+                        "the training GPU.")
     p.add_argument("--batch_size", type=int, default=2)
     p.add_argument("--n_candidates", type=int, default=4)
     p.add_argument("--max_steps", type=int, default=20)
     p.add_argument("--max_new_tokens", type=int, default=128)
+    p.add_argument("--temperature", type=float, default=1.0)
+    p.add_argument("--top_p", type=float, default=0.95)
     p.add_argument("--lr", type=float, default=5e-7)
     p.add_argument("--max_grad_norm", type=float, default=0.5)
     p.add_argument("--eval_every", type=int, default=5)
@@ -270,15 +277,37 @@ def main():
     p.add_argument("--early_stop_on_regression", action="store_true",
                    help="If an eval score drops more than 0.05 below baseline, "
                         "rollback to baseline and stop.")
+    p.add_argument("--target_delta", type=float, default=None,
+                   help="Stop after an eval reaches baseline + target_delta.")
     p.add_argument("--full_finetune", action="store_true",
                    help="Unfreeze the whole MedGemma decoder (full FT) instead "
                         "of LoRA-only. Encoder/quantizer/bridge stay frozen.")
+    p.add_argument("--sft_best_weight", type=float, default=0.0,
+                   help="Optional auxiliary NLL weight on the highest-reward "
+                        "sample in each group. This is judge-selected "
+                        "self-imitation to reduce GRPO variance and move greedy "
+                        "decoding toward sampled winners.")
+    p.add_argument("--sft_min_best_reward", type=float, default=0.8,
+                   help="Only apply --sft_best_weight if the best sampled "
+                        "reward is at least this value.")
+    p.add_argument("--sft_min_reward_gap", type=float, default=0.1,
+                   help="Only apply --sft_best_weight if best reward exceeds "
+                        "the group mean by at least this amount.")
+    p.add_argument("--sft_on_degenerate_high", action="store_true",
+                   help="If all sampled rewards are equal but high, still "
+                        "apply the auxiliary NLL to reinforce a judge-approved "
+                        "sample. This helps when sampling finds good answers "
+                        "but GRPO has zero advantage signal.")
+    p.add_argument("--skip_final_eval", action="store_true",
+                   help="Skip the duplicate final eval after saving best_model.pt. "
+                        "Useful when max_steps already landed on an eval boundary.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    eval_device = args.eval_device or args.device
 
     print(f"[grpo] loading model from {args.checkpoint}")
     # Stash the original config for re-saving later
@@ -343,7 +372,7 @@ def main():
         print("[grpo] === baseline eval ===")
         baseline_score = eval_on_subset(
             model, tokenizer, args.eval_subset, str(out_dir / "eval_baseline"),
-            label="baseline", device=args.device, original_config=original_config,
+            label="baseline", device=eval_device, original_config=original_config,
             max_new_tokens=256, use_original_ckpt=args.checkpoint)
         print(f"[grpo] baseline overall_score = {baseline_score:.4f}")
 
@@ -378,7 +407,7 @@ def main():
                 model, tokenizer, signal, row["prompt"],
                 n=args.n_candidates, device=args.device,
                 max_new_tokens=args.max_new_tokens,
-                temperature=1.0, top_p=0.95)
+                temperature=args.temperature, top_p=args.top_p)
 
             # Score candidates — verifiable (default, deterministic) or judge
             label_str = row["label"]
@@ -387,20 +416,33 @@ def main():
             gt_text = label_data.get("ground_truth", "")
             cat = label_data.get("category", "classification")
             if args.reward_kind == "verifiable":
-                rewards = [verifiable_verify(c["decoded"], gt_text, cat) for c in cands]
+                rewards = [verifiable_verify(c["decoded"], label_data, cat) for c in cands]
             else:
                 queries = [prompt_str + c["decoded"] for c in cands]
                 rewards_out = reward_func(queries, [prompt_str] * len(cands),
                                            [label_str] * len(cands))
                 rewards = rewards_out["scores"].tolist()
             advs = compute_group_advantages(rewards).to(args.device)
+            best_idx = int(np.argmax(rewards)) if rewards else -1
+            best_reward = float(rewards[best_idx]) if best_idx >= 0 else 0.0
+            mean_reward = float(np.mean(rewards)) if rewards else 0.0
+            degenerate_group = abs(advs).max().item() < 1e-6
+            sft_eligible = (
+                args.sft_best_weight > 0
+                and best_idx >= 0
+                and best_reward >= args.sft_min_best_reward
+                and (
+                    best_reward >= mean_reward + args.sft_min_reward_gap
+                    or (args.sft_on_degenerate_high and degenerate_group)
+                )
+            )
 
             # Reduced diagnostic - only print 1 sample per 10 steps
             if step % 10 == 1:
                 print(f"[grpo]   prompt='{prompt_str[:50]}' rewards={[f'{r:.2f}' for r in rewards]}")
 
             # Skip degenerate groups (all rewards equal -> zero gradient)
-            if abs(advs).max().item() < 1e-6:
+            if degenerate_group and not sft_eligible:
                 continue
 
             # Compute log-probs with grad (model still in eval() — BN frozen,
@@ -428,6 +470,13 @@ def main():
                     group_loss = group_loss + args.beta * kl_term
                     kl_estimate += float(kl_term.detach().item())
             group_loss = group_loss / len(log_probs_list)
+            if (
+                sft_eligible
+            ):
+                best_lp_sum, best_n_tok = log_probs_list[best_idx]
+                group_loss = group_loss + args.sft_best_weight * (
+                    -best_lp_sum / best_n_tok
+                )
             if ref_lp_list is not None:
                 kl_estimate /= len(log_probs_list)
             group_loss.backward()
@@ -471,7 +520,7 @@ def main():
             score = eval_on_subset(
                 model, tokenizer, args.eval_subset,
                 str(out_dir / f"eval_step{step}"),
-                label=f"step{step}", device=args.device,
+                label=f"step{step}", device=eval_device,
                 original_config=original_config, max_new_tokens=256)
             print(f"[grpo] step {step} eval = {score:.4f}  (baseline {baseline_score:.4f}, "
                   f"delta {score - baseline_score:+.4f})")
@@ -494,6 +543,10 @@ def main():
             if args.early_stop_on_regression and score < baseline_score - 0.05:
                 print(f"[grpo] EARLY STOP: eval {score:.4f} regressed > 0.05 below baseline")
                 break
+            if args.target_delta is not None and score >= baseline_score + args.target_delta:
+                print(f"[grpo] TARGET REACHED: eval {score:.4f} >= "
+                      f"{baseline_score + args.target_delta:.4f}")
+                break
 
     # Save final checkpoint and metrics
     final_ckpt = out_dir / "best_model.pt"
@@ -508,13 +561,16 @@ def main():
     print(f"[grpo] saved final to {final_ckpt}")
 
     # Final eval
-    print("[grpo] === final eval ===")
-    final_score = eval_on_subset(
-        model, tokenizer, args.eval_subset, str(out_dir / "eval_final"),
-        label="final", device=args.device, original_config=original_config,
-        max_new_tokens=256)
-    print(f"[grpo] FINAL: baseline {baseline_score:.4f} -> final {final_score:.4f}  "
-          f"(delta {final_score - baseline_score:+.4f})")
+    if args.skip_final_eval:
+        print("[grpo] === final eval skipped (--skip_final_eval) ===")
+    else:
+        print("[grpo] === final eval ===")
+        final_score = eval_on_subset(
+            model, tokenizer, args.eval_subset, str(out_dir / "eval_final"),
+            label="final", device=eval_device, original_config=original_config,
+            max_new_tokens=256)
+        print(f"[grpo] FINAL: baseline {baseline_score:.4f} -> final {final_score:.4f}  "
+              f"(delta {final_score - baseline_score:+.4f})")
 
 
 if __name__ == "__main__":

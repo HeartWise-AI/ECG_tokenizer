@@ -1,11 +1,11 @@
-# Full enhanced training: e4dw86nh + DeepECG missing 784k + binary QA + prompt variations
-# 3-dataset: original weighted (85%) + DeepECG missing QA (10%) + binary diagnosis QA (5%)
-# Resume from e4dw86nh best checkpoint, 2 GPUs
+# Gap-fill continuation training: resume from 2wjwbk0b + add 4th gap-fill parquet
+# 4-dataset: original weighted (75%) + DeepECG missing (8%) + binary QA (5%) + gap-fill v1 (12%)
+# Resume from 2wjwbk0b_ENHANCED best checkpoint (on NAS).
 
 pipeline_project: "ECG_Tokenizer_LLM_Finetuning"
 model_name: "ECG_Tokenizer_Wrapper"
 runner_name: "ECG_Tokenizer_LLM_Finetuning"
-run_mode: "inference"
+run_mode: "train"
 num_epochs: 1
 seed: 42
 training_phases:
@@ -26,10 +26,10 @@ debug_config:
   log_frequency: 50
 base_checkpoint_path: "checkpoints"
 pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
-resume_checkpoint_path: !!str "/media/data1/models/ECG_Tokenizer/e4dw86nh_20251220-232839/best_model.pt"
+resume_checkpoint_path: !!str "/media/data1/models/ECG_Tokenizer/2wjwbk0b_20260413-224103_ENHANCED/best_model.pt"
 wandb_project: "ECG_tokenizer_MedGemma"
 wandb_entity: "mhi_ai"
-use_wandb: false
+use_wandb: true
 # Optimizer & scheduler
 llm_lr: 5.0e-5
 adapter_lr: 5.0e-4
@@ -93,16 +93,21 @@ lora_bias: "none"
 # Required by config schema
 train_dataset_path: "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k_weighted.parquet"
 # ============================================================
-# 3-DATASET: original (85%) + DeepECG missing (10%) + binary QA (5%)
+# 4-DATASET: original (75%) + DeepECG missing (8%) + binary QA (5%) + gap-fill v1 (12%)
+# Gap-fill v1 adds up to 5 prompts per ECG for missing (ecg_interval, interpretation,
+# classification, category_infarct_ischemia, localization_{q_wave,t_wave,qrs_axis,
+# st_elevation,st_depression}) categories across all train waveforms.
 # ============================================================
 train_dataset_paths:
   - "/volume/ECG_tokenizer/output/combined_train_qa_m5000k_h5000k_weighted.parquet"
   - "/volume/ECG_tokenizer/output/deepecg_missing_qa_train.parquet"
   - "/volume/ECG_tokenizer/output/binary_diagnosis_qa_train.parquet"
+  - "/volume/ECG_tokenizer/output/combined_train_qa_gapfill_v1.parquet"
 dataset_weights:
-  - 0.85
-  - 0.10
+  - 0.75
+  - 0.08
   - 0.05
+  - 0.12
 use_weighted_sampling: true
 sample_weight_column: "sample_weight"
 # Prompt variations (per-prompt level)
