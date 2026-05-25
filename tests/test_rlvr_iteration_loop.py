@@ -59,3 +59,13 @@ def test_run_eval_ignores_summary_for_different_checkpoint(tmp_path, monkeypatch
 
     assert summary["overall_score"] == 0.2
     assert summary["iteration_loop"]["checkpoint_path"] == str(ckpt_b.resolve())
+
+
+def test_failed_eval_does_not_mark_checkpoint_seen():
+    module = _load_iteration_loop_module()
+    seen = set()
+
+    assert module.mark_checkpoint_seen_after_eval(seen, "checkpoint.pt", None) is False
+    assert seen == set()
+    assert module.mark_checkpoint_seen_after_eval(seen, "checkpoint.pt", {"overall_score": 0.5}) is True
+    assert seen == {"checkpoint.pt"}

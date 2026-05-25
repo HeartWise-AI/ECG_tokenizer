@@ -95,6 +95,13 @@ def _write_summary_checkpoint_metadata(summary_path: str, checkpoint: str) -> di
     return summary
 
 
+def mark_checkpoint_seen_after_eval(seen: set, checkpoint: str, current: dict | None) -> bool:
+    if current is None:
+        return False
+    seen.add(checkpoint)
+    return True
+
+
 def run_eval(checkpoint: str, subset_parquet: str, output_dir: str,
              device: str, label: str) -> dict:
     summary_path = os.path.join(output_dir, f"summary_{label}.json")
@@ -155,13 +162,12 @@ def main():
 
         ckpts = find_new_checkpoints(args.ckpt_dir, seen)
         for ckpt in ckpts:
-            seen.add(ckpt)
             label = checkpoint_label(ckpt, args.ckpt_dir)
             print(f"[iter] New checkpoint: {ckpt} (label={label})")
             current = run_eval(
                 ckpt, args.subset_parquet, args.output_dir, args.device, label
             )
-            if current is None:
+            if not mark_checkpoint_seen_after_eval(seen, ckpt, current):
                 continue
             delta = compute_delta(baseline, current)
             history.append({"label": label, "ckpt": ckpt, "current": current, "delta": delta})
