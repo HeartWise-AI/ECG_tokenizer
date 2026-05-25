@@ -139,7 +139,13 @@ def set_trainable(model: torch.nn.Module, mode: str, regex: Optional[str] = None
     for _, param in model.named_parameters():
         param.requires_grad = False
 
-    if mode == "all":
+    if regex:
+        import re as _re
+        pattern = _re.compile(regex)
+        for name, param in model.named_parameters():
+            if pattern.search(name):
+                param.requires_grad = True
+    elif mode == "all":
         for _, param in model.named_parameters():
             param.requires_grad = True
     elif mode == "lora":
@@ -153,12 +159,6 @@ def set_trainable(model: torch.nn.Module, mode: str, regex: Optional[str] = None
     elif mode == "projection":
         for name, param in model.named_parameters():
             if "projection" in name or "proj" in name:
-                param.requires_grad = True
-    elif regex:
-        import re as _re
-        pattern = _re.compile(regex)
-        for name, param in model.named_parameters():
-            if pattern.search(name):
                 param.requires_grad = True
     else:
         raise ValueError(f"Unknown trainable mode: {mode}")
