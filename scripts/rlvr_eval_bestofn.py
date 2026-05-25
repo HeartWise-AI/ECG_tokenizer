@@ -57,23 +57,43 @@ spec = importlib.util.spec_from_file_location(
 eval_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(eval_mod)
 
-# Set up LLM judge
-sys.path.insert(0, "/volume/LLM_JUDGE")
-env_path = Path("/volume/LLM_JUDGE/.env")
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        if line.startswith("FIREWORKS_API_KEY="):
-            os.environ["FIREWORKS_API_KEY"] = line.split("=", 1)[1].strip()
+JUDGE_REGISTRY = None
+CAT_MAP: Dict[str, List[str]] = {}
+JUDGE_DIR: str | None = None
 
-from judges import registry, register_judges
-from merge_utils import get_category_judge_mapping
-register_judges()
-CAT_MAP = get_category_judge_mapping()
+
+def init_judge_registry(llm_judge_dir: str):
+    global JUDGE_REGISTRY, CAT_MAP, JUDGE_DIR
+    resolved_dir = str(Path(llm_judge_dir).resolve())
+    if JUDGE_REGISTRY is not None and JUDGE_DIR == resolved_dir:
+        return
+
+    if JUDGE_DIR is not None and JUDGE_DIR != resolved_dir:
+        sys.modules.pop("judges", None)
+        sys.modules.pop("merge_utils", None)
+
+    if resolved_dir not in sys.path:
+        sys.path.insert(0, resolved_dir)
+    env_path = Path(resolved_dir) / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("FIREWORKS_API_KEY="):
+                os.environ["FIREWORKS_API_KEY"] = line.split("=", 1)[1].strip()
+
+    from judges import registry, register_judges
+    from merge_utils import get_category_judge_mapping
+
+    register_judges()
+    JUDGE_REGISTRY = registry
+    CAT_MAP = get_category_judge_mapping()
+    JUDGE_DIR = resolved_dir
 
 
 def judge_score(prediction: str, ground_truth: str, prompt_category: str) -> float:
+    if JUDGE_REGISTRY is None:
+        init_judge_registry("/volume/LLM_JUDGE")
     judge_names = CAT_MAP.get(prompt_category, ["classification_judge"])
-    judge = registry.get(judge_names[0])
+    judge = JUDGE_REGISTRY.get(judge_names[0])
     if judge is None:
         return 0.0
     try:
@@ -127,6 +147,8 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
+    llm_judge_dir = str(Path(args.llm_judge_dir).resolve())
+    init_judge_registry(llm_judge_dir)
 
     sub = pd.read_parquet(args.subset_parquet)
     print(f"[bestofN] Loaded subset: {len(sub)} rows")
@@ -189,7 +211,7 @@ def main():
         ]
         print(f"[bestofN] Final judge eval: {' '.join(cmd)}")
         env = os.environ.copy()
-        res = subprocess.run(cmd, cwd=args.llm_judge_dir, env=env)
+        res = subprocess.run(cmd, cwd=llm_judge_dir, env=env)
         if res.returncode != 0:
             raise SystemExit(f"judge_eval.py failed with code {res.returncode}")
 
