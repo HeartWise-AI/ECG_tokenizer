@@ -38,6 +38,7 @@ def _parse_target_json(raw: Any) -> Dict[str, Any]:
 def run_checks(df: pd.DataFrame, strict: bool, fail_fast: bool) -> None:
     renderer = DeterministicJSONRenderer(OUTPUT_FIELD_ORDER, strict=strict)
     total = 0
+    failures = 0
     for idx, row in df.iterrows():
         total += 1
         target_raw = row.get("target_json")
@@ -69,9 +70,12 @@ def run_checks(df: pd.DataFrame, strict: bool, fail_fast: bool) -> None:
             if missing:
                 raise AssertionError(f"Missing spans for: {missing}")
         except Exception as exc:
+            failures += 1
             print(f"[FAIL] row={idx}: {exc}")
             if fail_fast:
                 raise
+    if failures:
+        raise SystemExit(f"Schema checks failed for {failures}/{total} rows.")
     print(f"[OK] Checks 1-3 passed for {total} rows.")
 
 
