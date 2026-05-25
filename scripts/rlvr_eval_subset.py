@@ -185,6 +185,60 @@ def build_subset(test_parquet: str, n_per_cat: int, seed: int) -> pd.DataFrame:
     return sub
 
 
+PARTIAL_REQUIRED_COLUMNS = {
+    "row_idx",
+    "source_row_idx",
+    "waveform_name",
+    "waveform_path",
+    "question",
+    "generation",
+    "ground_truth",
+    "prompt_category",
+    "checkpoint_path",
+}
+
+
+def _csv_str(value, default: str = "") -> str:
+    if pd.isna(value):
+        return default
+    return str(value)
+
+
+def _partial_checkpoint_path(value) -> str:
+    raw = _csv_str(value)
+    return str(Path(raw).resolve()) if raw else ""
+
+
+def expected_partial_identity(sub_row: pd.Series, checkpoint: str) -> Dict[str, object]:
+    return {
+        "source_row_idx": int(sub_row["source_row_idx"]),
+        "waveform_path": str(sub_row["waveform_path_psa"]),
+        "question": str(sub_row["prompt"]),
+        "ground_truth": str(sub_row["generated_answer"]),
+        "prompt_category": str(sub_row["prompt_category"]),
+        "checkpoint_path": str(Path(checkpoint).resolve()),
+    }
+
+
+def validate_partial_resume_row(partial_row: pd.Series, sub_row: pd.Series, checkpoint: str) -> None:
+    expected = expected_partial_identity(sub_row, checkpoint)
+    actual = {
+        "source_row_idx": None if pd.isna(partial_row["source_row_idx"]) else int(partial_row["source_row_idx"]),
+        "waveform_path": _csv_str(partial_row["waveform_path"]),
+        "question": _csv_str(partial_row["question"]),
+        "ground_truth": _csv_str(partial_row["ground_truth"]),
+        "prompt_category": _csv_str(partial_row["prompt_category"], default="unknown"),
+        "checkpoint_path": _partial_checkpoint_path(partial_row["checkpoint_path"]),
+    }
+    mismatches = [key for key, expected_value in expected.items() if actual[key] != expected_value]
+    if mismatches:
+        details = ", ".join(
+            f"{key}: partial={actual[key]!r} current={expected[key]!r}"
+            for key in mismatches
+        )
+        raise ValueError(details)
+
+
 @torch.no_grad()
 def generate_for_row(
     model, tokenizer, signal: torch.Tensor, prompt_text: str,
@@ -256,8 +310,22 @@ def main():
                         help="If set, use this prebuilt subset instead of resampling")
     parser.add_argument("--label", default="run",
                         help="Short tag for output files")
-    parser.add_argument("--batch_size", type=int, default=8,
-                        help="Batched generation size (much faster than 1)")
+    parser.add_argument("--batch_size", type=int, default=1,
+                        help="Generation batch size. Keep at 1 for this ECG "
+                             "decoder: mixed prompt batches can corrupt greedy "
+                             "outputs because of padding/position handling.")
+    parser.add_argument("--group_by_prompt", action="store_true",
+                        help="Batch only rows with identical prompt text. This "
+                             "keeps prompt token lengths identical inside each "
+                             "batch and is much safer than mixed-prompt batching.")
+    parser.add_argument("--generation_microbatch_size", type=int, default=None,
+                        help="Override MedGemma decoder microbatch size used "
+                             "inside HF generate(). Defaults to checkpoint config.")
+    parser.add_argument("--flush_every", type=int, default=0,
+                        help="If >0, write a resumable partial CSV every N "
+                             "completed rows.")
+    parser.add_argument("--resume_partial", action="store_true",
+                        help="Resume from generations_<label>.partial.csv if present.")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -272,16 +340,63 @@ def main():
         print(f"[eval] Subset: {len(sub)} rows across {sub['prompt_category'].nunique()} categories")
         print(sub["prompt_category"].value_counts().to_string())
         print(f"[eval] Saved subset to {out_subset}")
+    if "source_row_idx" not in sub.columns:
+        sub["source_row_idx"] = np.arange(len(sub), dtype=np.int64)
+    sub = sub.reset_index(drop=True)
 
     print(f"[eval] Loading model from {args.checkpoint}")
     model, tokenizer = load_model(args.checkpoint, args.device)
+    if args.generation_microbatch_size is not None:
+        decoder = getattr(model, "decoder", model)
+        if not hasattr(decoder, "generation_microbatch_size"):
+            raise SystemExit("Loaded model does not expose generation_microbatch_size")
+        decoder.generation_microbatch_size = max(1, int(args.generation_microbatch_size))
+        print(f"[eval] generation_microbatch_size={decoder.generation_microbatch_size}")
     print("[eval] Model loaded; running generation")
 
-    generations = []
     batch_size = int(getattr(args, "batch_size", 8))
-    rows_list = list(sub.iterrows())
-    for batch_start in range(0, len(rows_list), batch_size):
-        batch = rows_list[batch_start:batch_start + batch_size]
+    generations_by_idx: Dict[int, Dict[str, str]] = {}
+    csv_path = Path(args.output_dir) / f"generations_{args.label}.csv"
+    partial_csv_path = Path(args.output_dir) / f"generations_{args.label}.partial.csv"
+
+    if args.resume_partial and partial_csv_path.exists():
+        partial = pd.read_csv(partial_csv_path)
+        if "row_idx" not in partial.columns:
+            raise SystemExit(f"Partial CSV missing row_idx: {partial_csv_path}")
+        missing = PARTIAL_REQUIRED_COLUMNS - set(partial.columns)
+        if missing:
+            raise SystemExit(f"Partial CSV missing required columns: {missing}")
+        for _, row in partial.iterrows():
+            idx = int(row["row_idx"])
+            if 0 <= idx < len(sub):
+                try:
+                    validate_partial_resume_row(row, sub.iloc[idx], args.checkpoint)
+                except ValueError as exc:
+                    raise SystemExit(
+                        f"Partial CSV row_idx={idx} does not match current run: {exc}"
+                    ) from exc
+                generations_by_idx[idx] = {
+                    "row_idx": idx,
+                    "source_row_idx": int(row["source_row_idx"]),
+                    "waveform_name": "" if pd.isna(row["waveform_name"]) else str(row["waveform_name"]),
+                    "waveform_path": "" if pd.isna(row["waveform_path"]) else str(row["waveform_path"]),
+                    "question": "" if pd.isna(row["question"]) else str(row["question"]),
+                    "generation": "" if pd.isna(row["generation"]) else str(row["generation"]),
+                    "ground_truth": "" if pd.isna(row["ground_truth"]) else str(row["ground_truth"]),
+                    "prompt_category": "unknown" if pd.isna(row["prompt_category"]) else str(row["prompt_category"]),
+                    "checkpoint_path": str(Path(args.checkpoint).resolve()),
+                }
+        print(f"[eval] Resumed {len(generations_by_idx)}/{len(sub)} rows from {partial_csv_path}")
+
+    def flush_partial(force: bool = False):
+        if not force and int(args.flush_every) <= 0:
+            return
+        rows = [generations_by_idx[i] for i in sorted(generations_by_idx)]
+        tmp_path = partial_csv_path.with_suffix(partial_csv_path.suffix + ".tmp")
+        pd.DataFrame(rows).to_csv(tmp_path, index=False)
+        os.replace(tmp_path, partial_csv_path)
+
+    def run_batch(batch):
         try:
             signals = [load_ecg_signal(str(r["waveform_path_psa"])) for _, r in batch]
             prompts = [str(r["prompt"]) for _, r in batch]
@@ -292,17 +407,54 @@ def main():
         for (i, row), gen in zip(batch, gens):
             wp = str(row["waveform_path_psa"])
             wn = os.path.basename(wp).replace(".npy", "")
-            generations.append({
+            generations_by_idx[int(i)] = {
+                "row_idx": int(i),
+                "source_row_idx": int(row["source_row_idx"]),
                 "waveform_name": wn,
                 "waveform_path": wp,
                 "question": str(row["prompt"]),
                 "generation": gen,
                 "ground_truth": str(row["generated_answer"]),
                 "prompt_category": str(row["prompt_category"]),
-            })
-        print(f"[eval] {min(batch_start + batch_size, len(rows_list))}/{len(rows_list)}")
+                "checkpoint_path": str(Path(args.checkpoint).resolve()),
+            }
 
-    csv_path = Path(args.output_dir) / f"generations_{args.label}.csv"
+    done = len(generations_by_idx)
+    last_flush_done = done
+    if args.group_by_prompt:
+        for _, group in sub.groupby("prompt", sort=False):
+            group_rows = [
+                item for item in group.iterrows()
+                if int(item[0]) not in generations_by_idx
+            ]
+            for batch_start in range(0, len(group_rows), batch_size):
+                batch = group_rows[batch_start:batch_start + batch_size]
+                run_batch(batch)
+                done += len(batch)
+                print(f"[eval] {done}/{len(sub)}")
+                if int(args.flush_every) > 0 and done - last_flush_done >= int(args.flush_every):
+                    flush_partial()
+                    last_flush_done = done
+    else:
+        rows_list = [
+            item for item in sub.iterrows()
+            if int(item[0]) not in generations_by_idx
+        ]
+        for batch_start in range(0, len(rows_list), batch_size):
+            batch = rows_list[batch_start:batch_start + batch_size]
+            run_batch(batch)
+            done += len(batch)
+            print(f"[eval] {done}/{len(sub)}")
+            if int(args.flush_every) > 0 and done - last_flush_done >= int(args.flush_every):
+                flush_partial()
+                last_flush_done = done
+
+    missing = [i for i in range(len(sub)) if i not in generations_by_idx]
+    if missing:
+        raise SystemExit(f"Missing {len(missing)} generated rows; first missing idx={missing[0]}")
+    flush_partial(force=True)
+    generations = [generations_by_idx[i] for i in range(len(sub))]
+
     pd.DataFrame(generations).to_csv(csv_path, index=False)
     print(f"[eval] Saved generations: {csv_path}")
 
