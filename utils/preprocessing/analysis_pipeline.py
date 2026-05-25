@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,8 @@ from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 class AnalysisPipeline:
     TARGET_LENGTH = 2500
     TARGET_LEADS = 12
+
+    SwapLeadsFn = Callable[[np.ndarray, int, int], np.ndarray]
 
     @staticmethod
     def _resolve_path_column(df: pd.DataFrame, path_column: str | None) -> str:
@@ -65,7 +68,8 @@ class AnalysisPipeline:
         if signal.ndim != 2:
             raise ValueError(f"Expected signal with 2 dimensions, got shape {signal.shape}")
 
-        # Some loaders return shape (12, N)
+        # Some loaders return shape (12, N). We treat (12, 12) as already
+        # canonical because it is ambiguous and outside expected ECG lengths.
         if signal.shape[0] == cls.TARGET_LEADS and signal.shape[1] != cls.TARGET_LEADS:
             signal = signal.transpose(1, 0)
 
@@ -103,13 +107,15 @@ class AnalysisPipeline:
         output_folder: str,
         preprocessing_folder: str,
         preprocessing_n_workers: int,
-        swap_leads_fn=None,
-        swap_lead1=None,
-        swap_lead2=None,
-        path_column: str | None = None
+        swap_leads_fn: SwapLeadsFn | None = None,
+        swap_lead1: int | None = None,
+        swap_lead2: int | None = None,
+        path_column: str | None = None,
+        include_optional_100hz_cluster: bool = False,
     ) -> pd.DataFrame:
         del output_folder  # Kept for backward compatibility with callers.
         del preprocessing_n_workers  # Current deterministic path is intentionally single-threaded.
+        del include_optional_100hz_cluster  # Powerline flattening is intentionally disabled.
 
         ecg_signal_processor = ECGSignalProcessor()
         os.makedirs(preprocessing_folder, exist_ok=True)
