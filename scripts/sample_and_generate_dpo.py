@@ -25,6 +25,7 @@ import sys
 import json
 import argparse
 import re
+import tempfile
 import torch
 import numpy as np
 import pandas as pd
@@ -66,6 +67,82 @@ def _cfg_get(container, key, fallback=None):
         val = getattr(container, key)
         return val if val is not None else fallback
     return fallback
+
+
+def write_generation_checkpoint(checkpoint_path: str, payload: Dict[str, Any]) -> None:
+    checkpoint_dir = os.path.dirname(checkpoint_path) or "."
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=checkpoint_dir,
+            prefix=f".{os.path.basename(checkpoint_path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = f.name
+            json.dump(payload, f)
+        os.replace(tmp_path, checkpoint_path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def resume_start_from_output(output_jsonl: str, total_samples: int) -> int:
+    if not os.path.exists(output_jsonl):
+        return 0
+
+    valid_rows = 0
+    last_sample_idx = None
+    truncate_pos = 0
+    with open(output_jsonl, "rb") as f:
+        while True:
+            line = f.readline()
+            if not line:
+                break
+            if not line.strip():
+                truncate_pos = f.tell()
+                continue
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                break
+
+            sample_idx = record.get("sample_idx")
+            if sample_idx is not None:
+                last_sample_idx = int(sample_idx)
+                if last_sample_idx >= total_samples:
+                    break
+            elif valid_rows >= total_samples:
+                break
+
+            valid_rows += 1
+            truncate_pos = f.tell()
+
+    if truncate_pos != os.path.getsize(output_jsonl):
+        with open(output_jsonl, "ab") as f:
+            f.truncate(truncate_pos)
+
+    if last_sample_idx is not None:
+        return min(last_sample_idx + 1, total_samples)
+    return min(valid_rows, total_samples)
+
+
+def resume_start_from_checkpoint(checkpoint_path: str, total_samples: int) -> int:
+    if not os.path.exists(checkpoint_path):
+        return 0
+    with open(checkpoint_path, encoding="utf-8") as f:
+        checkpoint = json.load(f)
+    return min(int(checkpoint.get("last_idx", -1)) + 1, total_samples)
+
+
+def resolve_resume_start(output_jsonl: str, checkpoint_path: str, total_samples: int) -> int:
+    output_start = resume_start_from_output(output_jsonl, total_samples)
+    checkpoint_start = resume_start_from_checkpoint(checkpoint_path, total_samples)
+    return min(max(output_start, checkpoint_start), total_samples)
 
 
 def load_model(checkpoint_path: str, device: torch.device):
@@ -412,10 +489,8 @@ def main():
     checkpoint_path = os.path.join(args.output_dir, "generation_checkpoint.json")
 
     start_idx = 0
-    if args.resume and os.path.exists(checkpoint_path):
-        with open(checkpoint_path) as f:
-            ckpt = json.load(f)
-            start_idx = ckpt.get("last_idx", 0) + 1
+    if args.resume:
+        start_idx = resolve_resume_start(output_jsonl, checkpoint_path, len(sampled_df))
         print(f"Resuming from index {start_idx}")
 
     # Parse temperatures
@@ -438,6 +513,7 @@ def main():
             # Load ECG
             waveform = load_ecg_waveform(waveform_path)
             if waveform is None:
+                write_generation_checkpoint(checkpoint_path, {"last_idx": idx})
                 continue
 
             ecg_tensor = torch.from_numpy(waveform.astype(np.float32)).T.unsqueeze(0).to(device)
@@ -451,6 +527,7 @@ def main():
 
             # Write result
             result = {
+                "sample_idx": int(idx),
                 "waveform_path": waveform_path,
                 "waveform_name": waveform_name,
                 "prompt": question,
@@ -460,16 +537,14 @@ def main():
             }
             f.write(json.dumps(result) + "\n")
             f.flush()
+            os.fsync(f.fileno())
+            write_generation_checkpoint(checkpoint_path, {"last_idx": idx})
 
-            # Save checkpoint periodically
             if (idx + 1) % args.save_interval == 0:
-                with open(checkpoint_path, "w") as ckpt_f:
-                    json.dump({"last_idx": idx}, ckpt_f)
                 print(f"  Checkpoint saved at index {idx}")
 
     # Save final checkpoint
-    with open(checkpoint_path, "w") as f:
-        json.dump({"last_idx": len(sampled_df) - 1, "complete": True}, f)
+    write_generation_checkpoint(checkpoint_path, {"last_idx": len(sampled_df) - 1, "complete": True})
 
     print(f"\n=== Generation complete ===")
     print(f"Output: {output_jsonl}")
