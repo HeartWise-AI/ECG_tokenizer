@@ -84,6 +84,7 @@ from utils.config.heartwise_config import HeartWiseConfig
 
 
 def main(config: HeartWiseConfig):
+    wandb_wrapper: WandbWrapper | None = None
     
     try:
         # Set seed for reproducibility
@@ -99,7 +100,7 @@ def main(config: HeartWiseConfig):
         
         # Initialize wandb wrapper
         print(f"📊 W&B Configuration: use_wandb={config.use_wandb}, is_ref_device={config.is_ref_device}")
-        wandb_wrapper: WandbWrapper = WandbWrapper(
+        wandb_wrapper = WandbWrapper(
             config=config, # The config object
             initialized=config.use_wandb, # If wandb is not initialized, it will not be initialized
             is_ref_device=config.is_ref_device # If the device is a reference device, it will not be initialized
@@ -124,13 +125,10 @@ def main(config: HeartWiseConfig):
         
     except Exception as e:
         print(f"Error: {e}")
-        if config.is_ref_device:
-            wandb_wrapper.finish()
-        DistributedUtils.ddp_cleanup()
-        raise e
+        raise
         
     finally:
-        if config.is_ref_device:
+        if config.is_ref_device and wandb_wrapper is not None:
             wandb_wrapper.finish()
         DistributedUtils.ddp_cleanup()
 
