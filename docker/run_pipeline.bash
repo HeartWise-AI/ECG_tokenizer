@@ -27,6 +27,11 @@ else
     export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 fi
 
+PYTHON_BIN="python"
+if [[ "$IN_DOCKER" == "false" && -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+fi
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
@@ -40,12 +45,17 @@ usage() {
     echo "  --batch-size N           Batch size (default: 32)"
     echo "  --dataset-name NAME      Optional dataset name for preprocessing outputs"
     echo "  --bert-base-config FILE  BERT base config yaml"
-    echo "  --step [preprocess|bert|analysis|efficientnet|qa|llm|all]  Choose which step to run (default: all)"
+    echo "  --qa-disable-categories LIST"
+    echo "                           Comma-separated QA prompt categories to disable"
+    echo "  --qa-max-normal-percentage FLOAT"
+    echo "                           Override QA normal-ECG downsampling cap"
+    echo "  --step [preprocess|bert|analysis|efficientnet|qa|llm|all|preprocess_qa_llm]  Choose which step to run (default: all)"
     echo "  --help, -h               Show this help message"
     echo ""
     echo "Examples:"
     echo "  source run_pipeline.bash --input_file /path/to/data.parquet"
     echo "  source run_pipeline.bash --step efficientnet --input_file /path/to/preprocessed.parquet"
+    echo "  source run_pipeline.bash --step preprocess_qa_llm --input_file /path/to/data.parquet"
     return 0
 }
 
@@ -87,6 +97,7 @@ bert_checkpoint=$(get_param "bert_checkpoint")
 tokenizer_checkpoint=$(get_param "tokenizer_checkpoint")
 bert_base_config=$(get_param "bert_base_config")
 qa_disable_categories=$(get_param "qa_disable_categories")
+qa_max_normal_percentage=$(get_param "qa_max_normal_percentage")
 bert_output=""
 run_step="all"
 use_preprocessing=true
@@ -94,6 +105,7 @@ use_bert_classification=true
 use_efficientnet_classification=true
 efficientnet_config="${APP_ROOT}/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes/base_config.yaml"
 llm_checkpoint="${APP_ROOT}/checkpoints/DeepECG-Tok_medgemma-4b-it/deepecg_tokenizer_medgemma.pt"
+base_tokenizer_dir="${APP_ROOT}/checkpoints/google-medgemma-4b-it"
 qa_output=""
 
 # =============================================================================
@@ -140,6 +152,26 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -n $2 && ! $2 =~ ^-- ]]; then
                 bert_base_config="$2"
                 shift 2
+            fi
+            ;;
+        --qa-disable-categories)
+            if [[ -n $2 && ! $2 =~ ^-- ]]; then
+                qa_disable_categories="$2"
+                shift 2
+            else
+                echo "Error: --qa-disable-categories requires a non-empty argument."
+                usage
+                return 1
+            fi
+            ;;
+        --qa-max-normal-percentage)
+            if [[ -n $2 && ! $2 =~ ^-- ]]; then
+                qa_max_normal_percentage="$2"
+                shift 2
+            else
+                echo "Error: --qa-max-normal-percentage requires a non-empty argument."
+                usage
+                return 1
             fi
             ;;
         --step)
@@ -190,6 +222,7 @@ tokenizer_checkpoint=$(convert_path "$tokenizer_checkpoint")
 efficientnet_config=$(convert_path "$efficientnet_config")
 qa_output=$(convert_path "$qa_output")
 llm_checkpoint=$(convert_path "$llm_checkpoint")
+base_tokenizer_dir=$(convert_path "$base_tokenizer_dir")
 
 # Set defaults if not in config
 device=${device:-cuda:0}
@@ -209,6 +242,7 @@ qa_output=${output_dir}/preprocessed_qa.parquet
 # =============================================================================
 
 build_args() {
+    local step_override="${1:-$run_step}"
     local args=""
     
     args="$args --input $input_parquet"
@@ -223,7 +257,7 @@ build_args() {
     args="$args --ecg-signals-path $ecg_signals_path"
     args="$args --preprocessing-folder $preprocessing_folder"
     args="$args --preprocessing-n-workers $preprocessing_n_workers"
-    args="$args --step $run_step"
+    args="$args --step $step_override"
     args="$args --bert-output $bert_output"
     
     if [[ -n $dataset_name ]]; then
@@ -249,6 +283,72 @@ fi
     echo "$args"
 }
 
+run_qa_generation() {
+    local qa_input="$1"
+    local qa_cmd=(
+        "$PYTHON_BIN" "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py"
+        --dataset custom
+        --custom_parquet_path "$qa_input"
+        --max_prompts_per_ecg 4
+        --prompt_workers 1
+        --answer_workers 1
+        --output_dir "$output_dir"
+    )
+
+    if [[ -n "$qa_max_normal_percentage" ]]; then
+        qa_cmd+=(--max_normal_percentage "$qa_max_normal_percentage")
+    fi
+    if [[ -n "$qa_disable_categories" ]]; then
+        qa_cmd+=(--disable_categories "$qa_disable_categories")
+    fi
+
+    local qa_cmd_str
+    printf -v qa_cmd_str '%q ' "${qa_cmd[@]}"
+    echo "[RUN] ${qa_cmd_str}"
+    "${qa_cmd[@]}"
+}
+
+run_llm_inference() {
+    if [[ ! -f "$llm_checkpoint" ]]; then
+        echo "Error: LLM checkpoint not found at $llm_checkpoint"
+        echo "Download heartwise/DeepECG-Tok_medgemma-4b-it into ${APP_ROOT}/checkpoints/DeepECG-Tok_medgemma-4b-it"
+        return 1
+    fi
+
+    if [[ ! -d "$base_tokenizer_dir" ]]; then
+        echo "Error: Base tokenizer directory not found at $base_tokenizer_dir"
+        echo "Download tokenizer files from google/medgemma-4b-it into ${APP_ROOT}/checkpoints/google-medgemma-4b-it"
+        return 1
+    fi
+
+    local llm_device_args=()
+    if [[ "$device" =~ ^cuda:([0-9]+)$ ]]; then
+        llm_device_args=(--device "${BASH_REMATCH[1]}")
+    fi
+
+    local llm_cmd=(
+        "$PYTHON_BIN" "${APP_ROOT}/inference/generate_all_qa_pairs.py"
+        --checkpoint "$llm_checkpoint"
+        --validation_parquet "$qa_output"
+        --output_dir "$output_dir"
+        "${llm_device_args[@]}"
+    )
+
+    if [[ "$#" -gt 0 ]]; then
+        llm_cmd+=("$@")
+    fi
+
+    llm_cmd+=(
+        --answer_column generated_answer
+        --output_prefix llm_inference_samples
+    )
+
+    local llm_cmd_str
+    printf -v llm_cmd_str '%q ' "${llm_cmd[@]}"
+    echo "[RUN] BASE_TOKENIZER_DIR=${base_tokenizer_dir} ${llm_cmd_str}"
+    BASE_TOKENIZER_DIR="$base_tokenizer_dir" "${llm_cmd[@]}"
+}
+
 run_pipeline() {    
     echo ""
     echo "============================================================"
@@ -258,6 +358,7 @@ run_pipeline() {
     echo "------------------------------------------------------------"
     echo "Configuration:"
     echo "  Device: $device"
+    echo "  Python: $PYTHON_BIN"
     echo "  Batch Size: $batch_size"
     echo "  Input: $input_parquet"
     echo "  Output Dir: $output_dir"
@@ -267,10 +368,11 @@ run_pipeline() {
     echo "  Run Step: $run_step"
     echo "  EfficientNet Config: $efficientnet_config"
     echo "  LLM Checkpoint: $llm_checkpoint"
+    echo "  Base Tokenizer Dir: $base_tokenizer_dir"
     echo "------------------------------------------------------------"
     echo "Required Input Columns:"
     echo "  - ecg_path: ECG signal path"
-    echo "  - reports: Text reports"
+    echo "  - reports: Text reports (placeholders are acceptable for QA-only SHD/LVEF runs)"
     echo "============================================================"
     echo ""
     
@@ -280,17 +382,17 @@ run_pipeline() {
     # Sequential control based on step
     case "$run_step" in
         preprocess)
-            echo "[RUN] python $python_script $args"
-            python "$python_script" $args
+            echo "[RUN] ${PYTHON_BIN} $python_script $args"
+            "$PYTHON_BIN" "$python_script" $args
             ;;
         bert)
-            echo "[RUN] python $python_script $args"
-            python "$python_script" $args
+            echo "[RUN] ${PYTHON_BIN} $python_script $args"
+            "$PYTHON_BIN" "$python_script" $args
             ;;
         analysis)
             # Run BERT only, then EfficientNet
-            echo "[RUN] python $python_script $args"
-            python "$python_script" $args || return 1
+            echo "[RUN] ${PYTHON_BIN} $python_script $args"
+            "$PYTHON_BIN" "$python_script" $args || return 1
             if [[ ! -f "$bert_output" ]]; then
                 echo "Error: BERT output not found at $bert_output after --step analysis"
                 return 1
@@ -303,14 +405,13 @@ run_pipeline() {
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             qa_disable_arg=()
             [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
+            echo "[RUN] ${PYTHON_BIN} ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
+            "$PYTHON_BIN" "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
             if [[ ! -f "$qa_output" ]]; then
                 echo "Error: QA output not found at $qa_output after analysis"
                 return 1
             fi
-            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
-            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
+            run_llm_inference
             ;;
         efficientnet)
             # Ensure BERT output exists before running EfficientNet
@@ -326,8 +427,8 @@ run_pipeline() {
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             ;;
         all)
-            echo "[RUN] python $python_script $args"
-            python "$python_script" $args || return 1
+            echo "[RUN] ${PYTHON_BIN} $python_script $args"
+            "$PYTHON_BIN" "$python_script" $args || return 1
             if [[ ! -f "$bert_output" ]]; then
                 echo "Error: BERT output not found at $bert_output after run_step=all"
                 return 1
@@ -340,32 +441,64 @@ run_pipeline() {
             bash "${APP_ROOT}/scripts/runner.sh" --base_config "${efficientnet_config}" --selected_gpus 0 --use_wandb false --run_mode inference
             qa_disable_arg=()
             [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
+            echo "[RUN] ${PYTHON_BIN} ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
+            "$PYTHON_BIN" "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
             if [[ ! -f "$qa_output" ]]; then
                 echo "Error: QA output not found at $qa_output after all step"
                 return 1
             fi
-            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
-            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --answer_column generated_answer --output_prefix llm_inference_samples
+            run_llm_inference
             ;;
         qa)
-            if [[ ! -f "$bert_output" ]]; then
-                echo "Error: BERT output not found at $bert_output for QA step"
+            mkdir -p "$output_dir"
+            qa_input=""
+            if [[ -n "$input_file" ]]; then
+                if [[ ! -f "$input_parquet" ]]; then
+                    echo "Error: Explicit QA input parquet not found: $input_parquet"
+                    return 1
+                fi
+                if [[ "$input_parquet" != *.parquet ]]; then
+                    echo "Error: QA step expects a parquet file when using --input_file directly: $input_parquet"
+                    return 1
+                fi
+                echo "[INFO] Using explicit QA input parquet: $input_parquet"
+                qa_input="$input_parquet"
+            elif [[ -f "$bert_output" ]]; then
+                echo "[INFO] Using BERT output parquet for QA step: $bert_output"
+                qa_input="$bert_output"
+            else
+                echo "Error: QA step requires either an explicit --input_file parquet or BERT output at $bert_output"
                 return 1
             fi
-            qa_disable_arg=()
-            [[ -n "$qa_disable_categories" ]] && qa_disable_arg=(--disable_categories "$qa_disable_categories")
-            echo "[RUN] python ${APP_ROOT}/dataset_generation/generate_train_test_datasets.py --dataset custom --custom_parquet_path ${bert_output} --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir ${output_dir} ${qa_disable_arg[*]}"
-            python "${APP_ROOT}/dataset_generation/generate_train_test_datasets.py" --dataset custom --custom_parquet_path "${bert_output}" --max_prompts_per_ecg 4 --prompt_workers 1 --answer_workers 1 --output_dir "${output_dir}" "${qa_disable_arg[@]}"
+            run_qa_generation "$qa_input"
+            ;;
+        preprocess_qa_llm)
+            mkdir -p "$output_dir"
+            preprocess_args=$(build_args preprocess)
+            echo "[RUN] ${PYTHON_BIN} $python_script $preprocess_args"
+            "$PYTHON_BIN" "$python_script" $preprocess_args || return 1
+
+            preprocessed_output="${output_dir}/preprocessed.parquet"
+            if [[ ! -f "$preprocessed_output" ]]; then
+                echo "Error: Preprocessing output not found at $preprocessed_output"
+                return 1
+            fi
+
+            run_qa_generation "$preprocessed_output"
+
+            if [[ ! -f "$qa_output" ]]; then
+                echo "Error: QA output not found at $qa_output after preprocess_qa_llm"
+                return 1
+            fi
+
+            run_llm_inference
             ;;
         llm)
             if [[ ! -f "$qa_output" ]]; then
                 echo "Error: QA output not found at $qa_output for LLM step. Run --step qa first."
                 return 1
             fi
-            echo "[RUN] python ${APP_ROOT}/inference/generate_all_qa_pairs.py --checkpoint ${llm_checkpoint} --validation_parquet ${qa_output} --output_dir ${output_dir} --answer_column generated_answer --output_prefix llm_inference_samples"
-            python "${APP_ROOT}/inference/generate_all_qa_pairs.py" --checkpoint "${llm_checkpoint}" --validation_parquet "${qa_output}" --output_dir "${output_dir}" --device 1 --save_interval 10 --answer_column generated_answer --output_prefix llm_inference_samples
+            run_llm_inference
             ;;
         *)
             echo "Unknown run_step: $run_step"

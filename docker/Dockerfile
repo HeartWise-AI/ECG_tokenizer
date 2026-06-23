@@ -102,11 +102,17 @@ prefetch("heartwise/Bert_diagnosis2classification_En_Fr", "/app/checkpoints/bert
 prefetch("heartwise/DeepECG-Tok_tokenizer", "/app/checkpoints/DeepECG-Tok_tokenizer")
 prefetch("heartwise/DeepECG-Tok_EfficientNetV2_77_Classes", "/app/checkpoints/DeepECG-Tok_EfficientNetV2_77_Classes")
 prefetch("heartwise/DeepECG-Tok_medgemma-4b-it", "/app/checkpoints/DeepECG-Tok_medgemma-4b-it")
-# Also cache the base Gemma tokenizer/model so AutoTokenizer can load offline
+# Populate HF cache so AutoConfig/AutoModel.from_pretrained("google/medgemma-4b-it")
+# inside models/decoder/medgemma_decoder.py can resolve the base LLM weights
+# without requiring network at runtime.
 snapshot_download(
     repo_id="google/medgemma-4b-it",
     token=token,
 )
+# Also materialize the tokenizer/model under the path that
+# docker/run_pipeline.bash hard-checks (BASE_TOKENIZER_DIR), so the LLM step
+# starts and AutoTokenizer can load offline from this dir.
+prefetch("google/medgemma-4b-it", "/app/checkpoints/google-medgemma-4b-it")
 PY
 
 # Copy Docker-specific files
