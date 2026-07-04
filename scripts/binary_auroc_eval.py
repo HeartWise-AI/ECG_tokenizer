@@ -119,10 +119,25 @@ def load_model(checkpoint_path: str, device: str = "cuda:0"):
         num_codebooks_kept=getattr(cfg, "num_codebooks_kept", 8),
         codebook_offset=getattr(cfg, "codebook_offset", -1),
         prefix_tuning=False,
+        # P1: reconstruct the continuous Perceiver path if the checkpoint trained with it.
+        bridge_use_continuous_features=getattr(cfg, "bridge_use_continuous_features", False),
+        continuous_num_tokens=getattr(cfg, "continuous_num_tokens", 32),
+        continuous_num_heads=getattr(cfg, "continuous_num_heads", 8),
+        # Phase B: continuous-ONLY (disable the discrete code path — codebook doesn't
+        # match the v3 contrastive encoder). Must match how the checkpoint was trained.
+        bridge_continuous_only=getattr(cfg, "bridge_continuous_only", False),
         stage1_checkpoint_path=getattr(cfg, "stage1_checkpoint_path", None),
     ).to(device)
 
-    model._load_state_dict(ckpt["model_state_dict"], strict=True)
+    # Checkpoints trained with pattern_loss_weight=0 (e.g. P5 full-FT) lack the aux
+    # pattern_classifier head the eval-built bridge constructs by default. Fill ONLY
+    # those missing keys with the eval model's init so strict=True still validates
+    # every real weight (guards against silent LLM/bridge key drops).
+    ckpt_sd = dict(ckpt["model_state_dict"])
+    for k, v in model.state_dict().items():
+        if "pattern_classifier" in k and k not in ckpt_sd:
+            ckpt_sd[k] = v
+    model._load_state_dict(ckpt_sd, strict=True)
     if use_lora:
         model.set_lora_inference_mode(True)
     model.eval()
@@ -214,9 +229,14 @@ def get_p_yes_for_ecg(
         b_ids = prompt_ids[start:end].to(device)
         b_mask = prompt_mask[start:end].to(device)
 
+        # Continuous-only / P1 models need the pre-quant continuous features fed in.
+        cont_kw = {}
+        if getattr(decoder, "use_continuous_features", False) or getattr(decoder, "continuous_only", False):
+            cont_kw["continuous_features"] = features.expand(B, -1, -1)
+
         # Build inputs_embeds with ECG injection
         inputs_embeds, attn_mask, _ = decoder._prepare_inputs_for_generation(
-            b_ids, b_mask, q_feat, q_codes, detach_soft_prompts=True,
+            b_ids, b_mask, q_feat, q_codes, detach_soft_prompts=True, **cont_kw,
         )
 
         model_dtype = decoder.llm_model.get_input_embeddings().weight.dtype

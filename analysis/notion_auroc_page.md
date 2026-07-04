@@ -31,6 +31,34 @@ We extract `P(Yes) = softmax(logit_Yes, logit_No)[0]` from the **first generated
 
 > 22 diagnoses in "OTHER" category + 3 normal markers were **never used as QA training targets**. Excluding them: Macro AUROC = 0.633 (baseline).
 
+## e4dw86nh Binary Endpoint AUROC
+
+| Endpoint | Evaluation set | Continuous score | n | Positives | AUROC | AUPRC |
+|---|---|---|---:|---:|---:|---:|
+| AFIB | 10k ECG diagnosis AUROC set | P(Yes) for `Afib` | 10,000 | 1,156 | 0.69 | 0.18 |
+| ACS / acute MI yes-no | 10k ECG diagnosis AUROC set | P(Yes) for `Acute MI` | 10,000 | 358 | 0.89 | 0.31 |
+| Structural heart disease | EchoNext test | P(Yes) for SHD | 5,442 | 2,318 | 0.74 | 0.67 |
+| LVEF <=40% | Full e4d baseline LVEF QA rows | -predicted numeric LVEF | 2,656 | 538 | 0.80 | 0.50 |
+| LVEF <50% | Full e4d baseline LVEF QA rows | -predicted numeric LVEF | 2,656 | 828 | 0.77 | 0.57 |
+
+Sources: `analysis/binary_auroc_synonyms_e4d/binary_auroc_results.json`, `analysis/rlvr_eval/echonext_shd_auroc_e4dw86nh/echonext_shd_auroc.json`, and `analysis/rlvr_eval/full_test_e4d_baseline_sharded_128tok/generations_baseline_full_sharded_128tok.csv`.
+
+## 120-Row Gate Endpoint Readout
+
+Best internal 120-row gate among saved single-output prompt routes: `prompt_route_v3_strict_interp_v2_120_gate` / `prompt_route_v4_3src_strict_interp_v2_120_gate`, overall judge score 75.9%.
+
+These 120-row artifacts contain generated text, not raw P(Yes) probabilities. Binary AUROC below is therefore computed from hard yes/no predictions as a diagnostic readout, not as the primary probability-based AUROC used above.
+
+| Endpoint | 120-row category | n | Positives | 120-row readout |
+|---|---|---:|---:|---:|
+| AFIB risk | `afib_risk` | 6 | 3 | hard-label AUROC 0.83; score 83.3% |
+| ACS / acute occlusion yes-no | `acs_severity` | 8 | 4 | hard-label AUROC 0.88; score 71.3% |
+| Structural heart disease | `structural_heart_disease` | 6 | 5 | hard-label AUROC 0.90; score 83.3% |
+| LVEF <=40% | `lvef` | 6 | 0 | AUROC undefined; LVEF score 90.0%; Pearson 0.16 |
+| LVEF <50% | `lvef` | 6 | 0 | AUROC undefined; LVEF score 90.0%; Pearson 0.16 |
+
+Source: `analysis/rlvr_eval/prompt_route_v3_strict_interp_v2_120_gate/judge_prompt_route_v3_strict_interp_v2_120_gate_summary.json` and `analysis/rlvr_eval/prompt_route_v3_strict_interp_v2_120_gate/generations_prompt_route_v3_strict_interp_v2_120_gate.csv`.
+
 ---
 
 ## Binary QA Fine-tuning

@@ -175,6 +175,7 @@ def main():
             best_gen = candidates[best_idx]
             best_score = scores[best_idx]
         except Exception as e:
+            candidates = []
             best_gen = f"[ERROR: {e}]"
             best_score = 0.0
             scores = [0.0] * args.n_candidates
@@ -190,6 +191,7 @@ def main():
             "prompt_category": str(row["prompt_category"]),
             "bestof_picked_idx": best_idx if not best_gen.startswith("[ERROR") else -1,
             "bestof_picked_score": best_score,
+            "bestof_candidates": candidates,
             "bestof_candidate_scores": scores,
         })
         if (i + 1) % 5 == 0:
@@ -198,6 +200,7 @@ def main():
     csv_path = Path(args.output_dir) / f"generations_{args.label}.csv"
     # Convert candidate_scores list to JSON-safe
     out_df = pd.DataFrame(generations)
+    out_df["bestof_candidates"] = out_df["bestof_candidates"].apply(json.dumps)
     out_df["bestof_candidate_scores"] = out_df["bestof_candidate_scores"].apply(json.dumps)
     out_df.to_csv(csv_path, index=False)
     print(f"[bestofN] Saved generations: {csv_path}")

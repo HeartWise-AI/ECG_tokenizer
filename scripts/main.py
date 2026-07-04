@@ -6,7 +6,7 @@ import types
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
-    sys.path.append(project_root)
+    sys.path.insert(0, project_root)
 
 # Shim for checkpoints saved with older transformers that had a fast Gemma tokenizer.
 # transformers >=5 removed tokenization_gemma_fast; register an alias so torch.load

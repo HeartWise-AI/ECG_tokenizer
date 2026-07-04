@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.preprocessing.analysis_pipeline import AnalysisPipeline
-from utils.constants import lead_to_idx
+from utils.constants import lead_to_idx, WCRV2_SOURCE_SCALE_FACTORS
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Preprocess ECG data from parquet files.')
@@ -31,7 +31,25 @@ def parse_arguments():
                         help='Optional explicit column containing waveform paths (e.g., ecg_path, xml_path, npy_path)')
     parser.add_argument('--include_optional_100hz_cluster', action='store_true',
                         help='Include optional flatten range around 100-101 Hz')
+    parser.add_argument('--scale', type=float, default=None,
+                        help='WCRv2 ADC->mV scale factor override (e.g., MHI=0.00488, '
+                             'MIMIC=0.001, CODE15=0.4694). Overrides per-source inference.')
+    parser.add_argument('--source', type=str, default=None,
+                        help='Dataset source for WCRv2 scale lookup (MHI, MIMIC, CODE15, '
+                             'UKBB, CLSA). Defaults to inference from the dataset name.')
     return parser.parse_args()
+
+
+def infer_source(dataset_name, explicit_source=None):
+    """Resolve the WCRv2 source key from an explicit flag or the dataset name."""
+    if explicit_source:
+        return explicit_source
+    key = str(dataset_name).upper()
+    # Longest keys first so e.g. 'MIMIC-IV' wins over 'MIMIC'.
+    for known in sorted(WCRV2_SOURCE_SCALE_FACTORS, key=len, reverse=True):
+        if known in key:
+            return known
+    return None
 
 def load_config(config_path):
     try:
@@ -83,6 +101,8 @@ def process_dataset(
     file_type=None,
     path_column=None,
     include_optional_100hz_cluster=False,
+    scale_factor=None,
+    source=None,
 ):
     dataset_output_folder = os.path.join(output_folder, dataset_name)
     
@@ -108,9 +128,10 @@ def process_dataset(
     if needs_lead_swap:
         print("MIMIC dataset detected - aVL and aVF leads will be swapped during processing")
     
+    resolved_source = infer_source(dataset_name, source)
     processed_df = AnalysisPipeline.save_and_preprocess_data(
         df=df,
-        output_folder=dataset_output_folder, 
+        output_folder=dataset_output_folder,
         preprocessing_folder=preprocessing_subfolder,
         preprocessing_n_workers=n_workers,
         swap_leads_fn=swap_leads if needs_lead_swap else None,
@@ -118,6 +139,8 @@ def process_dataset(
         swap_lead2=lead_to_idx['aVF'],
         path_column=path_column,
         include_optional_100hz_cluster=include_optional_100hz_cluster,
+        scale_factor=scale_factor,
+        source=resolved_source,
     )
 
     output_filename = f"{dataset_name}_cleaned.parquet"
@@ -145,6 +168,8 @@ def main():
             file_type=args.file_type,
             path_column=args.path_column,
             include_optional_100hz_cluster=args.include_optional_100hz_cluster,
+            scale_factor=args.scale,
+            source=args.source,
         )
         return
 
@@ -190,6 +215,8 @@ def main():
                 file_type=current_file_type,
                 path_column=args.path_column,
                 include_optional_100hz_cluster=args.include_optional_100hz_cluster,
+                scale_factor=args.scale,
+                source=args.source,
             )
         except Exception as e:
             print(f"Error processing {key}: {e}")

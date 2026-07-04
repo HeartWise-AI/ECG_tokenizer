@@ -17,6 +17,7 @@ from models.decoder import (
     GPT2Decoder,
     Llama32Decoder,
     MedGemmaDecoder,
+    QwenDecoder,
 )
 from models.ecg_tokenizer_wrapper import (
     ECG_Tokenizer_Wrapper,
@@ -46,6 +47,7 @@ __all__ = [
     "GPT2Decoder",
     "Llama32Decoder",
     "MedGemmaDecoder",
+    "QwenDecoder",
     # Other models
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",

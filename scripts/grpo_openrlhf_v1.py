@@ -58,6 +58,38 @@ from services.openrlhf_judge_reward import reward_func, _init_judge_registry
 from services.verifiable_reward import verify as verifiable_verify
 
 
+def _try_init_wandb(args):
+    if not args.wandb_project:
+        return None
+    try:
+        import wandb
+
+        tags = [t.strip() for t in args.wandb_tags.split(",") if t.strip()]
+        run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity or None,
+            name=args.wandb_run_name or None,
+            group=args.wandb_group or None,
+            tags=tags or None,
+            mode=args.wandb_mode or None,
+            config=vars(args),
+        )
+        print(f"[wandb] run initialized: {getattr(run, 'url', None)}")
+        return run
+    except Exception as e:
+        msg = f"[wandb] init failed: {e}"
+        if args.wandb_required:
+            raise RuntimeError(msg) from e
+        print(msg)
+        return None
+
+
+def _wandb_log(run, payload: Dict, step: int) -> None:
+    if run is None:
+        return
+    run.log(payload, step=step)
+
+
 def load_train_data(path: str) -> List[Dict]:
     rows = []
     with open(path) as f:
@@ -96,6 +128,10 @@ def compute_group_advantages(rewards: List[float], clip: float = 2.0) -> torch.T
     std = r.std() + 1e-6
     a = (r - mean) / std
     return a.clamp(-clip, clip)
+
+
+def parse_category_filter(raw: str) -> set:
+    return {x.strip() for x in (raw or "").split(",") if x.strip()}
 
 
 @torch.no_grad()
@@ -141,6 +177,25 @@ def sample_candidates(model, tokenizer, signal: torch.Tensor,
             "decoded": decoded,
         })
     return out
+
+
+def build_text_candidate(tokenizer, prompt_text: str, answer_text: str,
+                         device: str, max_new_tokens: int) -> Dict:
+    """Build a teacher-forced candidate from a known answer string."""
+    prompt = eval_mod.build_prompt(prompt_text)
+    enc = tokenizer(prompt, add_special_tokens=True, return_tensors="pt")
+    answer = str(answer_text or "").strip()
+    ans = tokenizer(answer, add_special_tokens=False, return_tensors="pt")
+    gen_ids = ans["input_ids"][0]
+    if max_new_tokens > 0:
+        gen_ids = gen_ids[:max_new_tokens]
+    if gen_ids.numel() == 0:
+        return {}
+    return {
+        "prompt_ids": enc["input_ids"][0].to(device),
+        "gen_ids": gen_ids.to(device),
+        "decoded": answer,
+    }
 
 
 def compute_logprobs_for_candidates(model, signal: torch.Tensor,
@@ -204,15 +259,25 @@ def eval_on_subset(model, tokenizer, subset_parquet: str, output_dir: str,
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    created_tmp_ckpt = False
     if use_original_ckpt:
         tmp_ckpt = Path(use_original_ckpt)
     else:
         # Save model state temporarily so the eval script can load it
         tmp_ckpt = out_dir / f"_eval_ckpt_{label}.pt"
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "config": original_config,
-        }, tmp_ckpt)
+        try:
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "config": original_config,
+            }, tmp_ckpt)
+            created_tmp_ckpt = True
+        except Exception:
+            if tmp_ckpt.exists():
+                try:
+                    tmp_ckpt.unlink()
+                except OSError:
+                    pass
+            raise
 
     cmd = [
         sys.executable, "-u", str(ROOT / "scripts" / "rlvr_eval_subset.py"),
@@ -226,20 +291,52 @@ def eval_on_subset(model, tokenizer, subset_parquet: str, output_dir: str,
     if run_judge:
         cmd.append("--run_judge")
 
-    print(f"[eval] {' '.join(cmd)}")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(ROOT) + ":" + env.get("PYTHONPATH", "")
-    env["ECG_BERT_DEVICE"] = device
-    res = subprocess.run(cmd, env=env, cwd=str(ROOT))
-    if res.returncode != 0:
-        print(f"[eval] FAILED (returncode={res.returncode})")
-        return -1.0
+    try:
+        print(f"[eval] {' '.join(cmd)}")
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT) + ":" + env.get("PYTHONPATH", "")
+        env["ECG_BERT_DEVICE"] = device
+        res = subprocess.run(cmd, env=env, cwd=str(ROOT))
+        if res.returncode != 0:
+            print(f"[eval] FAILED (returncode={res.returncode})")
+            return -1.0
 
-    summary_path = out_dir / f"summary_{label}.json"
+        summary_path = out_dir / f"summary_{label}.json"
+        if not summary_path.exists():
+            return -1.0
+        with open(summary_path) as f:
+            return float(json.load(f).get("overall_score", -1.0))
+    finally:
+        if created_tmp_ckpt and tmp_ckpt.exists():
+            try:
+                tmp_ckpt.unlink()
+                print(f"[eval] removed temporary checkpoint {tmp_ckpt}")
+            except OSError as e:
+                print(f"[eval] warning: could not remove temporary checkpoint {tmp_ckpt}: {e}")
+
+
+def load_eval_summary(output_dir: str, label: str) -> Dict:
+    summary_path = Path(output_dir) / f"summary_{label}.json"
     if not summary_path.exists():
-        return -1.0
+        return {}
     with open(summary_path) as f:
-        return float(json.load(f).get("overall_score", -1.0))
+        return json.load(f)
+
+
+def flatten_eval_for_wandb(summary: Dict, prefix: str) -> Dict:
+    if not summary:
+        return {}
+    out = {}
+    if "overall_score" in summary:
+        out[f"{prefix}/overall_score"] = summary["overall_score"]
+    for cat, stats in summary.get("category_aggregates", {}).items():
+        mean = stats.get("mean_score")
+        count = stats.get("count")
+        if mean is not None:
+            out[f"{prefix}/category/{cat}/mean_score"] = mean
+        if count is not None:
+            out[f"{prefix}/category/{cat}/count"] = count
+    return out
 
 
 def main():
@@ -279,9 +376,21 @@ def main():
                         "rollback to baseline and stop.")
     p.add_argument("--target_delta", type=float, default=None,
                    help="Stop after an eval reaches baseline + target_delta.")
+    p.add_argument("--target_score", type=float, default=None,
+                   help="Optional absolute eval score required for target. "
+                        "When combined with --target_delta, the stop threshold "
+                        "is max(baseline + target_delta, target_score).")
     p.add_argument("--full_finetune", action="store_true",
                    help="Unfreeze the whole MedGemma decoder (full FT) instead "
                         "of LoRA-only. Encoder/quantizer/bridge stay frozen.")
+    p.add_argument("--train_lora_modules", default="",
+                   help="Optional comma-separated substring filter for LoRA-only "
+                        "training, e.g. q_proj,v_proj. Empty trains all LoRA "
+                        "parameters.")
+    p.add_argument("--train_lora_parts", default="",
+                   help="Optional comma-separated LoRA parameter part filter. "
+                        "Valid values are A and B, matching lora_A/lora_B. "
+                        "Empty trains both parts.")
     p.add_argument("--sft_best_weight", type=float, default=0.0,
                    help="Optional auxiliary NLL weight on the highest-reward "
                         "sample in each group. This is judge-selected "
@@ -298,9 +407,48 @@ def main():
                         "apply the auxiliary NLL to reinforce a judge-approved "
                         "sample. This helps when sampling finds good answers "
                         "but GRPO has zero advantage signal.")
+    p.add_argument("--sft_gt_weight", type=float, default=0.0,
+                   help="Optional teacher-forced NLL weight on the train-row "
+                        "ground_truth answer. This is a single-model weight "
+                        "update used to anchor greedy behavior; it is not "
+                        "best-of-N inference or checkpoint blending.")
+    p.add_argument("--sft_gt_categories", default="",
+                   help="Comma-separated category allow-list for "
+                        "--sft_gt_weight. Empty means all categories.")
+    p.add_argument("--sft_ref_weight", type=float, default=0.0,
+                   help="Optional preservation loss against the frozen start "
+                        "checkpoint on teacher-forced ground_truth text. This "
+                        "penalizes squared average-logprob drift and is useful "
+                        "with pseudo-label replay rows. It changes training "
+                        "only; final inference is still greedy single-output.")
+    p.add_argument("--sft_ref_categories", default="",
+                   help="Comma-separated category allow-list for "
+                        "--sft_ref_weight. Empty means all categories.")
+    p.add_argument("--dpo_gt_weight", type=float, default=0.0,
+                   help="Optional online DPO-style loss preferring the "
+                        "train-row ground_truth over the model's sampled "
+                        "answer, anchored to the frozen start checkpoint.")
+    p.add_argument("--dpo_gt_categories", default="",
+                   help="Comma-separated category allow-list for "
+                        "--dpo_gt_weight. Empty means all categories.")
+    p.add_argument("--dpo_beta", type=float, default=0.1,
+                   help="Inverse-temperature for --dpo_gt_weight.")
+    p.add_argument("--dpo_skip_if_rejected_reward_ge", type=float, default=0.999,
+                   help="Skip DPO when the sampled/rejected answer already "
+                        "scores at or above this reward.")
     p.add_argument("--skip_final_eval", action="store_true",
                    help="Skip the duplicate final eval after saving best_model.pt. "
                         "Useful when max_steps already landed on an eval boundary.")
+    p.add_argument("--wandb_project", default=None,
+                   help="Enable Weights & Biases logging under this project.")
+    p.add_argument("--wandb_entity", default=None)
+    p.add_argument("--wandb_run_name", default=None)
+    p.add_argument("--wandb_group", default=None)
+    p.add_argument("--wandb_tags", default="")
+    p.add_argument("--wandb_mode", default=None,
+                   help="Optional W&B mode, e.g. online, offline, disabled.")
+    p.add_argument("--wandb_required", action="store_true",
+                   help="Fail fast if W&B cannot be initialized.")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -308,6 +456,10 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     eval_device = args.eval_device or args.device
+    sft_gt_categories = parse_category_filter(args.sft_gt_categories)
+    sft_ref_categories = parse_category_filter(args.sft_ref_categories)
+    dpo_gt_categories = parse_category_filter(args.dpo_gt_categories)
+    wandb_run = _try_init_wandb(args)
 
     print(f"[grpo] loading model from {args.checkpoint}")
     # Stash the original config for re-saving later
@@ -318,8 +470,10 @@ def main():
 
     # Optional KL anchor: load a frozen reference model
     ref_model = None
-    if args.beta > 0:
-        print(f"[grpo] loading reference model (beta={args.beta}) ...")
+    if args.beta > 0 or args.sft_ref_weight > 0 or args.dpo_gt_weight > 0:
+        print(f"[grpo] loading reference model "
+              f"(beta={args.beta}, sft_ref_weight={args.sft_ref_weight}, "
+              f"dpo_gt_weight={args.dpo_gt_weight}) ...")
         ref_model, _ = eval_mod.load_model(args.checkpoint, args.device)
         for _p in ref_model.parameters():
             _p.requires_grad = False
@@ -344,9 +498,32 @@ def main():
         mode_str = "FULL FINETUNE (decoder.llm_model unfrozen)"
     else:
         # LoRA-only
+        lora_module_filter = parse_category_filter(args.train_lora_modules)
+        lora_part_filter = {part.upper() for part in parse_category_filter(args.train_lora_parts)}
+        valid_lora_parts = {"A", "B"}
+        invalid_lora_parts = sorted(lora_part_filter - valid_lora_parts)
+        if invalid_lora_parts:
+            raise ValueError(
+                f"Invalid --train_lora_parts values: {invalid_lora_parts}. "
+                "Use A,B, A, B, or leave empty."
+            )
         for n, p_ in model.named_parameters():
-            p_.requires_grad = ("lora_" in n) or ("lora_A" in n) or ("lora_B" in n)
+            is_lora = ("lora_" in n) or ("lora_A" in n) or ("lora_B" in n)
+            allowed = (
+                not lora_module_filter
+                or any(module_name in n for module_name in lora_module_filter)
+            )
+            if lora_part_filter:
+                allowed = allowed and (
+                    ("A" in lora_part_filter and "lora_A" in n)
+                    or ("B" in lora_part_filter and "lora_B" in n)
+                )
+            p_.requires_grad = is_lora and allowed
         mode_str = "LoRA-only"
+        if lora_module_filter:
+            mode_str += f" ({','.join(sorted(lora_module_filter))})"
+        if lora_part_filter:
+            mode_str += f" parts={','.join(sorted(lora_part_filter))}"
 
     trainable = [p for p in model.parameters() if p.requires_grad]
     n_train = sum(p.numel() for p in trainable)
@@ -375,10 +552,73 @@ def main():
             label="baseline", device=eval_device, original_config=original_config,
             max_new_tokens=256, use_original_ckpt=args.checkpoint)
         print(f"[grpo] baseline overall_score = {baseline_score:.4f}")
+    _wandb_log(wandb_run, {"eval/baseline_overall_score": baseline_score}, step=0)
+
+    target_threshold = None
+    target_parts = []
+    if args.target_delta is not None:
+        target_parts.append(baseline_score + args.target_delta)
+    if args.target_score is not None:
+        target_parts.append(args.target_score)
+    if target_parts:
+        target_threshold = max(target_parts)
+        print(f"[grpo] target threshold = {target_threshold:.4f} "
+              f"(baseline={baseline_score:.4f}, target_delta={args.target_delta}, "
+              f"target_score={args.target_score})")
 
     metrics: List[Dict] = []
-    best_score = -1.0
+    best_score = baseline_score
     best_step = 0
+
+    def run_eval_if_due(step: int) -> bool:
+        nonlocal best_score, best_step
+        if step % args.eval_every != 0:
+            return False
+
+        print(f"[grpo] === eval @ step {step} ===")
+        score = eval_on_subset(
+            model, tokenizer, args.eval_subset,
+            str(out_dir / f"eval_step{step}"),
+            label=f"step{step}", device=eval_device,
+            original_config=original_config, max_new_tokens=256)
+        eval_summary = load_eval_summary(
+            str(out_dir / f"eval_step{step}"), f"step{step}")
+        print(f"[grpo] step {step} eval = {score:.4f}  (baseline {baseline_score:.4f}, "
+              f"delta {score - baseline_score:+.4f})")
+        metrics[-1]["eval_overall"] = score
+        metrics[-1]["eval_delta"] = score - baseline_score
+        _wandb_log(wandb_run, {
+            "eval/overall_score": score,
+            "eval/delta_vs_baseline": score - baseline_score,
+            **flatten_eval_for_wandb(eval_summary, "eval"),
+        }, step=step)
+
+        if score > best_score:
+            best_score = score
+            best_step = step
+            best_ckpt_path = out_dir / "best_so_far.pt"
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "config": original_config,
+                "baseline_score": baseline_score,
+                "best_step": step,
+                "best_score": score,
+                "metrics": metrics,
+            }, best_ckpt_path)
+            print(f"[grpo] saved new best (Δ {score - baseline_score:+.4f}) to {best_ckpt_path}")
+        if args.early_stop_on_regression and score < baseline_score - 0.05:
+            print(f"[grpo] EARLY STOP: eval {score:.4f} regressed > 0.05 below baseline")
+            return True
+        metrics[-1]["target_threshold"] = target_threshold
+        metrics[-1]["target_reached"] = (
+            target_threshold is not None and score >= target_threshold
+        )
+        if target_threshold is not None and score >= target_threshold:
+            print(f"[grpo] TARGET REACHED: eval {score:.4f} >= "
+                  f"{target_threshold:.4f}")
+            return True
+        return False
+
     for step in range(1, args.max_steps + 1):
         t0 = time.time()
         batch_indices = rng.integers(0, len(train_rows), size=args.batch_size)
@@ -386,6 +626,21 @@ def main():
 
         step_loss = 0.0
         step_reward = 0.0
+        sampled_groups = 0
+        degenerate_groups = 0
+        sft_groups = 0
+        sft_gt_groups = 0
+        sft_ref_groups = 0
+        dpo_gt_groups = 0
+        sft_gt_loss_sum = 0.0
+        sft_ref_loss_sum = 0.0
+        dpo_gt_loss_sum = 0.0
+        reward_sum = 0.0
+        reward_sq_sum = 0.0
+        reward_count = 0
+        reward_positive = 0
+        reward_perfect = 0
+        best_reward_sum = 0.0
         n_groups = 0
         skipped = 0
 
@@ -427,6 +682,16 @@ def main():
             best_reward = float(rewards[best_idx]) if best_idx >= 0 else 0.0
             mean_reward = float(np.mean(rewards)) if rewards else 0.0
             degenerate_group = abs(advs).max().item() < 1e-6
+            if rewards:
+                reward_arr = np.asarray(rewards, dtype=np.float64)
+                sampled_groups += 1
+                reward_sum += float(reward_arr.sum())
+                reward_sq_sum += float((reward_arr * reward_arr).sum())
+                reward_count += int(reward_arr.size)
+                reward_positive += int((reward_arr > 0.0).sum())
+                reward_perfect += int((reward_arr >= 0.999).sum())
+                best_reward_sum += best_reward
+                degenerate_groups += int(degenerate_group)
             sft_eligible = (
                 args.sft_best_weight > 0
                 and best_idx >= 0
@@ -436,49 +701,142 @@ def main():
                     or (args.sft_on_degenerate_high and degenerate_group)
                 )
             )
+            sft_groups += int(sft_eligible)
+            gt_eligible = (
+                args.sft_gt_weight > 0
+                and bool(gt_text)
+                and (not sft_gt_categories or cat in sft_gt_categories)
+            )
+            ref_gt_eligible = (
+                args.sft_ref_weight > 0
+                and bool(gt_text)
+                and (not sft_ref_categories or cat in sft_ref_categories)
+            )
+            rejected_idx = int(np.argmin(rewards)) if rewards else -1
+            rejected_reward = float(rewards[rejected_idx]) if rejected_idx >= 0 else 0.0
+            dpo_gt_eligible = (
+                args.dpo_gt_weight > 0
+                and bool(gt_text)
+                and rejected_idx >= 0
+                and rejected_reward < args.dpo_skip_if_rejected_reward_ge
+                and (not dpo_gt_categories or cat in dpo_gt_categories)
+            )
+            gt_candidate = {}
+            if gt_eligible or ref_gt_eligible or dpo_gt_eligible:
+                gt_candidate = build_text_candidate(
+                    tokenizer, prompt_str, gt_text, args.device,
+                    args.max_new_tokens)
+                gt_eligible = gt_eligible and bool(gt_candidate)
+                ref_gt_eligible = ref_gt_eligible and bool(gt_candidate)
+                dpo_gt_eligible = dpo_gt_eligible and bool(gt_candidate)
+            sft_gt_groups += int(gt_eligible)
+            sft_ref_groups += int(ref_gt_eligible)
+            dpo_gt_groups += int(dpo_gt_eligible)
 
             # Reduced diagnostic - only print 1 sample per 10 steps
             if step % 10 == 1:
                 print(f"[grpo]   prompt='{prompt_str[:50]}' rewards={[f'{r:.2f}' for r in rewards]}")
 
             # Skip degenerate groups (all rewards equal -> zero gradient)
-            if degenerate_group and not sft_eligible:
+            need_candidate_logprobs = (not degenerate_group) or sft_eligible
+            need_candidate_logprobs = need_candidate_logprobs or dpo_gt_eligible
+            if (
+                not need_candidate_logprobs
+                and not gt_eligible
+                and not ref_gt_eligible
+                and not dpo_gt_eligible
+            ):
                 continue
 
             # Compute log-probs with grad (model still in eval() — BN frozen,
             # no dropout; LoRA delta still has gradient through scaling).
-            log_probs_list = compute_logprobs_for_candidates(
-                model, signal, cands, args.device)
+            log_probs_list = []
+            if need_candidate_logprobs:
+                log_probs_list = compute_logprobs_for_candidates(
+                    model, signal, cands, args.device)
 
             # Optional KL anchor: log-probs from frozen ref policy
             ref_lp_list = None
-            if ref_model is not None:
+            if ref_model is not None and need_candidate_logprobs:
                 with torch.no_grad():
                     ref_lp_list = compute_logprobs_for_candidates(
                         ref_model, signal, cands, args.device)
 
             # loss = -mean over candidates of (advantage * mean_log_prob) [+ beta * KL]
-            group_loss = 0.0
+            group_loss = None
             kl_estimate = 0.0
-            for i, (lp_sum, n_tok) in enumerate(log_probs_list):
-                avg_lp = lp_sum / n_tok
-                group_loss = group_loss + (-advs[i] * avg_lp)
-                if ref_lp_list is not None:
-                    ref_avg_lp = (ref_lp_list[i][0] / ref_lp_list[i][1]).detach()
-                    # Estimate of KL(policy || ref) ~ avg_lp_policy - avg_lp_ref
-                    kl_term = avg_lp - ref_avg_lp
-                    group_loss = group_loss + args.beta * kl_term
-                    kl_estimate += float(kl_term.detach().item())
-            group_loss = group_loss / len(log_probs_list)
-            if (
-                sft_eligible
-            ):
+            if need_candidate_logprobs:
+                candidate_loss = 0.0
+                for i, (lp_sum, n_tok) in enumerate(log_probs_list):
+                    avg_lp = lp_sum / n_tok
+                    candidate_loss = candidate_loss + (-advs[i] * avg_lp)
+                    if ref_lp_list is not None:
+                        ref_avg_lp = (ref_lp_list[i][0] / ref_lp_list[i][1]).detach()
+                        # Estimate of KL(policy || ref) ~ avg_lp_policy - avg_lp_ref
+                        kl_term = avg_lp - ref_avg_lp
+                        candidate_loss = candidate_loss + args.beta * kl_term
+                        kl_estimate += float(kl_term.detach().item())
+                group_loss = candidate_loss / len(log_probs_list)
+            if sft_eligible:
                 best_lp_sum, best_n_tok = log_probs_list[best_idx]
-                group_loss = group_loss + args.sft_best_weight * (
+                best_loss = args.sft_best_weight * (
                     -best_lp_sum / best_n_tok
                 )
+                group_loss = best_loss if group_loss is None else group_loss + best_loss
+            gt_lp_sum = None
+            gt_n_tok = None
+            if gt_eligible or ref_gt_eligible:
+                gt_lp_sum, gt_n_tok = compute_logprobs_for_candidates(
+                    model, signal, [gt_candidate], args.device)[0]
+            if gt_eligible:
+                gt_loss = args.sft_gt_weight * (-gt_lp_sum / gt_n_tok)
+                group_loss = gt_loss if group_loss is None else group_loss + gt_loss
+                sft_gt_loss_sum += float(gt_loss.detach().item())
+            if ref_gt_eligible:
+                if ref_model is None:
+                    raise RuntimeError("--sft_ref_weight requires a reference model")
+                with torch.no_grad():
+                    ref_gt_lp_sum, ref_gt_n_tok = compute_logprobs_for_candidates(
+                        ref_model, signal, [gt_candidate], args.device)[0]
+                    ref_gt_avg_lp = (ref_gt_lp_sum / ref_gt_n_tok).detach()
+                gt_avg_lp = gt_lp_sum / gt_n_tok
+                ref_loss = args.sft_ref_weight * (
+                    gt_avg_lp - ref_gt_avg_lp
+                ).pow(2)
+                group_loss = ref_loss if group_loss is None else group_loss + ref_loss
+                sft_ref_loss_sum += float(ref_loss.detach().item())
+            if dpo_gt_eligible:
+                if ref_model is None:
+                    raise RuntimeError("--dpo_gt_weight requires a reference model")
+                if gt_lp_sum is None or gt_n_tok is None:
+                    gt_lp_sum, gt_n_tok = compute_logprobs_for_candidates(
+                        model, signal, [gt_candidate], args.device)[0]
+                rejected_lp_sum, rejected_n_tok = log_probs_list[rejected_idx]
+                with torch.no_grad():
+                    ref_gt_lp_sum, ref_gt_n_tok = compute_logprobs_for_candidates(
+                        ref_model, signal, [gt_candidate], args.device)[0]
+                    if ref_lp_list is not None:
+                        ref_rejected_lp_sum, ref_rejected_n_tok = ref_lp_list[rejected_idx]
+                    else:
+                        ref_rejected_lp_sum, ref_rejected_n_tok = compute_logprobs_for_candidates(
+                            ref_model, signal, [cands[rejected_idx]], args.device)[0]
+                    ref_diff = (
+                        (ref_gt_lp_sum / ref_gt_n_tok)
+                        - (ref_rejected_lp_sum / ref_rejected_n_tok)
+                    ).detach()
+                pi_diff = (
+                    (gt_lp_sum / gt_n_tok)
+                    - (rejected_lp_sum / rejected_n_tok)
+                )
+                dpo_loss = args.dpo_gt_weight * (
+                    -F.logsigmoid(args.dpo_beta * (pi_diff - ref_diff))
+                )
+                group_loss = dpo_loss if group_loss is None else group_loss + dpo_loss
+                dpo_gt_loss_sum += float(dpo_loss.detach().item())
             if ref_lp_list is not None:
                 kl_estimate /= len(log_probs_list)
+            if group_loss is None:
+                continue
             group_loss.backward()
             step_loss += float(group_loss.detach().item())
             step_reward += float(np.mean(rewards))
@@ -487,6 +845,57 @@ def main():
         if n_groups == 0:
             print(f"[grpo] step {step}: all groups degenerate, skipping")
             optimizer.zero_grad(set_to_none=True)
+            candidate_reward_mean = reward_sum / max(reward_count, 1)
+            candidate_reward_var = (
+                reward_sq_sum / max(reward_count, 1) - candidate_reward_mean ** 2
+            )
+            step_metrics = {
+                "step": step,
+                "loss": None,
+                "reward": None,
+                "grad_norm": None,
+                "dt": time.time() - t0,
+                "sampled_groups": sampled_groups,
+                "optimized_groups": 0,
+                "optimized_group_rate": 0.0,
+                "degenerate_group_rate": degenerate_groups / max(sampled_groups, 1),
+                "sft_group_rate": sft_groups / max(sampled_groups, 1),
+                "sft_gt_group_rate": sft_gt_groups / max(sampled_groups, 1),
+                "sft_ref_group_rate": sft_ref_groups / max(sampled_groups, 1),
+                "dpo_gt_group_rate": dpo_gt_groups / max(sampled_groups, 1),
+                "sft_gt_loss_mean": sft_gt_loss_sum / max(sft_gt_groups, 1),
+                "sft_ref_loss_mean": sft_ref_loss_sum / max(sft_ref_groups, 1),
+                "dpo_gt_loss_mean": dpo_gt_loss_sum / max(dpo_gt_groups, 1),
+                "candidate_reward_mean": candidate_reward_mean,
+                "candidate_reward_std": float(max(candidate_reward_var, 0.0) ** 0.5),
+                "candidate_reward_positive_rate": reward_positive / max(reward_count, 1),
+                "candidate_reward_perfect_rate": reward_perfect / max(reward_count, 1),
+                "best_reward_mean": best_reward_sum / max(sampled_groups, 1),
+                "skipped_signal_count": skipped,
+                "skipped_update_reason": "all_groups_degenerate",
+            }
+            metrics.append(step_metrics)
+            _wandb_log(wandb_run, {
+                "train/update_skipped": 1,
+                "train/optimized_groups": 0,
+                "train/optimized_group_rate": 0.0,
+                "reward/candidate_mean": candidate_reward_mean,
+                "reward/candidate_std": step_metrics["candidate_reward_std"],
+                "reward/candidate_positive_rate": reward_positive / max(reward_count, 1),
+                "reward/candidate_perfect_rate": reward_perfect / max(reward_count, 1),
+                "reward/best_reward_mean": best_reward_sum / max(sampled_groups, 1),
+                "reward/degenerate_group_rate": degenerate_groups / max(sampled_groups, 1),
+                "reward/sft_group_rate": sft_groups / max(sampled_groups, 1),
+                "reward/sft_gt_group_rate": sft_gt_groups / max(sampled_groups, 1),
+                "reward/sft_ref_group_rate": sft_ref_groups / max(sampled_groups, 1),
+                "reward/dpo_gt_group_rate": dpo_gt_groups / max(sampled_groups, 1),
+                "loss/sft_gt_mean": sft_gt_loss_sum / max(sft_gt_groups, 1),
+                "loss/sft_ref_mean": sft_ref_loss_sum / max(sft_ref_groups, 1),
+                "loss/dpo_gt_mean": dpo_gt_loss_sum / max(dpo_gt_groups, 1),
+                "data/skipped_signal_count": skipped,
+            }, step=step)
+            if run_eval_if_due(step):
+                break
             continue
 
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
@@ -508,45 +917,62 @@ def main():
         dt = time.time() - t0
         avg_loss = step_loss / n_groups
         avg_reward = step_reward / n_groups
+        candidate_reward_mean = reward_sum / max(reward_count, 1)
+        candidate_reward_var = (
+            reward_sq_sum / max(reward_count, 1) - candidate_reward_mean ** 2
+        )
+        candidate_reward_std = float(max(candidate_reward_var, 0.0) ** 0.5)
+        optimized_group_rate = n_groups / max(sampled_groups, 1)
         print(f"[grpo] step {step:3d}  loss={avg_loss:+.4f}  reward={avg_reward:.3f}  "
               f"grad_norm={grad_norm:.2f}  dt={dt:.1f}s  skipped={skipped}")
-        metrics.append({
+        step_metrics = {
             "step": step, "loss": avg_loss, "reward": avg_reward,
             "grad_norm": float(grad_norm), "dt": dt,
-        })
+            "sampled_groups": sampled_groups,
+            "optimized_groups": n_groups,
+            "optimized_group_rate": optimized_group_rate,
+            "degenerate_group_rate": degenerate_groups / max(sampled_groups, 1),
+            "sft_group_rate": sft_groups / max(sampled_groups, 1),
+            "sft_gt_group_rate": sft_gt_groups / max(sampled_groups, 1),
+            "sft_ref_group_rate": sft_ref_groups / max(sampled_groups, 1),
+            "dpo_gt_group_rate": dpo_gt_groups / max(sampled_groups, 1),
+            "sft_gt_loss_mean": sft_gt_loss_sum / max(sft_gt_groups, 1),
+            "sft_ref_loss_mean": sft_ref_loss_sum / max(sft_ref_groups, 1),
+            "dpo_gt_loss_mean": dpo_gt_loss_sum / max(dpo_gt_groups, 1),
+            "candidate_reward_mean": candidate_reward_mean,
+            "candidate_reward_std": candidate_reward_std,
+            "candidate_reward_positive_rate": reward_positive / max(reward_count, 1),
+            "candidate_reward_perfect_rate": reward_perfect / max(reward_count, 1),
+            "best_reward_mean": best_reward_sum / max(sampled_groups, 1),
+            "skipped_signal_count": skipped,
+        }
+        metrics.append(step_metrics)
+        _wandb_log(wandb_run, {
+            "train/loss": avg_loss,
+            "train/reward_mean_by_optimized_group": avg_reward,
+            "train/grad_norm": float(grad_norm),
+            "train/step_seconds": dt,
+            "train/sampled_groups": sampled_groups,
+            "train/optimized_groups": n_groups,
+            "train/optimized_group_rate": optimized_group_rate,
+            "reward/candidate_mean": candidate_reward_mean,
+            "reward/candidate_std": candidate_reward_std,
+            "reward/candidate_positive_rate": reward_positive / max(reward_count, 1),
+            "reward/candidate_perfect_rate": reward_perfect / max(reward_count, 1),
+            "reward/best_reward_mean": best_reward_sum / max(sampled_groups, 1),
+            "reward/degenerate_group_rate": degenerate_groups / max(sampled_groups, 1),
+            "reward/sft_group_rate": sft_groups / max(sampled_groups, 1),
+            "reward/sft_gt_group_rate": sft_gt_groups / max(sampled_groups, 1),
+            "reward/sft_ref_group_rate": sft_ref_groups / max(sampled_groups, 1),
+            "reward/dpo_gt_group_rate": dpo_gt_groups / max(sampled_groups, 1),
+            "loss/sft_gt_mean": sft_gt_loss_sum / max(sft_gt_groups, 1),
+            "loss/sft_ref_mean": sft_ref_loss_sum / max(sft_ref_groups, 1),
+            "loss/dpo_gt_mean": dpo_gt_loss_sum / max(dpo_gt_groups, 1),
+            "data/skipped_signal_count": skipped,
+        }, step=step)
 
-        if step % args.eval_every == 0:
-            print(f"[grpo] === eval @ step {step} ===")
-            score = eval_on_subset(
-                model, tokenizer, args.eval_subset,
-                str(out_dir / f"eval_step{step}"),
-                label=f"step{step}", device=eval_device,
-                original_config=original_config, max_new_tokens=256)
-            print(f"[grpo] step {step} eval = {score:.4f}  (baseline {baseline_score:.4f}, "
-                  f"delta {score - baseline_score:+.4f})")
-            metrics[-1]["eval_overall"] = score
-            metrics[-1]["eval_delta"] = score - baseline_score
-            # Save best checkpoint
-            if score > best_score:
-                best_score = score
-                best_step = step
-                best_ckpt_path = out_dir / "best_so_far.pt"
-                torch.save({
-                    "model_state_dict": model.state_dict(),
-                    "config": original_config,
-                    "baseline_score": baseline_score,
-                    "best_step": step,
-                    "best_score": score,
-                    "metrics": metrics,
-                }, best_ckpt_path)
-                print(f"[grpo] saved new best (Δ {score - baseline_score:+.4f}) to {best_ckpt_path}")
-            if args.early_stop_on_regression and score < baseline_score - 0.05:
-                print(f"[grpo] EARLY STOP: eval {score:.4f} regressed > 0.05 below baseline")
-                break
-            if args.target_delta is not None and score >= baseline_score + args.target_delta:
-                print(f"[grpo] TARGET REACHED: eval {score:.4f} >= "
-                      f"{baseline_score + args.target_delta:.4f}")
-                break
+        if run_eval_if_due(step):
+            break
 
     # Save final checkpoint and metrics
     final_ckpt = out_dir / "best_model.pt"
@@ -554,10 +980,22 @@ def main():
         "model_state_dict": model.state_dict(),
         "config": original_config,
         "baseline_score": baseline_score,
+        "target_delta": args.target_delta,
+        "target_score": args.target_score,
+        "target_threshold": target_threshold,
         "metrics": metrics,
     }, final_ckpt)
     with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"baseline_score": baseline_score, "metrics": metrics}, f, indent=2)
+        json.dump({
+            "baseline_score": baseline_score,
+            "target_delta": args.target_delta,
+            "target_score": args.target_score,
+            "target_threshold": target_threshold,
+            "best_score": best_score,
+            "best_step": best_step,
+            "wandb_run_url": getattr(wandb_run, "url", None) if wandb_run else None,
+            "metrics": metrics,
+        }, f, indent=2)
     print(f"[grpo] saved final to {final_ckpt}")
 
     # Final eval
@@ -571,6 +1009,13 @@ def main():
             max_new_tokens=256)
         print(f"[grpo] FINAL: baseline {baseline_score:.4f} -> final {final_score:.4f}  "
               f"(delta {final_score - baseline_score:+.4f})")
+        _wandb_log(wandb_run, {
+            "eval/final_overall_score": final_score,
+            "eval/final_delta_vs_baseline": final_score - baseline_score,
+        }, step=args.max_steps)
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

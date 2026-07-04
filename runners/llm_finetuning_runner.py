@@ -517,6 +517,18 @@ class LLMFinetuningRunner(BaseRunner):
         cross_param_ids = {id(p) for p in cross_attention_params}
         adapter_core_params = [p for p in adapter_params if id(p) not in cross_param_ids]
 
+        # P1: the continuous-feature Perceiver bridge is a separate module on the decoder
+        # (not under decoder.bridge/adapter). Without this it would receive gradients but
+        # never be added to the optimizer -> silently trained as random-frozen. Train it
+        # with the adapter group (fresh module, adapter_lr is appropriate).
+        continuous_bridge_module = getattr(decoder, 'continuous_bridge', None)
+        if continuous_bridge_module is not None:
+            existing_ids = {id(p) for p in adapter_core_params} | cross_param_ids
+            for p in continuous_bridge_module.parameters():
+                if p.requires_grad and id(p) not in existing_ids:
+                    adapter_core_params.append(p)
+                    existing_ids.add(id(p))
+
         llm_lr = float(phase_config.get('llm_lr', self.config.llm_lr))
         adapter_lr = float(phase_config.get('adapter_lr', self.config.adapter_lr))
         cross_attention_lr = float(phase_config.get('cross_attention_lr', adapter_lr))
@@ -555,6 +567,22 @@ class LLMFinetuningRunner(BaseRunner):
                 'weight_decay': cross_attention_weight_decay,
                 'name': 'cross_attention'
             })
+
+        # P2: include the encoder as its own group when unfrozen (freeze_encoder=False).
+        # Like the continuous bridge, the encoder is not under decoder.* so it must be added
+        # explicitly or it would get gradients but never be optimized. Uses a low encoder_lr.
+        encoder_module = getattr(model, 'encoder', None)
+        if encoder_module is not None:
+            encoder_params = [p for p in encoder_module.parameters() if p.requires_grad]
+            if encoder_params:
+                default_enc_lr = getattr(self.config, 'encoder_lr', None) or (adapter_lr * 0.02)
+                encoder_lr = float(phase_config.get('encoder_lr', default_enc_lr))
+                param_groups.append({
+                    'params': encoder_params,
+                    'lr': encoder_lr,
+                    'weight_decay': adapter_weight_decay,
+                    'name': 'encoder',
+                })
 
         return param_groups
 
@@ -872,6 +900,8 @@ class LLMFinetuningRunner(BaseRunner):
 
         pattern_logits_batches: list[torch.Tensor] = []
         pattern_targets_batches: list[torch.Tensor] = []
+        aux_head_logits_batches: dict[str, list[torch.Tensor]] = {'lvef': [], 'shd': [], 'afib': []}
+        aux_head_targets_batches: dict[str, list[torch.Tensor]] = {'lvef': [], 'shd': [], 'afib': []}
         debug_config = getattr(self.config, 'debug_config', None) or {}
 
         if mode == RunMode.VALIDATE:
@@ -906,6 +936,10 @@ class LLMFinetuningRunner(BaseRunner):
         for batch_idx, batch in enumerate(data_iter):            
             # Preprocess the batch
             ecg_signal: torch.Tensor = batch['signal'].to(self.config.device)
+            # Multi-ECG: per-row count of ECGs in the flat-concatenated signal batch.
+            ecg_counts: torch.Tensor | None = (
+                batch['ecg_counts'].to(self.config.device) if 'ecg_counts' in batch else None
+            )
             input_ids: torch.Tensor = batch['input_ids'].to(self.config.device)
             attention_mask: torch.Tensor = batch['attention_mask'].to(self.config.device)
             labels: torch.Tensor = batch['labels'].to(self.config.device) if 'labels' in batch else input_ids.clone()
@@ -916,6 +950,11 @@ class LLMFinetuningRunner(BaseRunner):
             lvef_gt: torch.Tensor | None = None
             if 'lvef_gt' in batch:
                 lvef_gt = batch['lvef_gt'].to(self.config.device, dtype=torch.float32)
+
+            aux_head_gts: dict[str, torch.Tensor] = {}
+            for _aux_key in ('aux_lvef_gt', 'aux_shd_gt', 'aux_afib_gt'):
+                if _aux_key in batch:
+                    aux_head_gts[_aux_key] = batch[_aux_key].to(self.config.device, dtype=torch.float32)
 
             prompt_input_ids_tensor: torch.Tensor | None = None
             prompt_attention_mask_tensor: torch.Tensor | None = None
@@ -960,6 +999,8 @@ class LLMFinetuningRunner(BaseRunner):
                     prompt_attention_mask=prompt_attention_mask_tensor,
                     pattern_targets=pattern_targets,
                     lvef_gt=lvef_gt,
+                    ecg_counts=ecg_counts,
+                    **aux_head_gts,
                 )
             else:
                 outputs = step_fn(
@@ -969,6 +1010,8 @@ class LLMFinetuningRunner(BaseRunner):
                     labels=labels,
                     pattern_targets=pattern_targets,
                     lvef_gt=lvef_gt,
+                    ecg_counts=ecg_counts,
+                    **aux_head_gts,
                 )
 
             if getattr(self.config, 'debug_prompt_stop_after_first_batch', False) and batch_idx == 0:
@@ -1022,6 +1065,15 @@ class LLMFinetuningRunner(BaseRunner):
                     metrics['lvef_loss'] = float(lvef_loss_value.item())
                 else:
                     metrics['lvef_loss'] = float(lvef_loss_value)
+
+            # Auxiliary bridge-head losses (masked; only present when the head is active)
+            for _hname in ('lvef', 'shd', 'afib'):
+                _hval = outputs.get(f'{_hname}_head_loss')
+                if _hval is not None:
+                    metrics[f'{_hname}_head_loss'] = float(_hval.item()) if torch.is_tensor(_hval) else float(_hval)
+                _hn = outputs.get(f'{_hname}_head_n')
+                if _hn is not None:
+                    metrics[f'{_hname}_head_n'] = float(_hn.item()) if torch.is_tensor(_hn) else float(_hn)
 
             # Extract learning rate and gradient metrics
             for key, value in outputs.items():  # type: ignore[attr-defined]
@@ -1122,6 +1174,9 @@ class LLMFinetuningRunner(BaseRunner):
                             log_dict[key] = value
                         if key == f"{mode}/cf_loss":
                             log_dict[key] = value
+                        # Auxiliary bridge-head losses + valid-row counts (lvef/shd/afib)
+                        if key.endswith("_head_loss") or key.endswith("_head_n"):
+                            log_dict[key] = value
                         if key.startswith(f"{mode}/grad_norm"):
                             log_dict[key] = value
                     # Also publish unprefixed LR aliases for convenience in W&B dashboards
@@ -1156,7 +1211,13 @@ class LLMFinetuningRunner(BaseRunner):
                 if logits_batch is not None and targets_batch is not None:
                     pattern_logits_batches.append(logits_batch)
                     pattern_targets_batches.append(targets_batch)
-            
+                for _hname in ('lvef', 'shd', 'afib'):
+                    _hl = outputs.get(f'{_hname}_head_logits')
+                    _ht = outputs.get(f'{_hname}_head_targets')
+                    if _hl is not None and _ht is not None:
+                        aux_head_logits_batches[_hname].append(_hl.detach().float().cpu())
+                        aux_head_targets_batches[_hname].append(_ht.detach().float().cpu())
+
             # Add gradient metrics to tqdm postfix for quick inspection
             if debug_config.get('log_gradient_norms', False) and mode == RunMode.TRAIN:
                 grad_metrics = {
@@ -1510,6 +1571,48 @@ class LLMFinetuningRunner(BaseRunner):
                         except Exception as _wandb_exc:
                             # Non-fatal; skip histogram logging if unavailable
                             pass
+
+        # --- Auxiliary bridge-head AUROC (LVEF / SHD / AFib), gathered across ranks ---
+        if mode == RunMode.VALIDATE:
+            aux_world_size = int(getattr(self.config, "world_size", 1))
+            for _hname in ('lvef', 'shd', 'afib'):
+                _ll = aux_head_logits_batches.get(_hname, [])
+                _tt = aux_head_targets_batches.get(_hname, [])
+                aux_payload = (torch.cat(_ll, dim=0), torch.cat(_tt, dim=0)) if (_ll and _tt) else None
+                aux_gather: list = [None for _ in range(aux_world_size)]
+                if aux_world_size > 1 or aux_payload is not None:
+                    DistributedUtils.all_gather_object(aux_gather, aux_payload)
+                if not self.config.is_ref_device:
+                    continue
+                _logits_parts, _targets_parts = [], []
+                for _item in aux_gather:
+                    if _item is None:
+                        continue
+                    _logits_parts.append(_item[0]); _targets_parts.append(_item[1])
+                if not _logits_parts:
+                    continue
+                _lg = torch.cat(_logits_parts).float().numpy()
+                _tg = torch.cat(_targets_parts).float().numpy()
+                _fin = np.isfinite(_tg)
+                _lg, _tg = _lg[_fin], _tg[_fin]
+                if _lg.size == 0:
+                    continue
+                epoch_metrics[f"{mode}/{_hname}_head_n"] = float(_lg.size)
+                try:
+                    if _hname == 'lvef':
+                        _pred_ef = _lg * 100.0
+                        epoch_metrics[f"{mode}/lvef_head_mae"] = float(np.mean(np.abs(_pred_ef - _tg)))
+                        for _tag, _rule in (('le40', _tg <= 40), ('lt50', _tg < 50)):
+                            _bin = _rule.astype(int)
+                            if 0 < _bin.sum() < len(_bin):
+                                # lower predicted EF => higher risk, so rank by -pred
+                                epoch_metrics[f"{mode}/lvef_head_auroc_{_tag}"] = float(roc_auc_score(_bin, -_pred_ef))
+                    else:
+                        _bin = (_tg >= 0.5).astype(int)
+                        if 0 < _bin.sum() < len(_bin):
+                            epoch_metrics[f"{mode}/{_hname}_head_auroc"] = float(roc_auc_score(_bin, _lg))
+                except ValueError:
+                    pass
 
         # Create validation metric plots on the reference device for both full epochs and snapshots
         if mode == RunMode.VALIDATE and self.config.is_ref_device:
@@ -2524,6 +2627,8 @@ class LLMFinetuningRunner(BaseRunner):
         prompt_attention_mask: torch.Tensor | None = None,
         pattern_targets: torch.Tensor | None = None,
         lvef_gt: torch.Tensor | None = None,
+        ecg_counts: torch.Tensor | None = None,
+        **aux_head_gts: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """
         Train a single step of the model.
@@ -2553,6 +2658,8 @@ class LLMFinetuningRunner(BaseRunner):
                 prompt_attention_mask=prompt_attention_mask,
                 pattern_targets=pattern_targets,
                 lvef_gt=lvef_gt,
+                ecg_counts=ecg_counts,
+                **aux_head_gts,
             )
             loss: torch.Tensor = outputs['loss']
             # Keep an unscaled copy for logging; use scaled loss for backward
@@ -2616,6 +2723,14 @@ class LLMFinetuningRunner(BaseRunner):
         lvef_loss_tensor = outputs.get("lvef_loss")
         if lvef_loss_tensor is not None:
             result["lvef_loss"] = float(lvef_loss_tensor.detach().item()) if torch.is_tensor(lvef_loss_tensor) else float(lvef_loss_tensor)
+        # Auxiliary bridge-head losses + valid-row counts (lvef/shd/afib)
+        for _hname in ('lvef', 'shd', 'afib'):
+            _hl = outputs.get(f'{_hname}_head_loss')
+            if _hl is not None:
+                result[f'{_hname}_head_loss'] = float(_hl.detach().item()) if torch.is_tensor(_hl) else float(_hl)
+            _hn = outputs.get(f'{_hname}_head_n')
+            if _hn is not None:
+                result[f'{_hname}_head_n'] = float(_hn.item()) if torch.is_tensor(_hn) else float(_hn)
         grad_norms = self._collect_grad_norms()
         for key, value in grad_norms.items():
             result[f"grad_norm/{key}"] = value
@@ -2631,6 +2746,8 @@ class LLMFinetuningRunner(BaseRunner):
         prompt_attention_mask: torch.Tensor | None = None,
         pattern_targets: torch.Tensor | None = None,
         lvef_gt: torch.Tensor | None = None,
+        ecg_counts: torch.Tensor | None = None,
+        **aux_head_gts: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """
         Validate a single step of the model.
@@ -2654,6 +2771,8 @@ class LLMFinetuningRunner(BaseRunner):
                 prompt_attention_mask=prompt_attention_mask,
                 pattern_targets=pattern_targets,
                 lvef_gt=lvef_gt,
+                ecg_counts=ecg_counts,
+                **aux_head_gts,
             )
             loss: torch.Tensor = outputs['loss']
 
@@ -2699,6 +2818,19 @@ class LLMFinetuningRunner(BaseRunner):
                 result["pattern_logits"] = pattern_logits.detach().float().cpu()
             if pattern_targets_out is not None:
                 result["pattern_targets"] = pattern_targets_out.detach().float().cpu()
+            # Auxiliary bridge-head outputs for per-head loss logging + val AUROC
+            for _hname in ('lvef', 'shd', 'afib'):
+                _hl = outputs.get(f'{_hname}_head_loss')
+                if _hl is not None:
+                    result[f'{_hname}_head_loss'] = float(_hl.detach().item()) if torch.is_tensor(_hl) else float(_hl)
+                _hn = outputs.get(f'{_hname}_head_n')
+                if _hn is not None:
+                    result[f'{_hname}_head_n'] = float(_hn.item()) if torch.is_tensor(_hn) else float(_hn)
+                _hlog = outputs.get(f'{_hname}_head_logits')
+                _htgt = outputs.get(f'{_hname}_head_targets')
+                if _hlog is not None and _htgt is not None:
+                    result[f'{_hname}_head_logits'] = _hlog.detach().float().cpu()
+                    result[f'{_hname}_head_targets'] = _htgt.detach().float().cpu()
             return result
 
     def _inference_step(

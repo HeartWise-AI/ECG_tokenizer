@@ -21,6 +21,7 @@ SELECTED_GPUS="0"
 CONFIG_PATH="config/gpt2/base_config.yaml"
 RUN_MODE="train"
 USE_WANDB="false"
+MASTER_PORT="${MASTER_PORT:-29546}"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -98,6 +99,7 @@ NUM_GPUS=$(echo $SELECTED_GPUS | tr ',' '\n' | wc -l)
 echo "Starting $RUN_MODE with:"
 echo "Selected GPUs: $SELECTED_GPUS (Total: $NUM_GPUS GPUs)"
 echo "Config path: $CONFIG_PATH"
+echo "Master port: $MASTER_PORT"
 
 # Environment variables for better DDP performance
 export NCCL_DEBUG=WARNING
@@ -107,7 +109,7 @@ export OMP_NUM_THREADS=1
 # Run the script
 torchrun \
     --nproc_per_node=$NUM_GPUS \
-    --master_port=29546 \
+    --master_port=$MASTER_PORT \
     --nnodes=1 \
     --node_rank=0 \
     scripts/main.py \

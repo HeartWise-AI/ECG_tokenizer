@@ -286,6 +286,10 @@ class LLMFinetuningProject(BaseProject):
             bridge_codebook_dropout=getattr(self.config, 'bridge_codebook_dropout', None),
             bridge_cross_every=getattr(self.config, 'bridge_cross_every', None),
             instruction_dropout=getattr(self.config, 'instruction_dropout', 0.0),
+            bridge_use_continuous_features=getattr(self.config, 'bridge_use_continuous_features', False),
+            continuous_num_tokens=getattr(self.config, 'continuous_num_tokens', 32),
+            continuous_num_heads=getattr(self.config, 'continuous_num_heads', 8),
+            bridge_continuous_only=getattr(self.config, 'bridge_continuous_only', False),
             ecg_waveform_length=self.config.ecg_waveform_length,
             ecg_num_leads=self.config.ecg_num_leads,
             ecg_projection_config=getattr(self.config, 'ecg_projection_config', None),
@@ -307,6 +311,9 @@ class LLMFinetuningProject(BaseProject):
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
             pattern_loss_weight=getattr(self.config, 'pattern_loss_weight', None),
             pattern_label_count=(len(self.config.pattern_label_columns) if getattr(self.config, 'pattern_label_columns', None) else None),
+            lvef_head_loss_weight=getattr(self.config, 'lvef_head_loss_weight', None),
+            shd_head_loss_weight=getattr(self.config, 'shd_head_loss_weight', None),
+            afib_head_loss_weight=getattr(self.config, 'afib_head_loss_weight', None),
         ).to(self.config.device)
         
         # Resize model embeddings if new tokens were added
@@ -325,7 +332,37 @@ class LLMFinetuningProject(BaseProject):
         else:
             pretrained_state_dict = state_dict['model_state_dict']
             ecg_tokenizer._load_pretrained_weights(pretrained_state_dict, freeze_pretrained_components=True)
-        
+
+        # Phase B: OVERRIDE the encoder weights with a contrastively fine-tuned encoder
+        # (e.g. the v3 SigLIP encoder). Done AFTER the normal tokenizer/resume load so it wins.
+        # The contrastive encoder no longer matches the VQ codebook -> use the continuous-only
+        # path (bridge_continuous_only=True) so the LLM consumes pre-quant continuous features.
+        contrastive_ckpt = getattr(self.config, 'contrastive_encoder_checkpoint', None)
+        if contrastive_ckpt:
+            print(f"[Phase B] Overriding encoder weights from contrastive checkpoint: {contrastive_ckpt}")
+            cstate = torch.load(contrastive_ckpt, map_location='cpu', weights_only=False)
+            enc_sd = cstate.get('encoder_state_dict', cstate) if isinstance(cstate, dict) else cstate
+            missing, unexpected = ecg_tokenizer.encoder.load_state_dict(enc_sd, strict=True)
+            loaded = len(enc_sd) - len(unexpected)
+            print(
+                f"[Phase B] Loaded {loaded}/{len(enc_sd)} encoder tensors into ecg_tokenizer.encoder "
+                f"(missing={len(missing)}, unexpected={len(unexpected)})"
+            )
+            if not getattr(self.config, 'bridge_continuous_only', False):
+                print(
+                    "[Phase B] WARNING: contrastive_encoder_checkpoint set but bridge_continuous_only=False. "
+                    "Discrete codes are INVALID with this encoder; set bridge_continuous_only: true."
+                )
+
+        # P2: optionally UNFREEZE the encoder for Stage-3 (codebook/quantizer stay frozen).
+        # Lets diagnostic-task gradients reshape features the reconstruction objective ignored.
+        if not getattr(self.config, 'freeze_encoder', True):
+            n = 0
+            for p in ecg_tokenizer.encoder.parameters():
+                p.requires_grad = True
+                n += p.numel()
+            print(f"[P2] encoder UNFROZEN for Stage-3: {n:,} trainable encoder params (quantizer/codebook stay frozen)")
+
         training_phases = getattr(self.config, 'training_phases', {}) or {}
         phase1_cfg = training_phases.get('phase1_alignment', {}) or {}
         phase2_cfg = training_phases.get('phase2_finetuning', {}) or {}
@@ -385,6 +422,10 @@ class LLMFinetuningProject(BaseProject):
         if self._uses_qformer_bridge() or prefix_tuning_enabled:
             num_ecg_tokens = 0
 
+        # Multi-ECG: when set, each row carries a list of waveform paths (temporally-nearby ECGs).
+        signal_paths_col = getattr(self.config, 'signal_paths_column', None)
+        max_ecgs_cfg = int(getattr(self.config, 'max_ecgs', 8))
+
         # Get sample weight column for weighted sampling (minority class upsampling)
         sample_weight_col = None
         if getattr(self.config, 'use_weighted_sampling', False):
@@ -419,6 +460,7 @@ class LLMFinetuningProject(BaseProject):
         dataset_weights = getattr(self.config, 'dataset_weights', None)
 
         if train_paths and len(train_paths) > 0:
+            pin_memory = bool(getattr(self.config, 'dataloader_pin_memory', True))
             train_dataloader: DataLoader = get_multi_dataset_distributed_dataloader(
                 dataset_paths=train_paths,
                 dataset_weights=dataset_weights or [1.0] * len(train_paths),
@@ -432,7 +474,7 @@ class LLMFinetuningProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=True,
-                pin_memory=True,
+                pin_memory=pin_memory,
                 instruct_mode=instruct_flag,
                 num_ecg_tokens=num_ecg_tokens,
                 ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
@@ -447,9 +489,12 @@ class LLMFinetuningProject(BaseProject):
                 sampling_seed=getattr(self.config, 'seed', 42),
                 messages_column=messages_col,
                 prompt_variations_path=getattr(self.config, 'prompt_variations_path', None),
+                signal_paths_column=signal_paths_col,
+                max_ecgs=max_ecgs_cfg,
             )
         else:
             # Existing single-dataset path (backward compatible)
+            pin_memory = bool(getattr(self.config, 'dataloader_pin_memory', True))
             train_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
                 dataset_path=self.config.train_dataset_path,
                 signal_path_column=signal_col,
@@ -462,7 +507,7 @@ class LLMFinetuningProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=True,
-                pin_memory=True,
+                pin_memory=pin_memory,
                 instruct_mode=instruct_flag,
                 num_ecg_tokens=num_ecg_tokens,
                 ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
@@ -480,12 +525,15 @@ class LLMFinetuningProject(BaseProject):
                 augmentor=augmentor,
                 messages_column=messages_col,
                 prompt_variations_path=getattr(self.config, 'prompt_variations_path', None),
+                signal_paths_column=signal_paths_col,
+                max_ecgs=max_ecgs_cfg,
             )
 
         # Check for multi-dataset validation paths
         validation_paths = getattr(self.config, 'validation_dataset_paths', None)
 
         if validation_paths and len(validation_paths) > 0:
+            pin_memory = bool(getattr(self.config, 'dataloader_pin_memory', True))
             validation_dataloader: DataLoader = get_multi_dataset_distributed_dataloader(
                 dataset_paths=validation_paths,
                 dataset_weights=[1.0] * len(validation_paths),
@@ -499,7 +547,7 @@ class LLMFinetuningProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=getattr(self.config, "validation_shuffle", False),
-                pin_memory=True,
+                pin_memory=pin_memory,
                 instruct_mode=instruct_flag,
                 num_ecg_tokens=num_ecg_tokens,
                 ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
@@ -515,6 +563,7 @@ class LLMFinetuningProject(BaseProject):
                 messages_column=messages_col,
             )
         else:
+            pin_memory = bool(getattr(self.config, 'dataloader_pin_memory', True))
             validation_dataloader: DataLoader = get_distributed_clinical_report_dataloader(
                 dataset_path=self.config.validation_dataset_path,
                 signal_path_column=signal_col,
@@ -527,7 +576,7 @@ class LLMFinetuningProject(BaseProject):
                 num_replicas=self.config.world_size,
                 rank=self.config.device,
                 shuffle=getattr(self.config, "validation_shuffle", False),
-                pin_memory=True,
+                pin_memory=pin_memory,
                 instruct_mode=instruct_flag,
                 num_ecg_tokens=num_ecg_tokens,
                 ecg_token_start_id=getattr(self.config, 'ecg_token_start_id', None),
@@ -542,6 +591,8 @@ class LLMFinetuningProject(BaseProject):
                 medgemma_prompt_style=medgemma_prompt_style,
                 debug_print_example=debug_print_example,
                 messages_column=messages_col,
+                signal_paths_column=signal_paths_col,
+                max_ecgs=max_ecgs_cfg,
             )
 
         phase1_train_dataloader: DataLoader | None = None
@@ -1168,6 +1219,9 @@ class LLMFinetuningProject(BaseProject):
             bridge_codebook_dropout=getattr(pretrained_config, 'bridge_codebook_dropout', getattr(self.config, 'bridge_codebook_dropout', None)),
             bridge_cross_every=getattr(pretrained_config, 'bridge_cross_every', getattr(self.config, 'bridge_cross_every', None)),
             instruction_dropout=getattr(pretrained_config, 'instruction_dropout', getattr(self.config, 'instruction_dropout', 0.0)),
+            bridge_use_continuous_features=getattr(pretrained_config, 'bridge_use_continuous_features', getattr(self.config, 'bridge_use_continuous_features', False)),
+            continuous_num_tokens=getattr(pretrained_config, 'continuous_num_tokens', getattr(self.config, 'continuous_num_tokens', 32)),
+            continuous_num_heads=getattr(pretrained_config, 'continuous_num_heads', getattr(self.config, 'continuous_num_heads', 8)),
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': getattr(pretrained_config, 'lora_r', 16),
@@ -1236,7 +1290,7 @@ class LLMFinetuningProject(BaseProject):
             num_replicas=self.config.world_size,
             rank=self.config.device,
             shuffle=getattr(self.config, "validation_shuffle", False), 
-            pin_memory=True,
+            pin_memory=bool(getattr(self.config, 'dataloader_pin_memory', True)),
             instruct_mode=getattr(self.config, 'instruct_mode', False),
             # Use 0 placeholders when using Q-Former (or prefix tuning).
             num_ecg_tokens=(
@@ -1250,6 +1304,8 @@ class LLMFinetuningProject(BaseProject):
             prefix_tuning=getattr(self.config, 'prefix_tuning', False),
             pattern_columns=getattr(self.config, 'pattern_label_columns', None),
             medgemma_prompt_style=medgemma_prompt_style,
+            signal_paths_column=getattr(self.config, 'signal_paths_column', None),
+            max_ecgs=int(getattr(self.config, 'max_ecgs', 8)),
         )
 
         # Wrap the model in DDP
@@ -1303,6 +1359,7 @@ class LLMFinetuningProject(BaseProject):
             or "medgemma" in tokenizer_name_lower
             or "medgemma" in model_name_lower
         )
+        qwen_like = "qwen" in tokenizer_name_lower or "qwen" in model_name_lower
 
         llama_chat_template = (
             "<|begin_of_text|>"
@@ -1338,8 +1395,12 @@ class LLMFinetuningProject(BaseProject):
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
         if getattr(self.config, 'instruct_mode', False) and processor is None:
-            # Do not include any ECG delimiters in chat template; text only
-            tokenizer.chat_template = medgemma_chat_template if medgemma_like else llama_chat_template
+            # Do not include any ECG delimiters in chat template; text only.
+            # Qwen ships its own chat template; keep it so role tokens match the model pretraining.
+            if medgemma_like:
+                tokenizer.chat_template = medgemma_chat_template
+            elif not qwen_like and not getattr(tokenizer, 'chat_template', None):
+                tokenizer.chat_template = llama_chat_template
 
         if hasattr(tokenizer, 'pad_token') and tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -1356,10 +1417,10 @@ class LLMFinetuningProject(BaseProject):
         if getattr(self.config, 'instruct_mode', False):
             chat_tmpl = getattr(tokenizer, 'chat_template', None)
             if not chat_tmpl:
-                if 'llama' in tokenizer_name_lower:
-                    tokenizer.chat_template = llama_chat_template
-                elif medgemma_like:
+                if medgemma_like:
                     tokenizer.chat_template = medgemma_chat_template
+                elif 'llama' in tokenizer_name_lower:
+                    tokenizer.chat_template = llama_chat_template
 
         return tokenizer, processor if use_processor else None
 

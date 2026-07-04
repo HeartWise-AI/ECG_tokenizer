@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple, Union, cast
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from transformers import AutoConfig, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.generation.logits_process import LogitsProcessor
@@ -86,6 +87,13 @@ def _load_medgemma_model(
 class MedGemmaDecoder(nn.Module):
     """Finetuning decoder that injects ECG tokens into the MedGemma text stream."""
 
+    def _load_llm_model(
+        self,
+        model_name: str,
+        torch_dtype: Optional[torch.dtype] = None,
+    ) -> PreTrainedModel:
+        return _load_medgemma_model(model_name, torch_dtype=torch_dtype)
+
     def __init__(
         self,
         huggingface_model_name: str = "google/medgemma-4b-it",
@@ -120,6 +128,15 @@ class MedGemmaDecoder(nn.Module):
         self.stage1_metadata: Dict[str, Any] = {}
         self._stage1_config_path: Optional[Path] = None
         self.debug_ecg_injection = bool(unused_kwargs.pop("debug_ecg_injection", False))
+        self.add_dec_token = bool(unused_kwargs.pop("add_dec_token", True))
+        self.pass_token_type_ids = bool(unused_kwargs.pop("pass_token_type_ids", True))
+        # P1: continuous-feature Perceiver path (built after the main bridge, below).
+        self.use_continuous_features = bool(unused_kwargs.pop("use_continuous_features", False))
+        self.continuous_num_tokens = int(unused_kwargs.pop("continuous_num_tokens", 32))
+        self.continuous_num_heads = int(unused_kwargs.pop("continuous_num_heads", 8))
+        # Phase B: when True, skip the discrete code/Q-Former path entirely and emit ONLY the
+        # continuous Perceiver tokens (used when the encoder no longer matches the VQ codebook).
+        self.continuous_only = bool(unused_kwargs.pop("continuous_only", False))
         self._debug_ecg_injection_logged = False
         if stage1_checkpoint_path:
             self._stage1_config_path = self._infer_stage1_config_path(stage1_checkpoint_path)
@@ -168,6 +185,11 @@ class MedGemmaDecoder(nn.Module):
             self.pattern_loss_weight = 0.0
         # LVEF soft-decoding loss configuration
         self.lvef_loss_weight = float(unused_kwargs.pop("lvef_loss_weight", 0.0))
+        # Auxiliary scalar discrimination heads on the bridge pooled output (0 = disabled)
+        self.lvef_head_loss_weight = max(0.0, float(unused_kwargs.pop("lvef_head_loss_weight", 0.0) or 0.0))
+        self.shd_head_loss_weight = max(0.0, float(unused_kwargs.pop("shd_head_loss_weight", 0.0) or 0.0))
+        self.afib_head_loss_weight = max(0.0, float(unused_kwargs.pop("afib_head_loss_weight", 0.0) or 0.0))
+        self.aux_endpoint_specs: Dict[str, Dict[str, Any]] = {}
         self._digit_token_ids: Optional[list[int]] = None
         self._pct_token_id: Optional[int] = None
         # MedGemma's HF generate() misbehaves for batch>1 when using inputs_embeds; default to micro-batch=1
@@ -535,6 +557,32 @@ class MedGemmaDecoder(nn.Module):
         else:
             self.num_ecg_tokens = getattr(self.bridge, "num_tokens", visual_tokens)
 
+        # P1: optional parallel continuous-feature (pre-quantization) Perceiver path.
+        # Resamples the pre-quant encoder output [B, num_steps, feat_dim] into
+        # `continuous_num_tokens` soft tokens that are concatenated with the code-bridge
+        # tokens in `_compute_ecg_embeddings`. Trained fresh (random init); kept separate
+        # from `self.bridge` so the Stage-1 warmstart does not touch it.
+        self.continuous_bridge: Optional[nn.Module] = None
+        self._continuous_features: Optional[torch.Tensor] = None
+        if self.use_continuous_features:
+            cont_feat_dim = (
+                quantized_feature_shape[1]
+                if len(quantized_feature_shape) > 1
+                else llm_input_embedding_size
+            )
+            self.continuous_bridge = PerceiverProjectionBridge(
+                input_dim=cont_feat_dim,
+                d_model=llm_input_embedding_size,
+                num_output_tokens=self.continuous_num_tokens,
+                num_heads=self.continuous_num_heads,
+                dropout=bridge_dropout,
+            )
+            self.num_ecg_tokens = int(self.num_ecg_tokens) + int(self.continuous_num_tokens)
+            print(
+                f"[P1] continuous Perceiver bridge enabled: input_dim={cont_feat_dim} "
+                f"+{self.continuous_num_tokens} tokens -> total ecg tokens={self.num_ecg_tokens}"
+            )
+
         stage1_component_identifier = "decoder"
         stage1_component_type = "decoder"
         stage1_component = None
@@ -586,8 +634,8 @@ class MedGemmaDecoder(nn.Module):
 
         self.tokenizer = tokenizer or AutoTokenizer.from_pretrained(huggingface_model_name)
         
-        # Register [DEC] as special token (MedGemma already has <start_of_image>)
-        if "[DEC]" not in self.tokenizer.get_vocab():
+        # Register [DEC] as special token for MedGemma. Generic causal-LM decoders can disable this.
+        if self.add_dec_token and "[DEC]" not in self.tokenizer.get_vocab():
             self.tokenizer.add_special_tokens({"additional_special_tokens": ["[DEC]"]})
 
         candidate_pieces = [
@@ -632,7 +680,7 @@ class MedGemmaDecoder(nn.Module):
         # Q-Former path and projection bridges use continuous ECG embeddings prepended to text embeddings
         self.ecg_token_start_id = None
 
-        self.llm_model: PreTrainedModel = _load_medgemma_model(
+        self.llm_model: PreTrainedModel = self._load_llm_model(
             huggingface_model_name,
             torch_dtype=torch_dtype,
         )
@@ -752,6 +800,7 @@ class MedGemmaDecoder(nn.Module):
         if bad_words:
             self.default_generation_params["bad_words_ids"] = bad_words
         self._initialize_pattern_head()
+        self._initialize_aux_endpoint_heads()
 
     def _sanitize_generate_args(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sampling-only knobs when sampling is disabled to avoid HF warnings."""
@@ -1022,6 +1071,34 @@ class MedGemmaDecoder(nn.Module):
             self.pattern_loss_fn = nn.BCEWithLogitsLoss()
         # Keep local reference None to avoid ambiguity; classifier lives on bridge
         self.pattern_classifier = None
+
+    def _initialize_aux_endpoint_heads(self) -> None:
+        """Attach scalar auxiliary heads (LVEF regression, SHD/AFib binary) to the bridge.
+
+        Each head reads the Q-Former pooled ECG vector (`pooled_queries`) — the same tap
+        the pattern head uses — and is trained jointly with the LM loss. Losses are masked
+        per-row at forward time so rows without the label contribute nothing.
+        """
+        self.aux_endpoint_specs = {}
+        specs = [
+            ("lvef", self.lvef_head_loss_weight, "regression"),
+            ("shd", self.shd_head_loss_weight, "binary"),
+            ("afib", self.afib_head_loss_weight, "binary"),
+        ]
+        has_pooled = hasattr(self.bridge, "forward_instruction_hidden")
+        feature_dim = int(self.qformer_text_output_size or self.qformer_hidden_size or self.llm_input_embedding_size)
+        for name, weight, kind in specs:
+            attr = f"{name}_head"
+            if has_pooled and weight and weight > 0:
+                hidden_dim = max(64, feature_dim // 2)
+                setattr(self.bridge, attr, nn.Sequential(
+                    nn.Linear(feature_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, 1),
+                ))
+                self.aux_endpoint_specs[name] = {"weight": float(weight), "kind": kind}
+            elif hasattr(self.bridge, attr):
+                delattr(self.bridge, attr)
 
     # ------------------------------------------------------------------
     # Token initialization helpers (borrowed from LLaMA decoder)
@@ -1412,6 +1489,7 @@ class MedGemmaDecoder(nn.Module):
         labels: Optional[torch.Tensor],
         ecg_embeddings: torch.Tensor,
         embed_layer: torch.nn.Embedding,
+        ecg_counts: Optional[torch.Tensor] = None,
     ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], torch.Tensor]]:
         """Insert ECG embeddings immediately after the <start_of_image> token.
 
@@ -1447,56 +1525,81 @@ class MedGemmaDecoder(nn.Module):
         new_ttids: list[torch.Tensor] = []
         need_labels = labels is not None
 
+        # Multi-ECG: ecg_embeddings is flat [sum(N_b), num_tokens, hidden] and ecg_counts[b]
+        # gives the number of ECG blocks (and <start_of_image> anchors) for row b.
+        # Legacy single-ECG (ecg_counts is None): one block per row inserted after the
+        # FIRST anchor — byte-identical to the previous behavior.
+        counts_list = ecg_counts.to("cpu").tolist() if ecg_counts is not None else None
+        offset = 0
+
         for b in range(batch_size):
             ids_b = input_ids[b]
             mask_b = attention_mask[b]
             emb_b = embed_layer(ids_b)
             lbl_b = labels[b] if need_labels else None
-            pos = (ids_b == start_img_id).nonzero(as_tuple=False)
-            if pos.numel() == 0:
-                return None  # fall back if any row lacks the token
-            img_pos = int(pos[0].item())
+            positions = (ids_b == start_img_id).nonzero(as_tuple=False).flatten().tolist()
 
-            before_ids = ids_b[: img_pos + 1]
-            after_ids = ids_b[img_pos + 1 :]
-            before_mask = mask_b[: img_pos + 1]
-            after_mask = mask_b[img_pos + 1 :]
-            before_emb = emb_b[: img_pos + 1]
-            after_emb = emb_b[img_pos + 1 :]
+            if counts_list is None:
+                if len(positions) == 0:
+                    return None  # legacy: fall back if any row lacks the token
+                positions = positions[:1]
+                blocks = ecg_embeddings[b : b + 1]
+            else:
+                n_b = int(counts_list[b])
+                blocks = ecg_embeddings[offset : offset + n_b]
+                offset += n_b
+                k = min(len(positions), int(blocks.size(0)))
+                if k != len(positions) and self.debug_ecg_injection:
+                    print(f"[ECG Injection] row {b}: anchors={len(positions)} but blocks={blocks.size(0)}; using {k}")
+                positions = positions[:k]
+                blocks = blocks[:k]
 
-            ecg_emb = ecg_embeddings[b]
-            if ecg_emb.dim() == 1:
-                ecg_emb = ecg_emb.unsqueeze(0)
-            ecg_len = ecg_emb.size(0)
-            if self.debug_ecg_injection and not self._debug_ecg_injection_logged:
-                print(
-                    f"[ECG Injection] after <start_of_image>: batch={b}, img_pos={img_pos}, ecg_len={ecg_len}"
-                )
-                self._debug_ecg_injection_logged = True
-            filler_ids = torch.full((ecg_len,), pad_id, device=device, dtype=ids_b.dtype)
-            filler_mask = torch.ones(ecg_len, device=device, dtype=mask_b.dtype)
-            filler_emb = ecg_emb
+            # No anchor / no ECG (e.g. refusal rows): pass the row through unchanged.
+            if len(positions) == 0:
+                new_ids.append(ids_b)
+                new_masks.append(mask_b)
+                new_embeds.append(emb_b)
+                if need_labels and lbl_b is not None:
+                    new_labels.append(lbl_b)
+                new_ttids.append(torch.zeros(ids_b.size(0), device=device, dtype=torch.long))
+                continue
 
-            merged_ids = torch.cat([before_ids, filler_ids, after_ids], dim=0)
-            merged_mask = torch.cat([before_mask, filler_mask, after_mask], dim=0)
-            merged_emb = torch.cat([before_emb, filler_emb, after_emb], dim=0)
+            seg_ids, seg_mask, seg_emb, seg_lbl, seg_ttid = [], [], [], [], []
+            prev = 0
+            for j, p in enumerate(positions):
+                seg_ids.append(ids_b[prev : p + 1])
+                seg_mask.append(mask_b[prev : p + 1])
+                seg_emb.append(emb_b[prev : p + 1])
+                if need_labels and lbl_b is not None:
+                    seg_lbl.append(lbl_b[prev : p + 1])
+                seg_ttid.append(torch.zeros(p + 1 - prev, device=device, dtype=torch.long))
 
-            new_ids.append(merged_ids)
-            new_masks.append(merged_mask)
-            new_embeds.append(merged_emb)
+                blk = blocks[j]
+                if blk.dim() == 1:
+                    blk = blk.unsqueeze(0)
+                elen = blk.size(0)
+                seg_ids.append(torch.full((elen,), pad_id, device=device, dtype=ids_b.dtype))
+                seg_mask.append(torch.ones(elen, device=device, dtype=mask_b.dtype))
+                seg_emb.append(blk)
+                if need_labels and lbl_b is not None:
+                    seg_lbl.append(torch.full((elen,), -100, device=device, dtype=lbl_b.dtype))
+                seg_ttid.append(torch.ones(elen, device=device, dtype=torch.long))
+                prev = p + 1
 
+            # tail after the last anchor
+            seg_ids.append(ids_b[prev:])
+            seg_mask.append(mask_b[prev:])
+            seg_emb.append(emb_b[prev:])
             if need_labels and lbl_b is not None:
-                filler_labels = torch.full((ecg_len,), -100, device=device, dtype=lbl_b.dtype)
-                merged_labels = torch.cat(
-                    [lbl_b[: img_pos + 1], filler_labels, lbl_b[img_pos + 1 :]], dim=0
-                )
-                new_labels.append(merged_labels)
+                seg_lbl.append(lbl_b[prev:])
+            seg_ttid.append(torch.zeros(ids_b.size(0) - prev, device=device, dtype=torch.long))
 
-            # token_type_ids: 0 = text, 1 = image/ECG
-            before_ttid = torch.zeros(img_pos + 1, device=device, dtype=torch.long)
-            ecg_ttid = torch.ones(ecg_len, device=device, dtype=torch.long)
-            after_ttid = torch.zeros(after_ids.size(0), device=device, dtype=torch.long)
-            new_ttids.append(torch.cat([before_ttid, ecg_ttid, after_ttid], dim=0))
+            new_ids.append(torch.cat(seg_ids, dim=0))
+            new_masks.append(torch.cat(seg_mask, dim=0))
+            new_embeds.append(torch.cat(seg_emb, dim=0))
+            if need_labels and lbl_b is not None:
+                new_labels.append(torch.cat(seg_lbl, dim=0))
+            new_ttids.append(torch.cat(seg_ttid, dim=0))
 
         max_len = max(x.size(0) for x in new_ids)
         padded_embeds: list[torch.Tensor] = []
@@ -1579,12 +1682,31 @@ class MedGemmaDecoder(nn.Module):
         prompt_input_ids: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
         detach_soft_prompts: bool = False,
+        continuous_features: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Dict[str, torch.Tensor]]]:
         if self.bridge is None:
             raise RuntimeError("ECG bridge is not initialized")
 
         embed_layer = self.llm_model.get_input_embeddings()
         device = embed_layer.weight.device
+
+        def _append_continuous(code_embeddings: torch.Tensor) -> torch.Tensor:
+            """P1: concat the continuous-feature Perceiver tokens after the code-bridge tokens."""
+            if self.continuous_bridge is None:
+                return code_embeddings
+            cont_in = continuous_features if continuous_features is not None else self._continuous_features
+            if cont_in is None:
+                raise ValueError(
+                    "continuous_features must be provided when the continuous Perceiver bridge is enabled"
+                )
+            cont_in = cont_in.to(device=device, dtype=next(self.continuous_bridge.parameters()).dtype)
+            cont_tokens = self.continuous_bridge(cont_in)
+            if cont_tokens.dim() == 2:
+                cont_tokens = cont_tokens.unsqueeze(1)
+            if code_embeddings.dim() == 2:
+                code_embeddings = code_embeddings.unsqueeze(1)
+            cont_tokens = cont_tokens.to(dtype=code_embeddings.dtype)
+            return torch.cat([code_embeddings, cont_tokens], dim=1)
 
         def _prepare_ecg_ids(codes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
             pad_id = getattr(self.bridge, "pad_id", None)
@@ -1610,6 +1732,26 @@ class MedGemmaDecoder(nn.Module):
             codes = codes.clamp_min(0).to(dtype=torch.long)
             attn_mask = attn_mask.to(device=device, dtype=torch.bool)
             return codes, attn_mask
+
+        # Phase B: continuous-only. Skip the discrete code/Q-Former path entirely; emit ONLY the
+        # continuous Perceiver tokens. The code bridge is still built (clean checkpoint/LoRA load)
+        # but never executed, since the encoder no longer matches the VQ codebook.
+        if getattr(self, "continuous_only", False):
+            if self.continuous_bridge is None:
+                raise RuntimeError(
+                    "continuous_only requires use_continuous_features=True (continuous_bridge missing)."
+                )
+            cont_in = continuous_features if continuous_features is not None else self._continuous_features
+            if cont_in is None:
+                raise ValueError(
+                    "continuous_features must be provided when continuous_only is enabled."
+                )
+            batch_size = cont_in.size(0)
+            empty = torch.zeros(
+                batch_size, 0, embed_layer.weight.size(-1), device=device, dtype=embed_layer.weight.dtype
+            )
+            embeddings = _append_continuous(empty)
+            return embeddings, None
 
         if hasattr(self.bridge, "forward_instruction_hidden"):
             if not getattr(self.bridge, "uses_codes", False):
@@ -1675,6 +1817,7 @@ class MedGemmaDecoder(nn.Module):
             embeddings = bridge_outputs["token_embeddings"]
             if embeddings.dim() == 2:
                 embeddings = embeddings.unsqueeze(1)
+            embeddings = _append_continuous(embeddings)
             return embeddings, bridge_outputs
 
         if getattr(self.bridge, "uses_codes", False):
@@ -1702,6 +1845,7 @@ class MedGemmaDecoder(nn.Module):
 
         if embeddings.dim() == 2:
             embeddings = embeddings.unsqueeze(1)
+        embeddings = _append_continuous(embeddings)
         return embeddings, None
 
     # ------------------------------------------------------------------
@@ -1808,10 +1952,14 @@ class MedGemmaDecoder(nn.Module):
         prompt_input_ids: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
         pattern_targets: Optional[torch.Tensor] = None,
+        ecg_counts: Optional[torch.Tensor] = None,
+        continuous_features: Optional[torch.Tensor] = None,
         **unused_kwargs: Any,
     ) -> Dict[str, torch.Tensor]:
         if input_ids is None:
             raise ValueError("input_ids must be provided for MedGemmaDecoder forward pass")
+        # P1: stash pre-quant features so generation helpers reuse the same continuous path.
+        self._continuous_features = continuous_features
 
         embed_layer = self.llm_model.get_input_embeddings()
         device = embed_layer.weight.device
@@ -1824,11 +1972,22 @@ class MedGemmaDecoder(nn.Module):
                 ecg_embeddings = ecg_embeddings.unsqueeze(1)
             prefix_embeddings = ecg_embeddings
         else:
+            # Multi-ECG: ecg features are flat-concatenated to [sum(N_b), ...]. Repeat the
+            # per-row prompt to align with each ECG so the (optionally instruction-aware)
+            # bridge fuses each ECG with its own prompt. count=0 rows drop out (0 copies).
+            _bridge_pii, _bridge_pam = prompt_input_ids, prompt_attention_mask
+            if ecg_counts is not None and prompt_input_ids is not None:
+                _counts = ecg_counts.to(prompt_input_ids.device).clamp_min(0)
+                if int(_counts.sum().item()) > 0:
+                    _bridge_pii = prompt_input_ids.repeat_interleave(_counts, dim=0)
+                    if prompt_attention_mask is not None:
+                        _bridge_pam = prompt_attention_mask.repeat_interleave(_counts, dim=0)
             prefix_embeddings, bridge_outputs = self._compute_ecg_embeddings(
                 quantized_features,
                 quantized_codes,
-                prompt_input_ids=prompt_input_ids,
-                prompt_attention_mask=prompt_attention_mask,
+                prompt_input_ids=_bridge_pii,
+                prompt_attention_mask=_bridge_pam,
+                continuous_features=continuous_features,
             )
             prefix_embeddings = prefix_embeddings.to(device=device)
 
@@ -1851,6 +2010,7 @@ class MedGemmaDecoder(nn.Module):
             labels=base_labels,
             ecg_embeddings=prefix_embeddings,
             embed_layer=embed_layer,
+            ecg_counts=ecg_counts,
         )
 
         if self.debug_ecg_injection:
@@ -1918,7 +2078,7 @@ class MedGemmaDecoder(nn.Module):
             labels=prepared_labels,
             return_dict=True,
         )
-        if token_type_ids is not None:
+        if token_type_ids is not None and self.pass_token_type_ids:
             fwd_kwargs["token_type_ids"] = token_type_ids
         outputs = self.llm_model(**fwd_kwargs)
 
@@ -1973,6 +2133,51 @@ class MedGemmaDecoder(nn.Module):
                 result["pattern_logits"] = logits_pattern
                 result["pattern_targets"] = target
                 result["pattern_loss_unscaled"] = pattern_loss_unscaled
+
+        # --- Auxiliary scalar heads on the bridge pooled output (LVEF / SHD / AFib) ---
+        pooled_for_aux = bridge_outputs.get("pooled_queries") if bridge_outputs is not None else None
+        if pooled_for_aux is not None and self.aux_endpoint_specs:
+            aux_gts = {
+                "lvef": unused_kwargs.get("aux_lvef_gt"),
+                "shd": unused_kwargs.get("aux_shd_gt"),
+                "afib": unused_kwargs.get("aux_afib_gt"),
+            }
+            for name, spec in self.aux_endpoint_specs.items():
+                head = getattr(self.bridge, f"{name}_head", None)
+                gt = aux_gts.get(name)
+                if head is None or gt is None:
+                    continue
+                target = gt if isinstance(gt, torch.Tensor) else torch.as_tensor(gt)
+                target = target.to(device=pooled_for_aux.device, dtype=torch.float32).reshape(-1)
+                logits_aux = head(pooled_for_aux).reshape(-1).float()
+                if target.numel() != logits_aux.numel():
+                    continue
+                # Expose full logits + targets (NaN preserved) so the runner can compute AUROC.
+                result[f"{name}_head_logits"] = logits_aux.detach()
+                result[f"{name}_head_targets"] = target.detach()
+                mask = torch.isfinite(target)
+                n_valid = int(mask.sum().item())
+                result[f"{name}_head_n"] = float(n_valid)
+                if n_valid == 0:
+                    # No labels for this head in this micro-batch. Still attach a
+                    # zero-valued term so the head's parameters receive a (zero)
+                    # gradient on EVERY rank. Under DDP the set of parameters that
+                    # get gradients must be identical across ranks each backward;
+                    # otherwise the gradient all-reduce buckets mismatch and NCCL
+                    # hangs (masked aux labels are sparse, so ranks routinely
+                    # disagree on which heads are active). Value is exactly 0.
+                    zero_loss = 0.0 * logits_aux.sum()
+                    result["loss"] = result["loss"] + zero_loss if "loss" in result else zero_loss
+                    continue
+                lm_, tm_ = logits_aux[mask], target[mask]
+                if spec["kind"] == "binary":
+                    head_loss = F.binary_cross_entropy_with_logits(lm_, tm_)
+                else:  # regression on EF, scaled to [0,1] via /100
+                    head_loss = F.smooth_l1_loss(lm_, tm_ / 100.0)
+                result[f"{name}_head_loss_unscaled"] = head_loss.detach()
+                scaled = head_loss * spec["weight"]
+                result["loss"] = result["loss"] + scaled if "loss" in result else scaled
+                result[f"{name}_head_loss"] = scaled.detach()
 
         # --- LVEF soft-decoding loss ---
         lvef_gt = unused_kwargs.get("lvef_gt")
@@ -2077,8 +2282,11 @@ class MedGemmaDecoder(nn.Module):
         quantized_features: Optional[torch.Tensor] = None,
         quantized_codes: Optional[torch.Tensor] = None,
         max_token_length: int = 256,
+        continuous_features: Optional[torch.Tensor] = None,
         **generate_kwargs: Any,
     ) -> torch.Tensor:
+        # P1: stash pre-quant features for the continuous Perceiver path used in _compute_ecg_embeddings.
+        self._continuous_features = continuous_features
         embed_layer = self.llm_model.get_input_embeddings()
         device = embed_layer.weight.device
 
@@ -2198,6 +2406,7 @@ class MedGemmaDecoder(nn.Module):
         quantized_codes: Optional[torch.Tensor],
         *,
         detach_soft_prompts: bool = True,
+        continuous_features: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, int]:
         """
         Build inputs_embeds + attention_mask for a batch, injecting ECG once.
@@ -2221,6 +2430,7 @@ class MedGemmaDecoder(nn.Module):
             prompt_input_ids=prompt_input_ids,
             prompt_attention_mask=prompt_attention_mask,
             detach_soft_prompts=detach_soft_prompts,
+            continuous_features=continuous_features,
         )
         if ecg_embeddings.dim() == 2:
             ecg_embeddings = ecg_embeddings.unsqueeze(1)
@@ -2352,13 +2562,17 @@ class MedGemmaDecoder(nn.Module):
         prompt_input_ids: Optional[torch.Tensor] = None,
         prompt_attention_mask: Optional[torch.Tensor] = None,
         max_token_length: int = 256,
+        continuous_features: Optional[torch.Tensor] = None,
         **generate_kwargs: Any,
     ) -> torch.Tensor:
+        # P1: stash pre-quant features for the continuous Perceiver path.
+        self._continuous_features = continuous_features
         if prompt_input_ids is None:
             return self.generate_report(
                 quantized_features=quantized_features,
                 quantized_codes=quantized_codes,
                 max_token_length=max_token_length,
+                continuous_features=continuous_features,
                 **generate_kwargs,
             )
 
@@ -2443,6 +2657,7 @@ class MedGemmaDecoder(nn.Module):
                 quantized_features,
                 quantized_codes,
                 detach_soft_prompts=True,
+                continuous_features=self._continuous_features,
             )
 
             batch_args, force_json_flag, min_tokens_guard, eos_token_id = \
@@ -2472,6 +2687,7 @@ class MedGemmaDecoder(nn.Module):
                 group_masks_list = []
                 group_features_list = []
                 group_codes_list = []
+                group_continuous_list = []
 
                 for b in indices:
                     # Extract unpadded prompt
@@ -2485,12 +2701,16 @@ class MedGemmaDecoder(nn.Module):
                         group_features_list.append(quantized_features[b])
                     if quantized_codes is not None:
                         group_codes_list.append(quantized_codes[b])
+                    # P1: slice pre-quant continuous features the same way as codes/features
+                    if self._continuous_features is not None:
+                        group_continuous_list.append(self._continuous_features[b])
 
                 # Stack into batch (no padding needed - all same length!)
                 group_ids = torch.stack(group_ids_list, dim=0)
                 group_masks = torch.stack(group_masks_list, dim=0)
                 group_features = torch.stack(group_features_list, dim=0) if group_features_list else None
                 group_codes = torch.stack(group_codes_list, dim=0) if group_codes_list else None
+                group_continuous = torch.stack(group_continuous_list, dim=0) if group_continuous_list else None
 
                 # Process this group as a TRUE batch
                 inputs_embeds, attention_mask, prefix_len = self._prepare_inputs_for_generation(
@@ -2499,6 +2719,7 @@ class MedGemmaDecoder(nn.Module):
                     group_features,
                     group_codes,
                     detach_soft_prompts=True,
+                    continuous_features=group_continuous,
                 )
 
                 group_args, force_json_flag, min_tokens_guard, eos_token_id = \

@@ -65,7 +65,8 @@ class HeartWiseConfig:
         data_parameters['base_config_path'] = yaml_path
         
         # Set the common attributes used by all projects (set dynamically) -> avoid type errors
-        data_parameters['seed'] = 42
+        # Honor an explicit `seed:` from the YAML if provided; default to 42 otherwise.
+        data_parameters.setdefault('seed', 42)
         data_parameters['output_dir'] = ""
         data_parameters['device'] = int(os.environ["LOCAL_RANK"])
         data_parameters['world_size'] = int(os.environ["WORLD_SIZE"])

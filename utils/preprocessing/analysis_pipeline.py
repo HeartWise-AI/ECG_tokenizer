@@ -7,9 +7,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.constants import PTBXL_POWER_RATIO
+from utils.constants import WCRV2_DEFAULT_SCALE_FACTOR, WCRV2_SOURCE_SCALE_FACTORS
 from utils.files_handler import ECGFileHandler
-from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
 
 
 class AnalysisPipeline:
@@ -84,21 +83,44 @@ class AnalysisPipeline:
 
         return signal.astype(np.float32, copy=False)
 
-    @classmethod
-    def _to_psa_like_signal(
-        cls,
-        ecg_signal_processor: ECGSignalProcessor,
-        signal: np.ndarray,
-    ) -> np.ndarray:
-        # Per-sample spectral power normalization: match lead-0 average spectral
-        # power to the PTB-XL reference.
-        scaled = ecg_signal_processor.normalize_signal_spectral_power(
-            signal.astype(np.float32, copy=False),
-            target_power=PTBXL_POWER_RATIO,
-            reference_lead=0,
-        )
+    @staticmethod
+    def _resolve_scale_factor(scale_factor: float | None, source: str | None) -> float:
+        """Resolve the WCRv2 ADC->mV scale factor.
 
-        return scaled
+        Priority: explicit ``scale_factor`` > ``source`` match > MHI default.
+        ``source`` may be a canonical key (MHI, MIMIC, ...) or a free-form dataset
+        name; it is matched exact-first, then by substring. Unknown names fall back
+        to the MHI default (with a printed note) rather than raising, so the inference
+        path can pass an arbitrary dataset name safely.
+        """
+        if scale_factor is not None:
+            return float(scale_factor)
+        if source:
+            key = source.strip().upper()
+            if key in WCRV2_SOURCE_SCALE_FACTORS:
+                return WCRV2_SOURCE_SCALE_FACTORS[key]
+            # Longest keys first so 'MIMIC-IV' wins over 'MIMIC'.
+            for known in sorted(WCRV2_SOURCE_SCALE_FACTORS, key=len, reverse=True):
+                if known in key:
+                    return WCRV2_SOURCE_SCALE_FACTORS[known]
+            print(
+                f"Warning: unrecognized source '{source}' — falling back to MHI default "
+                f"scale {WCRV2_DEFAULT_SCALE_FACTOR}. Pass --scale to override."
+            )
+        return WCRV2_DEFAULT_SCALE_FACTOR
+
+    @staticmethod
+    def _to_amplitude_preserved_signal(
+        signal: np.ndarray,
+        scale_factor: float,
+    ) -> np.ndarray:
+        # WCRv2 (DeepECG-SSL v2) amplitude-preserved normalization: convert raw ADC
+        # units to millivolts with a fixed per-source scale factor. Unlike v1 spectral
+        # power matching or per-lead z-score, this preserves inter-patient voltage
+        # ratios required for voltage-dependent diagnoses (LVH, chamber enlargement).
+        return (
+            signal.astype(np.float32, copy=False) * np.float32(scale_factor)
+        ).astype(np.float32, copy=False)
 
     @classmethod
     def save_and_preprocess_data(
@@ -112,19 +134,21 @@ class AnalysisPipeline:
         swap_lead2: int | None = None,
         path_column: str | None = None,
         include_optional_100hz_cluster: bool = False,
+        scale_factor: float | None = None,
+        source: str | None = None,
     ) -> pd.DataFrame:
         del output_folder  # Kept for backward compatibility with callers.
         del preprocessing_n_workers  # Current deterministic path is intentionally single-threaded.
         del include_optional_100hz_cluster  # Powerline flattening is intentionally disabled.
 
-        ecg_signal_processor = ECGSignalProcessor()
+        resolved_scale = cls._resolve_scale_factor(scale_factor=scale_factor, source=source)
         os.makedirs(preprocessing_folder, exist_ok=True)
 
         ecg_path_col = cls._resolve_path_column(df=df, path_column=path_column)
         print(f"Detected path column: {ecg_path_col}")
         print(
-            f"Using deterministic preprocessing: per-sample spectral normalization "
-            f"(target_power={PTBXL_POWER_RATIO})"
+            f"Using WCRv2 amplitude-preserved normalization: signal_mV = raw * "
+            f"{resolved_scale} (source={source or 'default(MHI)'})"
         )
 
         processed_rows: list[pd.Series] = []
@@ -142,9 +166,9 @@ class AnalysisPipeline:
             try:
                 raw_signal = ECGFileHandler.load_ecg_signal_raw(source_path)
                 canonical_signal = cls._canonicalize_signal(raw_signal)
-                processed_signal = cls._to_psa_like_signal(
-                    ecg_signal_processor=ecg_signal_processor,
+                processed_signal = cls._to_amplitude_preserved_signal(
                     signal=canonical_signal,
+                    scale_factor=resolved_scale,
                 )
 
                 if swap_leads_fn is not None and swap_lead1 is not None and swap_lead2 is not None:

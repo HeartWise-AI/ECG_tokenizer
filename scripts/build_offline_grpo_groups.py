@@ -41,6 +41,7 @@ def build(args: argparse.Namespace) -> None:
     )
 
     sources = []
+    multi_sources = []
     if args.baseline_generations and args.baseline_judge:
         sources.append(_load_generation_scores(args.baseline_generations, args.baseline_judge, "baseline"))
     if args.rft_generations and args.rft_judge:
@@ -53,12 +54,28 @@ def build(args: argparse.Namespace) -> None:
         best_df = pd.read_csv(args.bestof_csv)
         for _, r in best_df.iterrows():
             key = (_txt(r["waveform_name"]), _txt(r["question"]))
-            best[key] = {
-                "text": _txt(r["generation"]),
-                "score": float(r.get("bestof_picked_score", 0.0) or 0.0),
-                "source": "bestof",
-            }
-        sources.append(best)
+            if "bestof_candidates" in best_df.columns and _txt(r.get("bestof_candidates")):
+                try:
+                    texts = json.loads(_txt(r["bestof_candidates"]))
+                    scores = json.loads(_txt(r.get("bestof_candidate_scores", "[]")))
+                except json.JSONDecodeError:
+                    texts, scores = [], []
+                cands = []
+                for i, text in enumerate(texts):
+                    score = float(scores[i]) if i < len(scores) else 0.0
+                    cands.append({
+                        "text": _txt(text),
+                        "score": score,
+                        "source": f"bestof_candidate_{i}",
+                    })
+                best[key] = cands
+            else:
+                best[key] = [{
+                    "text": _txt(r["generation"]),
+                    "score": float(r.get("bestof_picked_score", 0.0) or 0.0),
+                    "source": "bestof",
+                }]
+        multi_sources.append(best)
 
     rows = []
     skipped = {"small_group": 0, "flat_reward": 0}
@@ -76,6 +93,15 @@ def build(args: argparse.Namespace) -> None:
             old = merged.get(text)
             if old is None or cand["score"] > old["score"]:
                 merged[text] = dict(cand)
+        for src in multi_sources:
+            for cand in src.get(key, []):
+                text = cand["text"]
+                if not text or text.lower() == "nan" or text.startswith("[ERROR"):
+                    continue
+                # Deduplicate exact text, keeping the highest judged score.
+                old = merged.get(text)
+                if old is None or cand["score"] > old["score"]:
+                    merged[text] = dict(cand)
 
         if args.include_gt:
             gt = _txt(r["generated_answer"])

@@ -110,6 +110,8 @@ def run_preprocessing(args: PipelineArgs, df: pd.DataFrame) -> Path:
         preprocessing_n_workers=args.preprocessing_n_workers,
         path_column="ecg_path",
         include_optional_100hz_cluster=args.include_optional_100hz_cluster,
+        scale_factor=args.ecg_scale,
+        source=args.ecg_source or args.dataset_name,
     )
 
     if args.preprocessing_output:

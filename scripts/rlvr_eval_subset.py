@@ -123,10 +123,23 @@ def load_model(checkpoint_path: str, device: str):
         num_codebooks_kept=getattr(cfg, "num_codebooks_kept", 8),
         codebook_offset=getattr(cfg, "codebook_offset", -1),
         prefix_tuning=False,
+        # P1: reconstruct the continuous Perceiver path if the checkpoint was trained with it.
+        bridge_use_continuous_features=getattr(cfg, "bridge_use_continuous_features", False),
+        continuous_num_tokens=getattr(cfg, "continuous_num_tokens", 32),
+        continuous_num_heads=getattr(cfg, "continuous_num_heads", 8),
         stage1_checkpoint_path=getattr(cfg, "stage1_checkpoint_path", None),
     ).to(device)
 
-    model._load_state_dict(ckpt["model_state_dict"], strict=True)
+    # Checkpoints trained with pattern_loss_weight=0 (e.g. P5 full-FT) have NO aux
+    # pattern_classifier head, but the eval-built bridge constructs one by default.
+    # Fill ONLY those missing aux-head keys with the eval model's init so strict=True
+    # still validates every real weight (guards against silent LLM/bridge key drops).
+    ckpt_sd = dict(ckpt["model_state_dict"])
+    model_sd = model.state_dict()
+    for k, v in model_sd.items():
+        if "pattern_classifier" in k and k not in ckpt_sd:
+            ckpt_sd[k] = v
+    model._load_state_dict(ckpt_sd, strict=True)
     if use_lora:
         model.set_lora_inference_mode(True)
     model.eval()

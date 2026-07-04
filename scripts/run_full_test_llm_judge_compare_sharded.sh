@@ -17,6 +17,13 @@ GPUS=${GPUS:-0,2}
 JOBS_PER_GPU=${JOBS_PER_GPU:-6}
 PYTHON=${PYTHON:-/opt/conda/bin/python}
 JUDGE_DIR=${JUDGE_DIR:-/volume/LLM_JUDGE}
+GATE_SUMMARY=${GATE_SUMMARY:-}
+GATE_GENERATIONS_CSV=${GATE_GENERATIONS_CSV:-}
+GATE_BASELINE=${GATE_BASELINE:-0.6582121053549624}
+GATE_TARGET_DELTA=${GATE_TARGET_DELTA:-0.10}
+GATE_TARGET_SCORE=${GATE_TARGET_SCORE:-0.75}
+GATE_ROWS=${GATE_ROWS:-120}
+ALLOW_FULL_TEST_WITHOUT_GATE=${ALLOW_FULL_TEST_WITHOUT_GATE:-0}
 
 IFS=',' read -r -a GPU_ARRAY <<< "$GPUS"
 if [[ ${#GPU_ARRAY[@]} -eq 0 ]]; then
@@ -36,6 +43,91 @@ FINAL_JUDGE="$FINAL_DIR/judge_grpo_final_full_sharded_128tok.json"
 echo "[full-test-sharded] root=$ROOT"
 echo "[full-test-sharded] test_parquet=$TEST_PARQUET"
 echo "[full-test-sharded] shards=$SHARDS_PER_MODEL gpus=$GPUS max_parallel=$MAX_PARALLEL micro=$GENERATION_MICROBATCH_SIZE"
+
+if [[ "$ALLOW_FULL_TEST_WITHOUT_GATE" != "1" ]]; then
+  GATE_SUMMARY="$GATE_SUMMARY" GATE_GENERATIONS_CSV="$GATE_GENERATIONS_CSV" \
+  GATE_BASELINE="$GATE_BASELINE" GATE_TARGET_DELTA="$GATE_TARGET_DELTA" \
+  GATE_TARGET_SCORE="$GATE_TARGET_SCORE" GATE_ROWS="$GATE_ROWS" \
+  "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+summary_path = os.environ.get("GATE_SUMMARY", "").strip()
+if not summary_path:
+    raise SystemExit(
+        "[full-test-sharded] refusing full test: set GATE_SUMMARY to a passing "
+        "120-row TEST gate summary, or ALLOW_FULL_TEST_WITHOUT_GATE=1 for an "
+        "intentional manual override."
+    )
+
+summary = Path(summary_path)
+if not summary.exists():
+    raise SystemExit(f"[full-test-sharded] gate summary missing: {summary}")
+
+with summary.open() as f:
+    data = json.load(f)
+root = data.get("aggregates", data)
+score = float(root["overall_score"])
+baseline = float(os.environ["GATE_BASELINE"])
+target_delta = float(os.environ["GATE_TARGET_DELTA"])
+target_score = float(os.environ["GATE_TARGET_SCORE"])
+threshold = max(baseline + target_delta, target_score)
+if score < threshold:
+    raise SystemExit(
+        f"[full-test-sharded] refusing full test: gate score {score:.4f} "
+        f"< required {threshold:.4f} (baseline={baseline:.4f}, "
+        f"delta={target_delta:.4f}, absolute={target_score:.4f})"
+    )
+
+csv_arg = os.environ.get("GATE_GENERATIONS_CSV", "").strip()
+if csv_arg:
+    csv_path = Path(csv_arg)
+else:
+    label = summary.name
+    if not label.startswith("summary_") or not label.endswith(".json"):
+        raise SystemExit(
+            "[full-test-sharded] set GATE_GENERATIONS_CSV; could not infer it "
+            f"from summary name {summary.name}"
+        )
+    label = label[len("summary_"):-len(".json")]
+    csv_path = summary.parent / f"generations_{label}.csv"
+    if not csv_path.exists():
+        csv_path = summary.parent / f"generations_{label}.partial.csv"
+
+if not csv_path.exists():
+    raise SystemExit(f"[full-test-sharded] gate generations CSV missing: {csv_path}")
+
+df = pd.read_csv(csv_path)
+want_rows = int(os.environ["GATE_ROWS"])
+if len(df) != want_rows:
+    raise SystemExit(
+        f"[full-test-sharded] refusing full test: gate CSV rows {len(df)} "
+        f"!= required {want_rows}"
+    )
+path_col = "signal_path" if "signal_path" in df.columns else (
+    "waveform_path" if "waveform_path" in df.columns else None
+)
+if path_col is None:
+    raise SystemExit("[full-test-sharded] refusing full test: no signal path column in gate CSV")
+not_test = [p for p in df[path_col].astype(str).tolist() if "/test/" not in p]
+if not_test:
+    raise SystemExit(
+        "[full-test-sharded] refusing full test: gate CSV is not all TEST rows; "
+        f"first non-test path={not_test[0]}"
+    )
+
+print(
+    f"[full-test-sharded] gate passed: score={score:.4f} >= {threshold:.4f}; "
+    f"rows={len(df)} all TEST"
+)
+PY
+else
+  echo "[full-test-sharded] WARNING: bypassing 120-row gate due to ALLOW_FULL_TEST_WITHOUT_GATE=1"
+fi
 
 "$PYTHON" - "$TEST_PARQUET" "$SHARD_DIR" "$SHARDS_PER_MODEL" <<'PY'
 import json

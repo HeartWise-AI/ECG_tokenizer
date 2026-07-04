@@ -41,11 +41,16 @@ class ECGClinicalReportDataset(Dataset):
         category_column: str = "prompt_category",
         prefix_tuning: bool = False,
         pattern_columns: Optional[Sequence[str]] = None,
+        lvef_head_column: Optional[str] = "deepecho_Visually_Estimated_EF",
+        shd_head_column: Optional[str] = "echonext_shd_binary",
+        afib_head_column: Optional[str] = "afib_label_5y",
         medgemma_prompt_style: bool = False,
         debug_print_example: bool = False,
         augmentor: Optional[Any] = None,
         messages_column: Optional[str] = None,
         prompt_variations_path: Optional[str] = None,
+        signal_paths_column: Optional[str] = None,
+        max_ecgs: int = 8,
     ):
         """
         Args:
@@ -94,6 +99,12 @@ class ECGClinicalReportDataset(Dataset):
         self.debug_print_example: bool = bool(debug_print_example)
         self._debug_example_printed: bool = False
         self.augmentor = augmentor
+        # Multi-ECG support: when signal_paths_column is present, each row may carry a
+        # list of waveform paths (temporally-nearby ECGs). N spans are spliced in the
+        # decoder, one per <start_of_image> token. N=1 reduces to the single-ECG path.
+        self.signal_paths_column: Optional[str] = signal_paths_column
+        self.max_ecgs: int = int(max_ecgs)
+        self._multi_ecg: bool = bool(signal_paths_column and signal_paths_column in self.df.columns)
         # Chat messages column support: when set, parse JSON messages for prompt/answer
         self.messages_column: Optional[str] = messages_column
         if self.messages_column and self.messages_column not in self.df.columns:
@@ -103,6 +114,10 @@ class ECGClinicalReportDataset(Dataset):
                 stacklevel=2,
             )
             self.messages_column = None
+        # Auxiliary bridge-head label columns (masked per-row; NaN -> excluded from head loss)
+        self.lvef_head_column: Optional[str] = lvef_head_column
+        self.shd_head_column: Optional[str] = shd_head_column
+        self.afib_head_column: Optional[str] = afib_head_column
         self._pattern_column_mask: List[bool] = [col in self.df.columns for col in self.pattern_columns]
         missing_patterns = [col for col, present in zip(self.pattern_columns, self._pattern_column_mask) if not present]
         if missing_patterns:
@@ -167,6 +182,14 @@ class ECGClinicalReportDataset(Dataset):
     def __len__(self):
         return len(self.df)
 
+    def _aux_head_gt(self, row, column: Optional[str]) -> float:
+        """Masked ground truth for an auxiliary bridge head: value if present, else NaN."""
+        if column and column in self.df.columns:
+            value = row.get(column)
+            if not pd.isnull(value):
+                return float(value)
+        return float('nan')
+
     def load_ecg_signal(self, waveform_path: str) -> np.ndarray:
         try:
             waveform: np.ndarray = np.load(waveform_path)
@@ -179,8 +202,57 @@ class ECGClinicalReportDataset(Dataset):
             waveform = waveform.squeeze(-1)
             
         assert len(waveform.shape) == 2, f"Unnormalized signal has shape {waveform.shape}"
-        
+
         return waveform
+
+    def _process_waveform(self, waveform: np.ndarray) -> Optional[np.ndarray]:
+        """Crop/pad to target length, augment, validate leads. Returns [length, leads] or None."""
+        if np.isnan(waveform).any():
+            return None
+        target_length = int(self.ecg_waveform_length)
+        current_length = waveform.shape[0]
+        if current_length >= target_length:
+            start = max((current_length - target_length) // 2, 0)
+            waveform = waveform[start:start + target_length, :]
+        else:
+            pad_before = max((target_length - current_length) // 2, 0)
+            pad_after = max(target_length - current_length - pad_before, 0)
+            waveform = np.pad(waveform, ((pad_before, pad_after), (0, 0)), mode="edge")
+        if waveform.shape[0] != target_length:
+            waveform = np.resize(waveform, (target_length, waveform.shape[1]))
+        if self.augmentor is not None:
+            waveform = self.augmentor(waveform)
+        if waveform.shape[1] != self.ecg_num_leads:
+            return None
+        return waveform
+
+    def load_ecg_signals(self, paths: List[str]) -> List[np.ndarray]:
+        """Load + process a list of waveform paths; silently drops unreadable/invalid ones."""
+        out: List[np.ndarray] = []
+        for p in paths:
+            try:
+                w = self.load_ecg_signal(p)
+            except Exception:
+                continue
+            w = self._process_waveform(w)
+            if w is not None:
+                out.append(w)
+        return out
+
+    def _set_num_image_tokens(self, text: str, n: int) -> str:
+        """Force the prompt to contain exactly ``n`` <start_of_image> anchors (one per ECG).
+
+        n=0 removes the anchor entirely (no-ECG / adversarial rows).
+        """
+        tok = "<start_of_image>"
+        idx = text.find(tok)
+        if idx < 0:
+            return (tok + "\n") * n + text if n > 0 else text
+        # idx is the FIRST occurrence, so no tok precedes it; removing all tok
+        # leaves text[:idx] unchanged.
+        cleaned = text.replace(tok, "")
+        block = (tok + "\n") * n
+        return cleaned[:idx] + block + cleaned[idx:]
 
     def _parse_messages(self, raw: Any) -> Optional[Dict[str, str]]:
         """Parse a JSON chat messages column into system/user/assistant content.
@@ -221,43 +293,45 @@ class ECGClinicalReportDataset(Dataset):
                 not has_messages
                 and (self.answer_column not in self.df.columns or pd.isnull(row.get(self.answer_column)))
             )
-            if pd.isnull(row[self.signal_path_column]) or answer_missing:
+            # Resolve the list of ECG waveform paths (multi-ECG aware).
+            if self._multi_ecg:
+                raw_paths = row.get(self.signal_paths_column)
+                try:
+                    sig_paths = [str(p) for p in list(raw_paths)] if raw_paths is not None else []
+                except TypeError:
+                    sig_paths = []
+                sig_paths = sig_paths[: self.max_ecgs]
+            else:
+                sp = row.get(self.signal_path_column)
+                sig_paths = [] if pd.isnull(sp) else [str(sp)]
+
+            # Single-ECG mode requires a signal; multi-ECG mode allows N=0 (no-ECG rows).
+            if answer_missing or (not self._multi_ecg and len(sig_paths) == 0):
                 print(f"Missing {self.signal_path_column} or {self.answer_column} for index {idx}, skipping sample. "
                       f"{self.signal_path_column}: {row.get(self.signal_path_column)}, {self.answer_column}: {row.get(self.answer_column)}")
                 return self.__getitem__((idx + 1) % len(self))
 
-            # Load the waveform
-            waveform: np.ndarray = self.load_ecg_signal(
-                waveform_path=row[self.signal_path_column]
-            )
-            
-            if np.isnan(waveform).any():
+            # Load + process all waveforms.
+            signals: List[np.ndarray] = self.load_ecg_signals(sig_paths)
+            if len(sig_paths) > 0 and len(signals) == 0:
+                # All listed signals failed to load -> skip to next sample.
                 return self.__getitem__((idx + 1) % len(self))
-            
+
+            num_signals: int = len(signals)
             target_length = int(self.ecg_waveform_length)
-            current_length: int = waveform.shape[0]
-            if current_length >= target_length:
-                start = max((current_length - target_length) // 2, 0)
-                waveform = waveform[start:start + target_length, :]
+            # waveform kept for back-compat with downstream single-signal references.
+            waveform: np.ndarray = signals[0] if num_signals > 0 else np.zeros(
+                (target_length, self.ecg_num_leads), dtype=np.float32
+            )
+            # signal_out: single mode -> [leads, length]; multi mode -> [N, leads, length].
+            if self._multi_ecg:
+                if num_signals > 0:
+                    signal_out = np.stack([np.transpose(w, (1, 0)) for w in signals], axis=0)
+                else:
+                    signal_out = np.zeros((0, self.ecg_num_leads, target_length), dtype=np.float32)
             else:
-                pad_before = max((target_length - current_length) // 2, 0)
-                pad_after = max(target_length - current_length - pad_before, 0)
-                waveform = np.pad(
-                    waveform,
-                    ((pad_before, pad_after), (0, 0)),
-                    mode="edge",
-                )
-            if waveform.shape[0] != target_length:
-                # Guard against unexpected padding behaviour
-                waveform = np.resize(waveform, (target_length, waveform.shape[1]))
+                signal_out = np.transpose(waveform, (1, 0))
 
-            # Apply ECG augmentations (on the already-adjusted signal)
-            if self.augmentor is not None:
-                waveform = self.augmentor(waveform)
-
-            if waveform.shape[1] != self.ecg_num_leads:
-                return self.__getitem__((idx + 1) % len(self))
-            
             # Tokenization logic
             if self.instruct_mode:
                 # --- Chat messages parsing (overrides prompt/answer columns) ---
@@ -392,7 +466,13 @@ class ECGClinicalReportDataset(Dataset):
                         "question": prompt_text,
                         "answer_text": answer_text,
                     }
-                
+
+                # Multi-ECG: force exactly num_signals <start_of_image> anchors (one per ECG).
+                # The decoder splices one ECG embedding block after each anchor. N=0 removes
+                # the anchor (no-ECG / adversarial rows).
+                if self._multi_ecg and user_content is not None:
+                    user_content = self._set_num_image_tokens(user_content, num_signals)
+
                 # Build rendered prompts
                 if self.medgemma_prompt_style:
                     # Explicitly construct Gemma-style turns; let tokenizer add BOS/EOS
@@ -597,7 +677,8 @@ class ECGClinicalReportDataset(Dataset):
                 if pd.isnull(waveform_name):
                     waveform_name = os.path.basename(str(row[self.signal_path_column]))
                 sample_data = {
-                    'signal': np.transpose(waveform, (1, 0)),
+                    'signal': signal_out,
+                    'num_ecgs': num_signals,
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
                     'prompt_input_ids': prompt_input_ids,
@@ -636,7 +717,12 @@ class ECGClinicalReportDataset(Dataset):
                         else:
                             pattern_values.append(0.0)
                     sample_data['pattern_targets'] = torch.tensor(pattern_values, dtype=torch.float32)
-                    
+
+                # Auxiliary bridge-head targets (masked; NaN where the row lacks the label)
+                sample_data['aux_lvef_gt'] = self._aux_head_gt(row, self.lvef_head_column)
+                sample_data['aux_shd_gt'] = self._aux_head_gt(row, self.shd_head_column)
+                sample_data['aux_afib_gt'] = self._aux_head_gt(row, self.afib_head_column)
+
                 return sample_data
             else:
                 # CF/QA non-instruction mode: build a simple prompt/answer pair
@@ -725,7 +811,8 @@ class ECGClinicalReportDataset(Dataset):
                 if pd.isnull(waveform_name):
                     waveform_name = os.path.basename(str(row[self.signal_path_column]))
                 sample_data = {
-                    'signal': np.transpose(waveform, (1, 0)),
+                    'signal': signal_out,
+                    'num_ecgs': num_signals,
                     'input_ids': input_ids,
                     'attention_mask': attention_mask,
                     'prompt_input_ids': prompt_input_ids,
@@ -763,6 +850,11 @@ class ECGClinicalReportDataset(Dataset):
                             pattern_values.append(0.0)
                     sample_data['pattern_targets'] = torch.tensor(pattern_values, dtype=torch.float32)
 
+                # Auxiliary bridge-head targets (masked; NaN where the row lacks the label)
+                sample_data['aux_lvef_gt'] = self._aux_head_gt(row, self.lvef_head_column)
+                sample_data['aux_shd_gt'] = self._aux_head_gt(row, self.shd_head_column)
+                sample_data['aux_afib_gt'] = self._aux_head_gt(row, self.afib_head_column)
+
                 return sample_data
             
         except Exception as e:
@@ -796,6 +888,9 @@ def get_clinical_report_dataloader(
         category_column=getattr(config, 'category_column', 'prompt_category'),
         prefix_tuning=getattr(config, 'prefix_tuning', False),
         pattern_columns=getattr(config, 'pattern_label_columns', None),
+        lvef_head_column=getattr(config, 'lvef_head_label_column', 'deepecho_Visually_Estimated_EF'),
+        shd_head_column=getattr(config, 'shd_head_label_column', 'echonext_shd_binary'),
+        afib_head_column=getattr(config, 'afib_head_label_column', 'afib_label_5y'),
         medgemma_prompt_style=medgemma_prompt_style,
         debug_print_example=debug_print_example,
     )
@@ -846,6 +941,8 @@ def get_distributed_clinical_report_dataloader(
     augmentor: Optional[Any] = None,
     messages_column: Optional[str] = None,
     prompt_variations_path: Optional[str] = None,
+    signal_paths_column: Optional[str] = None,
+    max_ecgs: int = 8,
 ):
     """
     Create a distributed DataLoader for ECG clinical report training.
@@ -876,6 +973,8 @@ def get_distributed_clinical_report_dataloader(
         augmentor=augmentor,
         messages_column=messages_column,
         prompt_variations_path=prompt_variations_path,
+        signal_paths_column=signal_paths_column,
+        max_ecgs=max_ecgs,
     )
 
     # Extract sample weights before any subsetting
@@ -1084,6 +1183,8 @@ def get_multi_dataset_distributed_dataloader(
     sampling_seed: Optional[int] = None,
     messages_column: Optional[str] = None,
     prompt_variations_path: Optional[str] = None,
+    signal_paths_column: Optional[str] = None,
+    max_ecgs: int = 8,
 ) -> DataLoader:
     """Create a distributed DataLoader from multiple dataset parquet files.
 
@@ -1116,6 +1217,8 @@ def get_multi_dataset_distributed_dataloader(
             augmentor=augmentor,
             messages_column=messages_column,
             prompt_variations_path=prompt_variations_path,
+            signal_paths_column=signal_paths_column,
+            max_ecgs=max_ecgs,
         )
         datasets.append(ds)
         if rank == 0:
@@ -1155,8 +1258,39 @@ def get_multi_dataset_distributed_dataloader(
 def custom_collate_fn(batch):
     """
     Custom collate function which filters out any None items in the batch.
+
+    Multi-ECG mode: each item's 'signal' is [N_i, leads, length] with variable N_i.
+    We flat-concat all ECGs into [sum(N_i), leads, length] and emit 'ecg_counts'
+    so the decoder can distribute the spliced blocks per row. Single-ECG mode
+    ('signal' is 2D [leads, length]) is collated exactly as before (no ecg_counts).
     """
     filtered_batch = [item for item in batch if item is not None]
     if len(filtered_batch) == 0:
         raise ValueError("All items in the batch were invalid. Check dataset integrity or file paths.")
-    return default_collate(filtered_batch)
+
+    multi = any(np.asarray(item['signal']).ndim == 3 for item in filtered_batch)
+    if not multi:
+        return default_collate(filtered_batch)
+
+    # Multi-ECG path: pull out signals + num_ecgs, default_collate the rest.
+    signals = []
+    ecg_counts = []
+    rest = []
+    for item in filtered_batch:
+        sig = np.asarray(item['signal'])
+        if sig.ndim == 2:  # tolerate a single-ECG item mixed in
+            sig = sig[None, ...]
+        n = int(item.get('num_ecgs', sig.shape[0]))
+        if sig.shape[0] > 0:
+            signals.append(torch.as_tensor(sig, dtype=torch.float32))
+        ecg_counts.append(n)
+        rest.append({k: v for k, v in item.items() if k not in ('signal', 'num_ecgs')})
+
+    collated = default_collate(rest)
+    if signals:
+        collated['signal'] = torch.cat(signals, dim=0)  # [sum(N_i), leads, length]
+    else:
+        # whole batch is no-ECG; emit an empty signal tensor
+        collated['signal'] = torch.zeros((0, 12, 2500), dtype=torch.float32)
+    collated['ecg_counts'] = torch.as_tensor(ecg_counts, dtype=torch.long)
+    return collated
