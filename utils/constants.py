@@ -456,6 +456,25 @@ BERT_CLASS_THRESHOLDS = [
 
 PTBXL_POWER_RATIO = 3.003154
 
+# WCRv2 amplitude-preserved normalization (DeepECG-SSL v2).
+# Convert raw ADC units to millivolts with a fixed per-source scale factor:
+#     signal_mV = raw_signal * scale_factor
+# This replaces the v1 FFT spectral-power matching (PTBXL_POWER_RATIO) and per-lead
+# z-score, both of which destroy the inter-patient voltage differences required for
+# voltage-dependent diagnoses (LVH, chamber enlargement, low voltage).
+# Source: HeartWise-AI/DeepECG-SSL-finetune README ("DeepECG-SSL v2: Amplitude-Preserved").
+WCRV2_SOURCE_SCALE_FACTORS = {
+    "MHI": 0.00488,     # MUSE GE, documented ADC gain (4.88 uV/unit)
+    "MIMIC": 0.001,     # MIMIC-IV dataset documentation
+    "MIMIC-IV": 0.001,
+    "CODE15": 0.4694,   # estimated via calibration tool
+    "CODE-15": 0.4694,
+    "UKBB": 1.0,        # NPY already converted to mV during preprocessing
+    "CLSA": 1.0,        # NPY already converted to mV during preprocessing
+}
+# Default to MHI (MUSE GE) — the primary source in this repo.
+WCRV2_DEFAULT_SCALE_FACTOR = WCRV2_SOURCE_SCALE_FACTORS["MHI"]
+
 # Dictionary data from deepecg_categories.json
 DEEPECG_CATEGORIES = {
     "RHYTHM": [

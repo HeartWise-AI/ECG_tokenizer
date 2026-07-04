@@ -32,7 +32,7 @@ class PipelineArgs:
     checkpoints_dir: str = "/app/checkpoints"
 
     # Model checkpoints (only BERT + tokenizer are used here)
-    bert_checkpoint: str = "/app/checkpoints/bert"
+    bert_checkpoint: str = "/app/checkpoints/mimic_mhi_bert"
     tokenizer_checkpoint: str = "/app/checkpoints/ECG_tokenizer_latest/best_model_epoch_10.pt"
 
     # Device settings
@@ -49,6 +49,9 @@ class PipelineArgs:
     preprocessing_folder: str = "/app/preprocessing"
     preprocessing_n_workers: int = 16
     dataset_name: Optional[str] = None
+    include_optional_100hz_cluster: bool = False
+    ecg_scale: Optional[float] = None
+    ecg_source: Optional[str] = None
     bert_base_config: str = "config/bert_classifier/base_config.yaml"
     
     # Intermediate outputs
@@ -227,6 +230,21 @@ class PipelineArgs:
             help="Optional dataset name to embed in preprocessing folder and parquet name"
         )
         parser.add_argument(
+            "--include-optional-100hz-cluster",
+            action="store_true",
+            help="Include optional flatten range around 100-101 Hz during preprocessing"
+        )
+        parser.add_argument(
+            "--ecg-scale",
+            type=float,
+            help="WCRv2 ADC->mV scale factor override (e.g., MHI=0.00488, MIMIC=0.001)"
+        )
+        parser.add_argument(
+            "--ecg-source",
+            type=str,
+            help="Dataset source for WCRv2 scale lookup (MHI, MIMIC, CODE15, UKBB, CLSA)"
+        )
+        parser.add_argument(
             "--bert-base-config",
             type=str,
             help="BERT base config yaml (for run_bert_classification/analysis)"
@@ -303,6 +321,12 @@ class PipelineArgs:
             instance.preprocessing_n_workers = args.preprocessing_n_workers
         if args.dataset_name:
             instance.dataset_name = args.dataset_name
+        if args.include_optional_100hz_cluster:
+            instance.include_optional_100hz_cluster = True
+        if args.ecg_scale is not None:
+            instance.ecg_scale = args.ecg_scale
+        if args.ecg_source:
+            instance.ecg_source = args.ecg_source
         if args.bert_base_config:
             instance.bert_base_config = args.bert_base_config
         if args.preprocessing_output:
@@ -344,6 +368,9 @@ class PipelineArgs:
             "num_workers": self.num_workers,
             "preprocessing_folder": self.preprocessing_folder,
             "preprocessing_n_workers": self.preprocessing_n_workers,
+            "include_optional_100hz_cluster": self.include_optional_100hz_cluster,
+            "ecg_scale": self.ecg_scale,
+            "ecg_source": self.ecg_source,
             "num_classes": self.num_classes,
             "verbose": self.verbose,
         }
