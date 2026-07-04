@@ -23,7 +23,6 @@ output/
 ECG_Tokenizer/
 ECG_tokenizer/
 tmp/
-classical_baseline/output/
 hooks/
 *.npy
 autoresearch/run.log
@@ -33,3 +32,5 @@ autoresearch/results.tsv
 autoresearch/pid_*.txt
 # secrets
 .env
+.claude/
+logs/

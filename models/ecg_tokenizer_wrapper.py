@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import transformers
 from typing import Optional, Dict, Any, Union, cast, Tuple
 from models.local_residual_vq import ResidualVQ
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
@@ -11,6 +12,15 @@ import math
 # from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+
+if not hasattr(transformers, "HybridCache") and hasattr(transformers, "DynamicCache"):
+    class _CompatHybridCache(transformers.DynamicCache):
+        # PEFT imports HybridCache from transformers, but some transformers builds
+        # expose DynamicCache/EncoderDecoderCache without exporting HybridCache.
+        def __init__(self, config=None, *args, **kwargs):
+            super().__init__(config=config)
+
+    transformers.HybridCache = _CompatHybridCache
 
 try:
     from peft import LoraConfig, get_peft_model, TaskType
@@ -168,48 +178,28 @@ class ResidualBlock1D(nn.Module):
 
 @ModelRegistry.register(ModelName.LINEAR_CLASSIFIER_DECODER)
 class Linear_Classifier_Decoder(nn.Module):
-    """
-    Classifier decoder module that generates class probabilities from the quantized latent representation.
+    """Strict linear probe: AvgPool -> Linear. Zero learned non-linearities.
+
+    Implements the Alain & Bengio (2016) / standard SSL-eval linear-probing
+    convention: a pooled-mean over the time dimension followed by a single
+    affine map to the class logits. 9,933 parameters.
 
     Expected input shape: (batch_size, 128, length_after_encoder)
-    Output shape: (batch_size, num_classes)
-    
-    This is a linear probing implementation for classifying 77 independent classes.
+    Output shape:         (batch_size, num_classes)
     """
     def __init__(
-        self, 
-        num_classes=77,
-        dropout_rate=0.3
+        self,
+        num_classes: int = 77,
+        **_: Any,
     ):
-        """
-        Args:
-            num_classes: Number of classes for classification
-            dropout_rate: Dropout rate for regularization
-        """
-        super(Linear_Classifier_Decoder, self).__init__()
+        super().__init__()
         self.num_classes = num_classes
-        
-        # Global pooling + classifier approach
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),  # Global average pooling across the time dimension
-            nn.Flatten(),             # Flatten to [batch_size, 128]
-            nn.Linear(128, 256),      # First dense layer
-            nn.BatchNorm1d(256),      # Batch normalization for better training stability
-            nn.ReLU(),                # Activation function
-            nn.Dropout(dropout_rate),          # Dropout for regularization
-            nn.Linear(256, 128),      # Second dense layer
-            nn.BatchNorm1d(128),      # Another batch normalization
-            nn.ReLU(),                # Activation function
-            nn.Dropout(dropout_rate),          # More dropout
-            nn.Linear(128, num_classes) # Output layer for the 77 classes (no activation - will be applied in loss)
-        )
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.head = nn.Linear(128, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (batch_size, 12, length)
-        """
-        return self.classifier(x)
+        x = self.pool(x).squeeze(-1)
+        return self.head(x)
 
 @ModelRegistry.register(ModelName.CLS_TOKEN_CLASSIFIER_DECODER)
 class CLS_Token_Classifier_Decoder(nn.Module):

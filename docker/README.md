@@ -4,9 +4,12 @@ This document covers the containerized inference flow (preprocess → BERT → E
 
 ## Input CSV columns
 
-**Required** (must be present in your input CSV/Parquet):
+**Required for full pipeline**:
 - `ecg_path` – path to each ECG file (e.g. `.hea` or waveform path)
-- `reports` – text report / diagnosis for each ECG (used by BERT and QA answers)
+- `reports` – text report / diagnosis for each ECG (used by BERT and report-based QA answers)
+
+**QA-only note**:
+- For `--step qa` runs that directly consume a custom parquet, `reports` may be placeholder text if you only want label-backed questions such as `structural_heart_disease` or `lvef`.
 
 **Optional** – include these columns in your input CSV to enable additional QA question categories. The pipeline auto-detects columns and only generates questions for which data exists.
 
@@ -21,7 +24,30 @@ This document covers the containerized inference flow (preprocess → BERT → E
 | `acs_condition_severity` + `acs_pci_regions` | Culprit artery questions (when acute occlusion) |
 | `afib_label_2y` + `afib_label_5y` | AFib risk questions |
 
-At QA generation time the pipeline prints which categories are enabled (e.g. “QA feature flags (enabled categories)”). To force-disable categories even when columns exist, run the QA step with `--disable_categories heart_rate,lvef` (comma-separated).
+At QA generation time the pipeline prints which categories are enabled (e.g. “QA feature flags (enabled categories)”). To force-disable categories even when columns exist, run the QA step with `--disable_categories ...` (comma-separated).
+
+Supported `--disable_categories` values include:
+- `interpretation`
+- `json_interpretation`
+- `classification`
+- `category`
+- `localization`
+- `urgency_assessment`
+- `random_finding_question`
+- `heart_rate`
+- `ecg_interval`
+- `structural_heart_disease` or `shd`
+- `lvef`
+- `acs_severity`
+- `culprit_artery`
+- `afib_risk`
+
+For EchoNext-style QA-only runs, a typical setting is:
+```bash
+--disable_categories interpretation,json_interpretation,classification,category,localization,urgency_assessment,random_finding_question
+```
+
+If your custom dataset lacks DeepECG diagnosis columns, set `qa_max_normal_percentage: 1.0` in `docker/heartwise.config` so the QA builder does not downsample most rows as "normal".
 
 ## Build the image (prefetch weights)
 Requires a HF token in root in `api_keys.json` (key: `HUGGING_FACE_TOKEN`).
@@ -72,4 +98,25 @@ docker run --gpus all --rm --shm-size=8g \
   tokenizer_inference \
   --step analysis \
   --input /app/outputs/preprocessed.parquet
+```
+
+QA only from a custom parquet (skip BERT and EfficientNet):
+```bash
+docker run --gpus all --rm --shm-size=8g \
+  -v "$(pwd)/outputs:/app/outputs" \
+  tokenizer_inference \
+  --step qa \
+  --input_file /app/outputs/echonext_docker_ready.parquet
+```
+
+Preprocess -> QA -> LLM (skip BERT and EfficientNet):
+```bash
+docker run --gpus all --rm --shm-size=8g \
+  -v "$(pwd)/outputs:/app/outputs" \
+  -v "$(pwd)/preprocessing:/app/preprocessing" \
+  tokenizer_inference \
+  --step preprocess_qa_llm \
+  --input_file /app/outputs/echonext_docker_ready.parquet \
+  --qa-disable-categories interpretation,json_interpretation,classification,category,localization,urgency_assessment,random_finding_question,heart_rate,ecg_interval \
+  --qa-max-normal-percentage 1.0
 ```
