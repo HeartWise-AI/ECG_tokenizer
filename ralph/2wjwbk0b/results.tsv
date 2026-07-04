@@ -1,2 +1,0 @@
-exp_num	slug	change	composite	delta_vs_active	worst_per_task_delta	decision	checkpoint	commit_sha
-0	baseline	-	0.537545	0.000000	0.000000	baseline	/volume/ECG_tokenizer/checkpoints/BEST_LLM/2wjwbk0b_20260413-224103_ENHANCED/best_model.pt	5a781d3b6c7b6bb8db26e9e57da2ca1d4b149ed9

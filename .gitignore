@@ -34,3 +34,11 @@ autoresearch/pid_*.txt
 .env
 .claude/
 logs/
+
+# experiment scratch / artifacts (kept local, out of version control)
+autoresearch/
+analysis/
+ralph/
+data/*.jsonl
+data/*.npz
+data/*.parquet
