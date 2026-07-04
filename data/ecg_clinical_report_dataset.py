@@ -675,7 +675,8 @@ class ECGClinicalReportDataset(Dataset):
                 # Add category information if available
                 waveform_name = row.get('waveform_name')
                 if pd.isnull(waveform_name):
-                    waveform_name = os.path.basename(str(row[self.signal_path_column]))
+                    fallback_path = sig_paths[0] if sig_paths else row.get(self.signal_path_column)
+                    waveform_name = os.path.basename(str(fallback_path)) if fallback_path is not None else ''
                 sample_data = {
                     'signal': signal_out,
                     'num_ecgs': num_signals,
@@ -809,7 +810,8 @@ class ECGClinicalReportDataset(Dataset):
                 # Add category and prompt info
                 waveform_name = row.get('waveform_name')
                 if pd.isnull(waveform_name):
-                    waveform_name = os.path.basename(str(row[self.signal_path_column]))
+                    fallback_path = sig_paths[0] if sig_paths else row.get(self.signal_path_column)
+                    waveform_name = os.path.basename(str(fallback_path)) if fallback_path is not None else ''
                 sample_data = {
                     'signal': signal_out,
                     'num_ecgs': num_signals,

@@ -232,11 +232,19 @@ def compute_logprobs_for_candidates(model, signal: torch.Tensor,
     sig_rep = signal.expand(n, -1, -1) if signal.dim() == 3 else signal.unsqueeze(0).expand(n, -1, -1)
     sig_rep = sig_rep.to(device=device, dtype=torch.float32)
 
+    # Condition the ECG bridge on the prompt exactly as rollout generation did
+    # (InstructionAwareECGQFormerBridge uses prompt_input_ids); omitting it would
+    # score candidates under different ECG embeddings than were sampled.
+    prompt_input_ids = prompt_ids.to(device).unsqueeze(0).expand(n, -1)
+    prompt_attention_mask = torch.ones((n, plen), dtype=torch.long, device=device)
+
     out = model.forward(
         ecg_signal=sig_rep,
         input_ids=full_ids,
         attention_mask=attn,
         labels=None,
+        prompt_input_ids=prompt_input_ids,
+        prompt_attention_mask=prompt_attention_mask,
     )
     logits = out["logits"] if isinstance(out, dict) else out[0]
 

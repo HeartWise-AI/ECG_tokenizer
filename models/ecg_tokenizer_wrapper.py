@@ -928,6 +928,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         pattern_loss_weight: Optional[float] = None,
         pattern_label_count: Optional[int] = None,
         pattern_bce_pos_weight: Optional[Any] = None,
+        lvef_loss_weight: Optional[float] = None,
         lvef_head_loss_weight: Optional[float] = None,
         shd_head_loss_weight: Optional[float] = None,
         afib_head_loss_weight: Optional[float] = None,
@@ -1105,6 +1106,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         decoder_kwargs['pattern_label_count'] = pattern_label_count
                     if pattern_bce_pos_weight is not None:
                         decoder_kwargs['pattern_bce_pos_weight'] = pattern_bce_pos_weight
+                    if lvef_loss_weight is not None:
+                        decoder_kwargs['lvef_loss_weight'] = lvef_loss_weight
                     if lvef_head_loss_weight is not None:
                         decoder_kwargs['lvef_head_loss_weight'] = lvef_head_loss_weight
                     if shd_head_loss_weight is not None:

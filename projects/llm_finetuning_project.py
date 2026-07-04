@@ -311,6 +311,7 @@ class LLMFinetuningProject(BaseProject):
             stage1_checkpoint_path=getattr(self.config, 'stage1_checkpoint_path', None),
             pattern_loss_weight=getattr(self.config, 'pattern_loss_weight', None),
             pattern_label_count=(len(self.config.pattern_label_columns) if getattr(self.config, 'pattern_label_columns', None) else None),
+            lvef_loss_weight=getattr(self.config, 'lvef_loss_weight', None),
             lvef_head_loss_weight=getattr(self.config, 'lvef_head_loss_weight', None),
             shd_head_loss_weight=getattr(self.config, 'shd_head_loss_weight', None),
             afib_head_loss_weight=getattr(self.config, 'afib_head_loss_weight', None),
@@ -1222,6 +1223,7 @@ class LLMFinetuningProject(BaseProject):
             bridge_use_continuous_features=getattr(pretrained_config, 'bridge_use_continuous_features', getattr(self.config, 'bridge_use_continuous_features', False)),
             continuous_num_tokens=getattr(pretrained_config, 'continuous_num_tokens', getattr(self.config, 'continuous_num_tokens', 32)),
             continuous_num_heads=getattr(pretrained_config, 'continuous_num_heads', getattr(self.config, 'continuous_num_heads', 8)),
+            bridge_continuous_only=getattr(pretrained_config, 'bridge_continuous_only', getattr(self.config, 'bridge_continuous_only', False)),
             use_lora=use_lora_for_inference,
             lora_config={
                 'r': getattr(pretrained_config, 'lora_r', 16),

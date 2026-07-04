@@ -268,9 +268,10 @@ def load_ecg_signal(path: str) -> torch.Tensor:
     wav = np.load(path)
     if wav.ndim == 3:
         wav = wav.squeeze(-1)
-    # Ensure (samples, leads) ordering
-    if wav.shape == (12, 2500):
-        wav = wav.T  # -> (2500, 12)
+    # Ensure (samples, leads) ordering. Transpose any lead-first (12, N) array,
+    # not only (12, 2500); (12, 12) is ambiguous so leave it untouched.
+    if wav.ndim == 2 and wav.shape[0] == 12 and wav.shape[1] != 12:
+        wav = wav.T  # -> (N, 12)
     # Crop/pad to 2500
     target = 2500
     n = wav.shape[0]

@@ -724,6 +724,14 @@ class LLMFinetuningRunner(BaseRunner):
         # Removed cross-phase log persistence to avoid replay artifacts
 
         for epoch in range(self.start_epoch, self.config.num_epochs + 1):
+            # Hard optimizer-step cap across epochs: the inner _run_epoch break only
+            # stops the current epoch, so guard here to avoid starting another one
+            # (which would push global_step past max_train_steps).
+            max_train_steps = getattr(self.config, 'max_train_steps', None)
+            if max_train_steps is not None and self.global_step >= int(max_train_steps):
+                if self.config.is_ref_device:
+                    print(f"Reached max_train_steps={max_train_steps}; not starting epoch {epoch}.")
+                break
             # Configure training phase
             self._configure_training_phase(epoch)
             
