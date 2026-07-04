@@ -222,15 +222,62 @@ class QAFeatureFlags:
         )
 
 
+def _load_prompt_variations() -> Dict[str, List[str]]:
+    """Load expanded prompt variations from JSON if available."""
+    variations_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prompt_variations.json"
+    )
+    if os.path.exists(variations_path):
+        import json as _json
+        with open(variations_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        print(f"Loaded prompt variations from {variations_path} ({sum(len(v) for v in data.values())} total)")
+        return data
+    return {}
+
+
+def _load_answer_variations() -> Dict[str, List[str]]:
+    """Load expanded answer variations from JSON if available."""
+    variations_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "answer_variations.json"
+    )
+    if os.path.exists(variations_path):
+        import json as _json
+        with open(variations_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        print(f"Loaded answer variations from {variations_path} ({sum(len(v) for v in data.values())} total)")
+        return data
+    return {}
+
+
+# Module-level cache (loaded once)
+_PROMPT_VARIATIONS: Optional[Dict[str, List[str]]] = None
+_ANSWER_VARIATIONS: Optional[Dict[str, List[str]]] = None
+
+
+def get_prompt_variations() -> Dict[str, List[str]]:
+    global _PROMPT_VARIATIONS
+    if _PROMPT_VARIATIONS is None:
+        _PROMPT_VARIATIONS = _load_prompt_variations()
+    return _PROMPT_VARIATIONS
+
+
+def get_answer_variations() -> Dict[str, List[str]]:
+    global _ANSWER_VARIATIONS
+    if _ANSWER_VARIATIONS is None:
+        _ANSWER_VARIATIONS = _load_answer_variations()
+    return _ANSWER_VARIATIONS
+
+
 class ECGPromptMaker:
     """Generate diverse prompts for ECG interpretation tasks"""
-    
+
     def __init__(self, dataset: str = 'mimic'):
         """Initialize with category definitions"""
-        
+
         # Load category definitions from constants
         self.categories_dict = DEEPECG_CATEGORIES
-        
+
         # Initialize column mapper for dataset-specific columns
         self.dataset = dataset
         self.column_mapper = DatasetColumnMapper(dataset)
@@ -525,6 +572,55 @@ class ECGPromptMaker:
             'random_finding': 0.04
         }
 
+        # Override with expanded prompt variations if available
+        variations = get_prompt_variations()
+        if variations:
+            _var_map = {
+                "interpretation": "interpretation_prompts",
+                "classification": "classification_prompts",
+                "json_interpretation": "json_prompts",
+                "ecg_interval": "ecg_interval_prompts",
+                "structural_heart_disease": "structural_heart_disease_prompts",
+                "lvef": "lvef_prompts",
+                "afib_risk": "afib_risk_prompts",
+                "acs_severity": "acs_severity_prompts",
+                "culprit_artery": "culprit_artery_prompts",
+                "random_finding_question": "random_finding_prompts",
+                "urgency_assessment": None,  # inline list, handled below
+                "interpretation_complex": None,  # inline list, handled below
+            }
+            # Category-specific prompts map
+            _cat_var_map = {
+                "category_rhythm": "RHYTHM",
+                "category_conduction": "CONDUCTION",
+                "category_infarct_ischemia": "INFARCT, ISCHEMIA",
+                "category_chamber_enlargement": "CHAMBER ENLARGEMENT",
+                "category_pericarditis": "PERICARDITIS",
+                "category_other": "OTHER",
+            }
+            # Localization prompts map
+            _loc_var_map = {
+                "localization_q_wave": "Q_WAVE",
+                "localization_st_elevation": "ST_ELEVATION",
+                "localization_st_depression": "ST_DEPRESSION",
+                "localization_t_wave": "T_WAVE",
+                "localization_qrs_axis": "QRS_AXIS",
+            }
+            for var_key, attr_name in _var_map.items():
+                if var_key in variations and attr_name:
+                    setattr(self, attr_name, variations[var_key])
+            for var_key, cat_name in _cat_var_map.items():
+                if var_key in variations:
+                    self.category_specific_prompts[cat_name] = variations[var_key]
+            for var_key, loc_name in _loc_var_map.items():
+                if var_key in variations:
+                    self.localization_prompts[loc_name] = variations[var_key]
+            # Store urgency and complex prompts for use in generate_prompts_for_ecg
+            if "urgency_assessment" in variations:
+                self._urgency_prompts = variations["urgency_assessment"]
+            if "interpretation_complex" in variations:
+                self._complex_prompts = variations["interpretation_complex"]
+
     def _get_json_prompt(self, flags: Optional[QAFeatureFlags] = None) -> str:
         keys = list(self._json_base_keys)
         if flags is None or flags.has_heart_rate:
@@ -818,22 +914,22 @@ class ECGPromptMaker:
         # 6. For complex ECGs with multiple categories, add an extra focused prompt
         if (flags is None or flags.has_interpretation_complex) and num_active_categories >= 3:
             # Add another interpretation prompt focusing on complexity
-            complex_prompts = [
+            complex_prompts = getattr(self, '_complex_prompts', [
                 "What are all the abnormalities in this complex ECG?",
                 "Can you list all findings in this multi-pathology ECG?",
                 "Please provide a comprehensive analysis of this abnormal ECG.",
-            ]
+            ])
             prompts.append((random.choice(complex_prompts), 'interpretation_complex', 0.9))
         
         # 5. For critical findings, add urgency assessment
         if (flags is None or flags.has_urgency) and ('INFARCT, ISCHEMIA' in active_categories or 'RHYTHM' in active_categories):
             if any('Acute MI' in finding or 'ST elevation' in finding 
                    for findings in active_categories.values() for finding in findings):
-                urgency_prompts = [
+                urgency_prompts = getattr(self, '_urgency_prompts', [
                     "Does this ECG require immediate intervention?",
                     "Is this an emergency ECG finding?",
                     "What is the clinical urgency of this ECG?",
-                ]
+                ])
                 prompts.append((random.choice(urgency_prompts), 'urgency_assessment', 1.0))
         
         # 6. Add random YES/NO finding questions (4-5% of prompts)

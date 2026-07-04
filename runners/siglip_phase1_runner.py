@@ -48,6 +48,7 @@ class SiglipPhase1Runner(BaseRunner):
         quantizer: Optional[nn.Module] = None,
         use_quantized_inputs: bool = True,
         tokenizer_config: Optional[Dict[str, Any]] = None,
+        report_text_embedder: Optional[Any] = None,
         wandb_wrapper=None,
         validation_dataloader: Optional[DataLoader] = None,
         scaler: Optional[GradScaler] = None,
@@ -77,6 +78,22 @@ class SiglipPhase1Runner(BaseRunner):
         if loss_type not in {"infonce", "siglip_bce"}:
             raise ValueError(f"Unsupported loss_type '{loss_type}' for SiglipPhase1Runner.")
         self.loss_type = loss_type
+
+        # Phase A-v2: per-ECG free-text report contrastive mode.
+        self.contrastive_text_mode = str(
+            getattr(config, "contrastive_text_mode", "bank") or "bank"
+        ).lower()
+        if self.contrastive_text_mode not in {"bank", "report"}:
+            raise ValueError(
+                f"Unsupported contrastive_text_mode '{self.contrastive_text_mode}'."
+            )
+        self.report_text_embedder = report_text_embedder
+        self.recall_log_examples = int(getattr(config, "recall_log_examples", 8) or 8)
+        if self.contrastive_text_mode == "report" and self.report_text_embedder is None:
+            raise ValueError(
+                "contrastive_text_mode='report' requires a report_text_embedder; "
+                "none was provided by the project."
+            )
 
         # Focal-InfoNCE configuration
         self.class_pos_weight_map = dict(getattr(config, "class_pos_weight_map", {}) or {})
@@ -157,9 +174,15 @@ class SiglipPhase1Runner(BaseRunner):
         if self.decoder is not None and hasattr(self.decoder, "bridge"):
             assert self.decoder.bridge is self.raw_bridge, "decoder.bridge must be tied to retrieval bridge"
 
-        self.encoder.eval()
-        for param in self.encoder.parameters():
-            param.requires_grad = False
+        self.train_encoder = bool(getattr(config, "train_encoder", False))
+        if self.train_encoder:
+            self.encoder.train()
+            for param in self.encoder.parameters():
+                param.requires_grad = True
+        else:
+            self.encoder.eval()
+            for param in self.encoder.parameters():
+                param.requires_grad = False
 
         if self.quantizer is not None:
             self.quantizer.eval()
@@ -408,6 +431,137 @@ class SiglipPhase1Runner(BaseRunner):
         numer = torch.logsumexp(logits_num, dim=1)
 
         return (denom - numer).mean().to(logits.dtype)
+
+    @staticmethod
+    def _report_false_negative_mask(reports: List[str], device: torch.device) -> torch.Tensor:
+        """Build a [B, B] keep-mask for in-batch report InfoNCE.
+
+        Entry (i, j) is False (i.e. EXCLUDED from negatives) when i != j AND
+        report_i == report_j (exact string match). The diagonal is always True
+        (it is the positive). Empty/whitespace-only reports are treated as
+        distinct so they are not collapsed together as false negatives.
+        """
+        n = len(reports)
+        normalized = [str(r).strip() for r in reports]
+        same = torch.zeros((n, n), dtype=torch.bool, device=device)
+        for i in range(n):
+            ri = normalized[i]
+            if not ri:
+                continue
+            for j in range(i + 1, n):
+                if normalized[j] == ri:
+                    same[i, j] = True
+                    same[j, i] = True
+        eye = torch.eye(n, dtype=torch.bool, device=device)
+        # Keep diagonal (positives) + everything that is NOT a duplicate off-diagonal.
+        keep = (~same) | eye
+        return keep
+
+    def _report_infonce_loss(
+        self,
+        ecg_feats: torch.Tensor,
+        report_embs: torch.Tensor,
+        reports: List[str],
+        scale: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """ESI/MERL-style symmetric in-batch InfoNCE over per-ECG reports.
+
+        Args:
+            ecg_feats:   [B, H] L2-normalized ECG bridge embeddings.
+            report_embs: [B, H] L2-normalized report embeddings.
+            reports:     list of B report strings (for false-negative masking).
+            scale:       scalar temperature divisor (bridge.temperature()).
+
+        Returns (loss, logits[B, B]). Duplicate-report off-diagonal entries are
+        masked to -inf so they are not penalized as negatives.
+        """
+        ecg_feats = F.normalize(ecg_feats, dim=-1)
+        report_embs = F.normalize(report_embs, dim=-1)
+        logits = (ecg_feats @ report_embs.T) / scale  # [B, B]
+        b = logits.size(0)
+        keep = self._report_false_negative_mask(reports, logits.device)
+        neg_inf = torch.finfo(logits.dtype).min
+        logits_masked = logits.masked_fill(~keep, neg_inf)
+        target = torch.arange(b, device=logits.device)
+        # Symmetric: ECG->report and report->ECG (mask is symmetric).
+        loss_i = F.cross_entropy(logits_masked, target)
+        loss_t = F.cross_entropy(logits_masked.T, target)
+        loss = 0.5 * (loss_i + loss_t)
+        return loss.to(ecg_feats.dtype), logits
+
+    @torch.no_grad()
+    def _log_recall_examples(
+        self,
+        ecg_feats: torch.Tensor,
+        report_embs: torch.Tensor,
+        reports: List[str],
+        ecg_ids: List[str],
+        scale: torch.Tensor,
+        epoch: Optional[int] = None,
+    ) -> "wandb.Table":
+        """Build (and optionally log) a wandb.Table of best/worst ECG->report recall.
+
+        For each ECG, retrieve over the in-batch report gallery, compute the rank
+        of its own (true) report, and select the `recall_log_examples` BEST
+        (gt_rank == 1) and WORST (largest gt_rank) cases. Returns the table so it
+        is unit-testable without a live wandb run.
+        """
+        ecg_feats = F.normalize(ecg_feats, dim=-1)
+        report_embs = F.normalize(report_embs, dim=-1)
+        sims = (ecg_feats @ report_embs.T) / scale  # [B, B]
+        b = sims.size(0)
+        # Rank of the diagonal (true report) per row: 1 = top-1.
+        order = torch.argsort(sims, dim=1, descending=True)  # [B, B]
+        diag = torch.arange(b, device=sims.device)
+        # position of own index within each row's ranking
+        ranks = torch.empty(b, dtype=torch.long, device=sims.device)
+        for row in range(b):
+            pos = (order[row] == diag[row]).nonzero(as_tuple=False)
+            ranks[row] = int(pos[0, 0].item()) + 1 if pos.numel() else b
+        top1_idx = order[:, 0].tolist()
+        ranks_list = ranks.tolist()
+
+        rows = list(range(b))
+        best = sorted(rows, key=lambda r: ranks_list[r])[: self.recall_log_examples]
+        worst = sorted(rows, key=lambda r: -ranks_list[r])[: self.recall_log_examples]
+
+        table = wandb.Table(
+            columns=[
+                "ecg_id",
+                "gt_report",
+                "top1_retrieved_report",
+                "gt_rank",
+                "correct",
+            ]
+        )
+        seen: set[int] = set()
+        for r in list(best) + list(worst):
+            if r in seen:
+                continue
+            seen.add(r)
+            ecg_id = ecg_ids[r] if r < len(ecg_ids) else ""
+            gt_report = reports[r] if r < len(reports) else ""
+            t1 = top1_idx[r]
+            top1_report = reports[t1] if t1 < len(reports) else ""
+            gt_rank = int(ranks_list[r])
+            table.add_data(
+                str(ecg_id),
+                str(gt_report),
+                str(top1_report),
+                gt_rank,
+                bool(gt_rank == 1),
+            )
+
+        if (
+            self.wandb_wrapper
+            and self.wandb_wrapper.is_initialized()
+            and getattr(self.config, "is_ref_device", True)
+        ):
+            key = "val/recall_examples"
+            if epoch is not None:
+                key = f"val/recall_examples_epoch_{epoch}"
+            self.wandb_wrapper.log({key: table})
+        return table
 
     def _siglip_bce_loss(
         self,
@@ -736,6 +890,21 @@ class SiglipPhase1Runner(BaseRunner):
             temperature = None
 
         save_kwargs = dict(payload)
+        # When the encoder is contrastively trained, persist its weights too so the
+        # Phase A encoder can be reloaded for linear probing. Backward-compatible:
+        # the key is only added when train_encoder is True.
+        if bool(getattr(self, "train_encoder", False)):
+            try:
+                encoder_module = (
+                    self.encoder.module if hasattr(self.encoder, "module") else self.encoder
+                )
+                save_kwargs["encoder_state_dict"] = {
+                    k: v.detach().cpu() for k, v in encoder_module.state_dict().items()
+                }
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    f"[{self.__class__.__name__}] Failed to capture encoder_state_dict: {exc}"
+                )
         try:
             if temperature is not None:
                 self._save_checkpoint(
@@ -1104,6 +1273,18 @@ class SiglipPhase1Runner(BaseRunner):
                     val_payload["trainer/epoch"] = float(epoch)
                     self._log_metrics(val_payload)
 
+                # Save the checkpoint BEFORE any wandb artifact/table logging.
+                # The table logging can CPU-spin / block for hours when the wandb
+                # backend is flaky (observed a 3h+ hang on repeated HTTP 502
+                # retries at epoch end), which previously prevented the epoch
+                # checkpoint from ever landing and deadlocked the other DDP rank.
+                self._maybe_save_epoch_checkpoints(
+                    epoch=epoch,
+                    train_metrics=epoch_metrics,
+                    val_metrics=val_metrics,
+                    analysis_rows=analysis_rows,
+                )
+
                 if analysis_rows:
                     self._log_retrieval_artifacts(
                         epoch=epoch,
@@ -1112,13 +1293,6 @@ class SiglipPhase1Runner(BaseRunner):
                         worst_indices=worst_indices or [],
                         random_index=random_index,
                     )
-
-                self._maybe_save_epoch_checkpoints(
-                    epoch=epoch,
-                    train_metrics=epoch_metrics,
-                    val_metrics=val_metrics,
-                    analysis_rows=analysis_rows,
-                )
 
     def inference(self):  # type: ignore[override]
         raise NotImplementedError("Inference is not implemented for SigLIP Phase-1 runner")
@@ -1149,6 +1323,8 @@ class SiglipPhase1Runner(BaseRunner):
         self.bridge.train(mode == RunMode.TRAIN)
         if self.decoder is not None:
             self.decoder.train(mode == RunMode.TRAIN)
+        if getattr(self, "train_encoder", False):
+            self.encoder.train(mode == RunMode.TRAIN)
 
         self.optimizer.zero_grad(set_to_none=True)
 
@@ -1267,88 +1443,119 @@ class SiglipPhase1Runner(BaseRunner):
         ce_contrib_value = 0.0
         valid_rows = 0
 
+        report_mode = self.contrastive_text_mode == "report"
+        report_labels: Optional[torch.Tensor] = None
+        report_mask: Optional[torch.Tensor] = None
+        report_text_ids_local: Optional[List[int]] = None
         with autocast_ctx:
             pooled, bridge_tokens = self.bridge(**bridge_inputs)
             pooled = F.normalize(pooled, dim=-1)
-            logits = pooled @ text_vecs.T
-            logits = logits / self.bridge.temperature()
-            mask = weights_mask
-            alpha_col = self._alpha_for_text_ids(text_ids) if self.use_focal_infonce else None
-            gamma_pos = self.focal_gamma_pos if self.use_focal_infonce else 0.0
-            gamma_neg = self.focal_gamma_neg if self.use_focal_infonce else 0.0
-            pos_mask_for_count = (labels > 0.5) & mask
-            valid_rows = int(pos_mask_for_count.any(dim=1).sum().item())
-            if self.loss_type == "siglip_bce":
-                siglip_primary = self._siglip_bce_loss(
-                    logits=logits,
-                    labels=labels,
-                    mask=mask,
-                    alpha_col=alpha_col,
-                    gamma_pos=gamma_pos,
-                    gamma_neg=gamma_neg,
-                    detach_weights=self.focal_detach_weights,
-                )
-            else:
-                siglip_primary = self._infonce_loss(
-                    logits=logits,
-                    labels=labels,
-                    mask=mask,
-                    alpha_col=alpha_col,
-                    gamma_pos=gamma_pos,
-                    gamma_neg=gamma_neg,
-                    detach_weights=self.focal_detach_weights,
-                )
-            group_loss = (
-                self._compute_group_auxiliary_loss(logits, labels, text_ids)
-                if self.mutual_exclusive_groups and self.group_loss_weight > 0
-                else logits.new_zeros(())
-            )
-            siglip_loss = siglip_primary + group_loss
-            total_loss = siglip_loss * self.siglip_loss_weight
-            siglip_contrib_value = float((siglip_loss * self.siglip_loss_weight).detach().cpu())
 
-            ce_prompts: List[str] = []
-            ce_targets: List[str] = []
-            ce_types: List[str] = []
-            if self.ce_enabled and bridge_inputs.get("codes") is not None:
-                reports = batch.get("reports", [""] * len(signals))
-                ce_indices, ce_inputs_unused, ce_prompts, ce_targets, ce_types = self._sample_ce_targets(reports, text_ids, labels)
-                if ce_prompts and ce_targets:
-                    codes_tensor = bridge_inputs.get("codes")
-                    use_bridge = self.ce_backprop_to_bridge
-                    ce_codes = None
-                    ce_bridge_tokens = None
-                    if use_bridge:
-                        ce_bridge_tokens = bridge_tokens[ce_indices] if bridge_tokens is not None else None
-                    else:
-                        if isinstance(codes_tensor, torch.Tensor):
-                            ce_codes = codes_tensor[ce_indices]
-                    ce_loss_tensor = self._run_decoder_ce(
-                        ce_prompts,
-                        ce_targets,
-                        ce_codes,
-                        ce_types,
-                        ecg_embeddings=ce_bridge_tokens,
+            if report_mode:
+                # ESI/MERL-style in-batch InfoNCE over per-ECG free-text reports.
+                reports_batch = list(batch.get("reports", [""] * pooled.size(0)))
+                report_embs = self.report_text_embedder.embed(reports_batch)
+                report_embs = report_embs.to(device=pooled.device, dtype=pooled.dtype)
+                siglip_primary, logits = self._report_infonce_loss(
+                    ecg_feats=pooled,
+                    report_embs=report_embs,
+                    reports=reports_batch,
+                    scale=self.bridge.temperature(),
+                )
+                group_loss = logits.new_zeros(())
+                siglip_loss = siglip_primary + group_loss
+                total_loss = siglip_loss * self.siglip_loss_weight
+                siglip_contrib_value = float(
+                    (siglip_loss * self.siglip_loss_weight).detach().cpu()
+                )
+                # Diagonal == positive; reuse logits/labels for pos/neg-mass metrics.
+                b = pooled.size(0)
+                report_labels = torch.eye(b, device=pooled.device)
+                report_mask = torch.isfinite(logits)
+                report_text_ids_local = list(range(b))
+                ce_prompts, ce_targets, ce_types = [], [], []
+                loss = total_loss / self.grad_accum
+
+            if not report_mode:
+                logits = pooled @ text_vecs.T
+                logits = logits / self.bridge.temperature()
+                mask = weights_mask
+                alpha_col = self._alpha_for_text_ids(text_ids) if self.use_focal_infonce else None
+                gamma_pos = self.focal_gamma_pos if self.use_focal_infonce else 0.0
+                gamma_neg = self.focal_gamma_neg if self.use_focal_infonce else 0.0
+                pos_mask_for_count = (labels > 0.5) & mask
+                valid_rows = int(pos_mask_for_count.any(dim=1).sum().item())
+                if self.loss_type == "siglip_bce":
+                    siglip_primary = self._siglip_bce_loss(
+                        logits=logits,
+                        labels=labels,
+                        mask=mask,
+                        alpha_col=alpha_col,
+                        gamma_pos=gamma_pos,
+                        gamma_neg=gamma_neg,
+                        detach_weights=self.focal_detach_weights,
                     )
-                    if ce_loss_tensor is not None:
-                        lm_w = self.lm_loss_weight
-                        if self.lm_weight_warmup_steps > 0:
-                            lm_w = lm_w * min(1.0, self.global_step / float(self.lm_weight_warmup_steps))
-                        if self.ce_scale_by_pairs:
-                            ce_batch = max(1, len(ce_prompts))
-                            pair_norm = max(1, valid_rows)
-                            scale = pair_norm / ce_batch
-                            if self.ce_scale_cap > 0.0:
-                                scale = min(scale, self.ce_scale_cap)
-                            contrib = ce_loss_tensor * lm_w * scale
-                        else:
-                            scale = 1.0
-                            contrib = ce_loss_tensor * lm_w
-                        total_loss = total_loss + contrib
-                        ce_contrib_value = float(contrib.detach().cpu())
                 else:
-                    ce_prompts = []
-                    ce_targets = []
+                    siglip_primary = self._infonce_loss(
+                        logits=logits,
+                        labels=labels,
+                        mask=mask,
+                        alpha_col=alpha_col,
+                        gamma_pos=gamma_pos,
+                        gamma_neg=gamma_neg,
+                        detach_weights=self.focal_detach_weights,
+                    )
+                group_loss = (
+                    self._compute_group_auxiliary_loss(logits, labels, text_ids)
+                    if self.mutual_exclusive_groups and self.group_loss_weight > 0
+                    else logits.new_zeros(())
+                )
+                siglip_loss = siglip_primary + group_loss
+                total_loss = siglip_loss * self.siglip_loss_weight
+                siglip_contrib_value = float((siglip_loss * self.siglip_loss_weight).detach().cpu())
+
+                ce_prompts: List[str] = []
+                ce_targets: List[str] = []
+                ce_types: List[str] = []
+                if self.ce_enabled and bridge_inputs.get("codes") is not None:
+                    reports = batch.get("reports", [""] * len(signals))
+                    ce_indices, ce_inputs_unused, ce_prompts, ce_targets, ce_types = self._sample_ce_targets(reports, text_ids, labels)
+                    if ce_prompts and ce_targets:
+                        codes_tensor = bridge_inputs.get("codes")
+                        use_bridge = self.ce_backprop_to_bridge
+                        ce_codes = None
+                        ce_bridge_tokens = None
+                        if use_bridge:
+                            ce_bridge_tokens = bridge_tokens[ce_indices] if bridge_tokens is not None else None
+                        else:
+                            if isinstance(codes_tensor, torch.Tensor):
+                                ce_codes = codes_tensor[ce_indices]
+                        ce_loss_tensor = self._run_decoder_ce(
+                            ce_prompts,
+                            ce_targets,
+                            ce_codes,
+                            ce_types,
+                            ecg_embeddings=ce_bridge_tokens,
+                        )
+                        if ce_loss_tensor is not None:
+                            lm_w = self.lm_loss_weight
+                            if self.lm_weight_warmup_steps > 0:
+                                lm_w = lm_w * min(1.0, self.global_step / float(self.lm_weight_warmup_steps))
+                            if self.ce_scale_by_pairs:
+                                ce_batch = max(1, len(ce_prompts))
+                                pair_norm = max(1, valid_rows)
+                                scale = pair_norm / ce_batch
+                                if self.ce_scale_cap > 0.0:
+                                    scale = min(scale, self.ce_scale_cap)
+                                contrib = ce_loss_tensor * lm_w * scale
+                            else:
+                                scale = 1.0
+                                contrib = ce_loss_tensor * lm_w
+                            total_loss = total_loss + contrib
+                            ce_contrib_value = float(contrib.detach().cpu())
+                    else:
+                        ce_prompts = []
+                        ce_targets = []
 
             loss = total_loss / self.grad_accum
 
@@ -1385,6 +1592,13 @@ class SiglipPhase1Runner(BaseRunner):
             pre_clip_sum = self._sum_grad_abs(bridge_params) if should_log_grads else None
             if bridge_params:
                 grad_norm_bridge_pre_clip = self._compute_grad_norm(bridge_params)
+
+            encoder_params: List[torch.nn.Parameter] = []
+            grad_norm_encoder_pre_clip: Optional[float] = None
+            if getattr(self, "train_encoder", False):
+                encoder_params = [p for p in self.encoder.parameters() if p.requires_grad]
+                if encoder_params:
+                    grad_norm_encoder_pre_clip = self._compute_grad_norm(encoder_params)
             groups = self._bridge_param_groups()
             pre_lm = self._compute_grad_norm(groups["lm_facing"]) if groups["lm_facing"] else 0.0
             pre_ret = self._compute_grad_norm(groups["retrieval_facing"]) if groups["retrieval_facing"] else 0.0
@@ -1398,6 +1612,8 @@ class SiglipPhase1Runner(BaseRunner):
                 grad_norm_adapter_pre_clip = self._compute_grad_norm(adapter_params)
 
             torch.nn.utils.clip_grad_norm_(bridge_params, self.grad_clip)
+            if encoder_params:
+                torch.nn.utils.clip_grad_norm_(encoder_params, self.grad_clip)
 
             if bridge_params:
                 grad_norm_bridge = min(self._compute_grad_norm(bridge_params), self.grad_clip)
@@ -1424,9 +1640,32 @@ class SiglipPhase1Runner(BaseRunner):
                     post_shared = min(self._compute_grad_norm(groups["shared"]), self.grad_clip)
                     payload["train/grad_norm_bridge_shared_pre_clip"] = float(pre_shared)
                     payload["train/grad_norm_bridge_shared"] = float(post_shared)
+                if encoder_params:
+                    post_enc = min(self._compute_grad_norm(encoder_params), self.grad_clip)
+                    payload["train/grad_norm_encoder_pre_clip"] = float(grad_norm_encoder_pre_clip or 0.0)
+                    payload["train/grad_norm_encoder"] = float(post_enc)
                 self._log_metrics(payload)
 
-            if self.scaler is not None:
+            # Final safety net: the decoder's unfrozen LLM params (e.g. last-N
+            # layers + final norm) are in the optimizer but NOT clipped above, so
+            # a non-finite grad there would corrupt them on step(). Skip the whole
+            # optimizer step if ANY trainable grad is non-finite (standard
+            # divergence guard; bf16 has no GradScaler to do this for us).
+            step_grads_finite = True
+            for group in self.optimizer.param_groups:
+                for param in group["params"]:
+                    if param.grad is not None and not torch.isfinite(param.grad).all():
+                        step_grads_finite = False
+                        break
+                if not step_grads_finite:
+                    break
+
+            if not step_grads_finite:
+                self._nonfinite_step_count = getattr(self, "_nonfinite_step_count", 0) + 1
+                if getattr(self.config, "is_ref_device", True) and self._nonfinite_step_count <= 20:
+                    print(f"[SigLIP] Skipping optimizer step with non-finite grads "
+                          f"(count={self._nonfinite_step_count}, opt_step={optimizer_step}).")
+            elif self.scaler is not None:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
@@ -1449,18 +1688,29 @@ class SiglipPhase1Runner(BaseRunner):
                 )
 
         logits_detached = logits.detach()
+        if report_mode:
+            metrics_labels = report_labels
+            metrics_mask = report_mask
+            metrics_candidate_vocab = logits_detached.size(1)
+        else:
+            metrics_labels = labels
+            metrics_mask = mask
+            metrics_candidate_vocab = len(text_ids)
         with torch.no_grad():
-            metrics_logits = self._collapse_yes_no_logits(logits_detached, text_ids)
+            if report_mode:
+                metrics_logits = logits_detached
+            else:
+                metrics_logits = self._collapse_yes_no_logits(logits_detached, text_ids)
             neg_inf = float("-inf")
-            masked_logits = metrics_logits.masked_fill(~mask, neg_inf).to(torch.float32)
+            masked_logits = metrics_logits.masked_fill(~metrics_mask, neg_inf).to(torch.float32)
             probs = torch.softmax(masked_logits, dim=1)
-            pos_mask = (labels > 0.5) & mask
-            neg_mask = (~pos_mask) & mask
+            pos_mask = (metrics_labels > 0.5) & metrics_mask
+            neg_mask = (~pos_mask) & metrics_mask
             row_pos_mass = (probs * pos_mask).sum(dim=1)
             row_neg_mass = (probs * neg_mask).sum(dim=1)
             pos_prob_sum = row_pos_mass.sum().item()
             neg_prob_sum = row_neg_mass.sum().item()
-            row_count = mask.size(0)
+            row_count = metrics_mask.size(0)
             valid_rows = int(pos_mask.any(dim=1).sum().item())
 
         loss_numerator = float(loss.detach().cpu()) * self.grad_accum * max(valid_rows, 1)
@@ -1471,8 +1721,8 @@ class SiglipPhase1Runner(BaseRunner):
             "pos_prob_sum": pos_prob_sum,
             "neg_prob_sum": neg_prob_sum,
             "row_count": row_count,
-            "candidate_mask_sum": float(mask.sum().item()),
-            "candidate_vocab": len(text_ids),
+            "candidate_mask_sum": float(metrics_mask.sum().item()),
+            "candidate_vocab": metrics_candidate_vocab,
             "siglip_loss_sum": siglip_loss_value * max(valid_rows, 1),
             "group_loss_sum": group_loss_value * max(valid_rows, 1),
             "lm_loss_sum": ce_loss_value * ce_sample_count,
@@ -1521,6 +1771,8 @@ class SiglipPhase1Runner(BaseRunner):
                 dynamic_ncols=True,
             )
 
+        report_mode = self.contrastive_text_mode == "report"
+        report_recall_logged = False
         batch_count = 0
         for batch in iterator:
             batch_count += 1
@@ -1530,6 +1782,53 @@ class SiglipPhase1Runner(BaseRunner):
             text_ids: List[str] = batch["text_ids"]
             ecg_ids: List[str] = batch.get("ecg_ids", [""] * len(signals))
             reports: List[str] = batch.get("reports", [""] * len(ecg_ids))
+
+            if report_mode:
+                bridge_inputs = self._compute_bridge_inputs(signals)
+                pooled, _ = self.bridge(**bridge_inputs)
+                pooled = F.normalize(pooled, dim=-1)
+                report_embs = self.report_text_embedder.embed(reports)
+                report_embs = report_embs.to(device=pooled.device, dtype=pooled.dtype)
+                scale = self.bridge.temperature()
+                r_loss, r_logits = self._report_infonce_loss(
+                    ecg_feats=pooled,
+                    report_embs=report_embs,
+                    reports=list(reports),
+                    scale=scale,
+                )
+                b = pooled.size(0)
+                r_labels = torch.eye(b, device=pooled.device)
+                r_mask = torch.isfinite(r_logits)
+                masked = r_logits.masked_fill(~r_mask, float("-inf")).to(torch.float32)
+                probs = torch.softmax(masked, dim=1)
+                pos_mask = (r_labels > 0.5) & r_mask
+                neg_mask = (~pos_mask) & r_mask
+                pos_mass_sum += (probs * pos_mask).sum().item()
+                neg_mass_sum += (probs * neg_mask).sum().item()
+                row_counter += b
+                total_loss += float(r_loss.item()) * b
+                total_pairs += b
+                total_siglip_loss += float(r_loss.item()) * b
+                total_masked_candidates += float(r_mask.sum().item())
+                total_rows += b
+                candidate_vocab_sum += b
+                candidate_vocab_count += 1
+                batch_recalls = compute_recall_at_many(masked, r_labels, ks=recall_keys)
+                for k, (value_sum, count) in batch_recalls.items():
+                    recall_sums[k] += value_sum
+                    recall_counts[k] += count
+                # Log good/bad recall examples once per validation (first batch).
+                if not report_recall_logged:
+                    self._log_recall_examples(
+                        ecg_feats=pooled,
+                        report_embs=report_embs,
+                        reports=list(reports),
+                        ecg_ids=list(ecg_ids),
+                        scale=scale,
+                        epoch=epoch,
+                    )
+                    report_recall_logged = True
+                continue
 
             text_indices = [self.text_id_to_idx[tid] for tid in text_ids]
             text_vecs = self.text_embeddings[text_indices]
@@ -1903,8 +2202,15 @@ class SiglipPhase1Runner(BaseRunner):
         return metrics
 
     def _compute_bridge_inputs(self, signals: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Extract frozen tokenizer features or codes for bridge consumption."""
-        with torch.no_grad():
+        """Extract tokenizer features or codes for bridge consumption.
+
+        When ``train_encoder`` is True the encoder forward runs WITH autograd so
+        gradients from the contrastive loss flow into the raw signal encoder.
+        Otherwise (default) the whole feature extraction is wrapped in no_grad.
+        """
+        train_encoder = bool(getattr(self, "train_encoder", False))
+        encoder_ctx = torch.enable_grad() if train_encoder else torch.no_grad()
+        with encoder_ctx:
             encoder_feats = self.encoder(signals)
             features: torch.Tensor
             codes = None
@@ -1912,7 +2218,10 @@ class SiglipPhase1Runner(BaseRunner):
             if self.quantizer is not None and self.use_quantized_inputs:
                 keep = getattr(self.config, "num_codebooks_kept", None)
                 offset_cfg = getattr(self.config, "codebook_offset", 0)
-                quantized_outputs = self.quantizer(encoder_feats, return_all_codes=True)
+                # The quantizer is frozen; on the quantized path do not propagate
+                # encoder gradients through it (Phase A uses the continuous path).
+                quantizer_input = encoder_feats.detach() if train_encoder else encoder_feats
+                quantized_outputs = self.quantizer(quantizer_input, return_all_codes=True)
                 if len(quantized_outputs) == 4:
                     quantized, indices, _, all_codes = quantized_outputs
                 else:
@@ -2260,6 +2569,12 @@ class SiglipPhase1Runner(BaseRunner):
 
         if ecg_to_codes and self.decoder is not None:
             ecg_items = list(ecg_to_codes.items())
+            # Cap the number of full report generations (inspection-only). On a
+            # 27B decoder, generating all ~3.6k val reports costs ~7h/epoch and
+            # blocks the next epoch; a small sample is enough for qualitative CSV.
+            gen_cap = int(getattr(self.config, "val_report_generation_max_ecgs", 0) or 0)
+            if gen_cap > 0 and len(ecg_items) > gen_cap:
+                ecg_items = ecg_items[:gen_cap]
             batch_size = self.report_generation_batch_size
             for start in range(0, len(ecg_items), batch_size):
                 batch = ecg_items[start : start + batch_size]
@@ -2680,7 +2995,19 @@ class SiglipPhase1Runner(BaseRunner):
             attention_mask=attention_mask,
             labels=labels,
         )
-        return outputs.loss
+        loss = outputs.loss
+        # NaN guard: a microbatch whose labels are ALL ignore_index makes HF's
+        # cross-entropy average over zero valid tokens -> NaN (more likely with
+        # small ce_max_samples_per_batch). bf16 overflow can also yield non-finite
+        # loss. Returning None makes the caller skip the CE contribution for this
+        # step rather than poisoning the optimized loss / decoder gradients.
+        if loss is None or not torch.isfinite(loss):
+            self._ce_nonfinite_count = getattr(self, "_ce_nonfinite_count", 0) + 1
+            if getattr(self.config, "is_ref_device", True) and self._ce_nonfinite_count <= 20:
+                print(f"[SigLIP] Skipping non-finite CE loss "
+                      f"(count={self._ce_nonfinite_count}, n_prompts={len(prompts)}).")
+            return None
+        return loss
 
     def _get_report_prompt_tensors(self) -> Tuple[torch.Tensor, torch.Tensor, int, str]:
         if self._report_prompt_cache is not None:

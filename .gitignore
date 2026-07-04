@@ -25,5 +25,20 @@ ECG_tokenizer/
 tmp/
 hooks/
 *.npy
+autoresearch/run.log
+autoresearch/run_1.0.log
+autoresearch/run_1.5.log
+autoresearch/results.tsv
+autoresearch/pid_*.txt
+# secrets
+.env
 .claude/
 logs/
+
+# experiment scratch / artifacts (kept local, out of version control)
+autoresearch/
+analysis/
+ralph/
+data/*.jsonl
+data/*.npz
+data/*.parquet

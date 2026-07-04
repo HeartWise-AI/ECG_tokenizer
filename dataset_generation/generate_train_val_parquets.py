@@ -46,15 +46,46 @@ import pandas as pd
 
 from utils.constants import ECG_PATTERNS, DEEPECG_CATEGORIES
 
+import json as _json
 
-# Category-specific question templates for clarity
+
+def _load_category_questions() -> Dict[str, List[str]]:
+    """Load expanded prompt variations if available, else use defaults."""
+    variations_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "prompt_variations.json"
+    )
+    _cat_var_map = {
+        "RHYTHM": "category_rhythm",
+        "CONDUCTION": "category_conduction",
+        "CHAMBER ENLARGEMENT": "category_chamber_enlargement",
+        "INFARCT, ISCHEMIA": "category_infarct_ischemia",
+        "PERICARDITIS": "category_pericarditis",
+        "OTHER": "category_other",
+    }
+    defaults = {
+        "RHYTHM": ["What is the cardiac rhythm on this ECG?"],
+        "CONDUCTION": ["What is the main conduction abnormality on this ECG?"],
+        "CHAMBER ENLARGEMENT": ["Which chamber enlargement is present?"],
+        "INFARCT, ISCHEMIA": ["What ischemic or infarct pattern best describes this ECG?"],
+        "PERICARDITIS": ["Are there signs of pericarditis?"],
+        "OTHER": ["What other ECG finding is present?"],
+    }
+    if os.path.exists(variations_path):
+        with open(variations_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        for cat, var_key in _cat_var_map.items():
+            if var_key in data and data[var_key]:
+                defaults[cat] = data[var_key]
+        print(f"Loaded prompt variations: {', '.join(f'{k}={len(v)}' for k, v in defaults.items())}")
+    return defaults
+
+
+# Category-specific question templates (expanded from prompt_variations.json if available)
+CATEGORY_QUESTION_POOLS: Dict[str, List[str]] = _load_category_questions()
+
+# Legacy single-question dict (kept for backward compat but unused in new code)
 CATEGORY_QUESTIONS: Dict[str, str] = {
-    "RHYTHM": "What is the cardiac rhythm on this ECG?",
-    "CONDUCTION": "What is the main conduction abnormality on this ECG?",
-    "CHAMBER ENLARGEMENT": "Which chamber enlargement is present?",
-    "INFARCT, ISCHEMIA": "What ischemic or infarct pattern best describes this ECG?",
-    "PERICARDITIS": "Are there signs of pericarditis?",
-    "OTHER": "What other ECG finding is present?",
+    k: v[0] for k, v in CATEGORY_QUESTION_POOLS.items()
 }
 
 
@@ -146,7 +177,8 @@ def _examples_from_df(df: pd.DataFrame, n: int, rng: random.Random) -> pd.DataFr
             answer = "No abnormality"
             category = "RHYTHM"
         else:
-            question = CATEGORY_QUESTIONS.get(category, "What is the primary ECG finding?")
+            pool = CATEGORY_QUESTION_POOLS.get(category, ["What is the primary ECG finding?"])
+            question = random.choice(pool)
             answer = label
 
         rec: Dict[str, Any] = {
@@ -203,7 +235,8 @@ def _cf_examples_from_df(df: pd.DataFrame, n: int, rng: random.Random) -> List[D
             positives = [lab for lab in cat_labels if _is_positive(row.get(lab))]
             gt_answers = positives if positives else ["No abnormality"]
             gt_indices = [candidates.index(a) if a in candidates else len(candidates)-1 for a in gt_answers]
-            question = CATEGORY_QUESTIONS.get(category, "What is the primary ECG finding?")
+            pool = CATEGORY_QUESTION_POOLS.get(category, ["What is the primary ECG finding?"])
+            question = random.choice(pool)
             out.append({
                 "ecg_id": ecg_id,
                 "signal_path": str(signal_path),

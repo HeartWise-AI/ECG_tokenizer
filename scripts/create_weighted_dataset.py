@@ -8,14 +8,27 @@ minority class samples during training without downsampling any data.
 """
 
 import argparse
+import re
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 
+def _normalize_answer(answer: str) -> str:
+    return " ".join(str(answer).lower().split())
+
+
+def _contains_phrase(answer: str, phrase: str) -> bool:
+    return re.search(rf"\b{re.escape(phrase)}\b", answer) is not None
+
+
+def _contains_any_phrase(answer: str, phrases: list[str]) -> bool:
+    return any(_contains_phrase(answer, phrase) for phrase in phrases)
+
+
 def detect_lvef_class(answer: str) -> str:
     """Detect LVEF class from answer text."""
-    answer_lower = answer.lower()
+    answer_lower = _normalize_answer(answer)
     if "severely reduced" in answer_lower:
         return "severely_reduced"
     elif "moderately reduced" in answer_lower:
@@ -29,41 +42,68 @@ def detect_lvef_class(answer: str) -> str:
 
 def detect_afib_risk_class(answer: str) -> str:
     """Detect AFib risk class from answer text."""
-    answer_lower = answer.lower()
-    if answer_lower.startswith("yes") or "high risk" in answer_lower:
-        return "high"
-    elif answer_lower.startswith("low") or "unlikely" in answer_lower:
+    answer_lower = _normalize_answer(answer)
+    low_patterns = [
+        "low risk",
+        "unlikely",
+        "not high risk",
+        "not at high risk",
+        "no high risk",
+        "without high risk",
+    ]
+    if answer_lower.startswith(("no", "low")) or _contains_any_phrase(answer_lower, low_patterns):
         return "low"
+    elif answer_lower.startswith("yes") or _contains_phrase(answer_lower, "high risk"):
+        return "high"
     return "unknown"
 
 
 def detect_shd_class(answer: str) -> str:
     """Detect structural heart disease class from answer text."""
-    answer_lower = answer.lower()
-    if answer_lower.startswith("yes") or "present" in answer_lower:
-        return "present"
-    elif answer_lower.startswith("no"):
+    answer_lower = _normalize_answer(answer)
+    absent_patterns = [
+        "no evidence",
+        "not present",
+        "without structural heart disease",
+        "structural heart disease absent",
+        "absent",
+    ]
+    if answer_lower.startswith("no") or _contains_any_phrase(answer_lower, absent_patterns):
         return "absent"
+    elif answer_lower.startswith("yes") or _contains_phrase(answer_lower, "present"):
+        return "present"
     return "unknown"
 
 
 def detect_acs_severity_class(answer: str) -> str:
     """Detect ACS severity class from answer text."""
-    answer_lower = answer.lower()
-    if answer_lower.startswith("yes") or "acute coronary occlusion" in answer_lower:
-        return "acute_occlusion"
-    elif "chronic occlusion" in answer_lower:
-        return "chronic"
-    elif "no evidence of coronary" in answer_lower or "no coronary disease" in answer_lower:
+    answer_lower = _normalize_answer(answer)
+    no_disease_patterns = [
+        "no evidence of coronary",
+        "no coronary disease",
+    ]
+    no_acute_patterns = [
+        "no acute coronary occlusion",
+        "not acute coronary occlusion",
+        "without acute coronary occlusion",
+        "no evidence of acute coronary occlusion",
+        "acute coronary occlusion is not present",
+        "acute coronary occlusion is absent",
+    ]
+    if _contains_any_phrase(answer_lower, no_disease_patterns):
         return "no_disease"
-    elif answer_lower.startswith("no"):
+    elif _contains_phrase(answer_lower, "chronic occlusion"):
+        return "chronic"
+    elif answer_lower.startswith("no") or _contains_any_phrase(answer_lower, no_acute_patterns):
         return "obstructive_no_acute"
+    elif answer_lower.startswith("yes") or _contains_phrase(answer_lower, "acute coronary occlusion"):
+        return "acute_occlusion"
     return "unknown"
 
 
 def detect_culprit_artery_class(answer: str) -> str:
     """Detect culprit artery class from answer text."""
-    answer_lower = answer.lower()
+    answer_lower = _normalize_answer(answer)
     if "circumflex" in answer_lower or "lcx" in answer_lower:
         return "lcx"
     elif "lad" in answer_lower:

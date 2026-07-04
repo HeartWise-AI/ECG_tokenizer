@@ -282,6 +282,14 @@ class ECGTextStage1Project(BaseProject):
         raise NotImplementedError("Inference is not supported for Stage-1 project.")
 
     # ------------------------------------------------------------------
+    def _setup_validation_objects(self) -> Dict[str, Any]:  # type: ignore[override]
+        raise NotImplementedError("Validation mode is not supported for Stage-1 project.")
+
+    # ------------------------------------------------------------------
+    def _setup_test_objects(self) -> Dict[str, Any]:  # type: ignore[override]
+        raise NotImplementedError("Test mode is not supported for Stage-1 project.")
+
+    # ------------------------------------------------------------------
     def _setup_extraction_objects(self) -> Dict[str, Any]:  # type: ignore[override]
         raise NotImplementedError("Embedding extraction is not supported for Stage-1 project.")
 

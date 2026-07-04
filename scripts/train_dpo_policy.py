@@ -139,7 +139,13 @@ def set_trainable(model: torch.nn.Module, mode: str, regex: Optional[str] = None
     for _, param in model.named_parameters():
         param.requires_grad = False
 
-    if mode == "all":
+    if regex:
+        import re as _re
+        pattern = _re.compile(regex)
+        for name, param in model.named_parameters():
+            if pattern.search(name):
+                param.requires_grad = True
+    elif mode == "all":
         for _, param in model.named_parameters():
             param.requires_grad = True
     elif mode == "lora":
@@ -153,12 +159,6 @@ def set_trainable(model: torch.nn.Module, mode: str, regex: Optional[str] = None
     elif mode == "projection":
         for name, param in model.named_parameters():
             if "projection" in name or "proj" in name:
-                param.requires_grad = True
-    elif regex:
-        import re as _re
-        pattern = _re.compile(regex)
-        for name, param in model.named_parameters():
-            if pattern.search(name):
                 param.requires_grad = True
     else:
         raise ValueError(f"Unknown trainable mode: {mode}")
@@ -425,7 +425,7 @@ def _expand_labels_with_ecg(
         embed_layer=decoder.llm_model.get_input_embeddings(),
     )
     if merged is not None:
-        _, _, _, labels_out = merged
+        labels_out = merged[3]
         if labels_out is None:
             raise ValueError("Failed to expand labels with ECG injection.")
         return labels_out
@@ -534,7 +534,12 @@ def main() -> None:
         p.requires_grad = False
 
     set_trainable(policy, args.trainable, regex=args.trainable_regex)
-    policy.train()
+    if args.trainable == "lora" and args.trainable_regex is None:
+        # Keep encoder BN/dropout buffers frozen. LoRA parameters still receive
+        # gradients because PEFT adapters are active with inference_mode=False.
+        policy.eval()
+    else:
+        policy.train()
 
     max_length = args.max_length or int(getattr(config, "max_token_length", 640))
 

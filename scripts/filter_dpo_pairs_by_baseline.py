@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -182,7 +183,7 @@ def _expand_labels_with_ecg(
         embed_layer=decoder.llm_model.get_input_embeddings(),
     )
     if merged is not None:
-        _, _, _, labels_out = merged
+        labels_out = merged[3]
         if labels_out is None:
             raise ValueError("Failed to expand labels with ECG injection.")
         return labels_out
@@ -358,6 +359,28 @@ def collate_with_idx(batch):
     }
 
 
+def _atomic_json_dump(path: str, payload: dict) -> None:
+    output_dir = os.path.dirname(path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=output_dir,
+            prefix=f".{os.path.basename(path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = f.name
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Filter/reweight DPO pairs using baseline margin (optionally category-aware).")
     parser.add_argument("--base_checkpoint", default=None, help="Base (pre-DPO) checkpoint path (required unless --use_existing_margin).")
@@ -426,8 +449,21 @@ def main():
     per_cat_min_margin_used: dict[str, list[float]] = defaultdict(list)
     per_cat_weight_mult_used: dict[str, list[float]] = defaultdict(list)
 
-    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-    out_f = open(args.output, "w", encoding="utf-8")
+    if not args.use_existing_margin and not args.base_checkpoint:
+        raise ValueError("--base_checkpoint is required unless --use_existing_margin is set.")
+
+    output_dir = os.path.dirname(args.output) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    out_tmp_path = None
+    out_f = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=output_dir,
+        prefix=f".{os.path.basename(args.output)}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    out_tmp_path = out_f.name
 
     def _write_record(record: dict, margin: float, effective_category: str, rule: Optional[BucketRule]) -> None:
         nonlocal kept
@@ -466,180 +502,183 @@ def main():
         per_cat_min_margin_used[effective_category].append(min_margin_used)
         per_cat_weight_mult_used[effective_category].append(weight_mult)
 
-    if args.use_existing_margin:
-        # No model forward - just (re)filter/reweight using precomputed margins.
-        with open(args.pairs, "r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if args.max_samples is not None and i >= int(args.max_samples):
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                record = json.loads(line)
-                if args.baseline_margin_key not in record:
-                    raise ValueError(
-                        f"Missing '{args.baseline_margin_key}' in record {i}. "
-                        "Remove --use_existing_margin or precompute margins first."
-                    )
-                margin = float(record[args.baseline_margin_key])
-                effective_category, rule = _effective_category_and_overrides(record)
-
-                total += 1
-                all_margins.append(margin)
-                per_cat_total[effective_category] += 1
-                per_cat_all_margins[effective_category].append(margin)
-                _write_record(record, margin, effective_category, rule)
-
-        out_f.close()
-    else:
-        if not args.base_checkpoint:
-            raise ValueError("--base_checkpoint is required unless --use_existing_margin is set.")
-
-        device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
-        model, tokenizer, config = load_model(args.base_checkpoint, device)
-
-        max_length = int(getattr(config, "max_token_length", 640))
-        dataset = DPOPairDataset(
-            path=args.pairs,
-            tokenizer=tokenizer,
-            config=config,
-            max_length=max_length,
-            waveform_key=getattr(config, "waveform_key", "waveform_path"),
-            prompt_key=getattr(config, "prompt_key", "prompt"),
-            chosen_key=getattr(config, "chosen_key", "chosen"),
-            rejected_key=getattr(config, "rejected_key", "rejected"),
-            weight_key=getattr(config, "weight_key", "weight"),
-        )
-
-        if args.max_samples and args.max_samples < len(dataset):
-            dataset = Subset(dataset, list(range(int(args.max_samples))))
-
-        loader = DataLoader(
-            dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=True,
-            collate_fn=collate_with_idx,
-        )
-
-        use_autocast = device.type == "cuda"
-        autocast_dtype = torch.bfloat16 if use_autocast else torch.float32
-
-        with torch.no_grad():
-            for batch in tqdm(loader, desc="Filtering", total=len(loader)):
-                signal = batch["signal"].to(device)
-                prompt_input_ids = batch["prompt_input_ids"].to(device)
-                prompt_attention_mask = batch["prompt_attention_mask"].to(device)
-
-                chosen_input_ids = batch["chosen_input_ids"].to(device)
-                chosen_attention_mask = batch["chosen_attention_mask"].to(device)
-                chosen_labels = batch["chosen_labels"].to(device)
-                rejected_input_ids = batch["rejected_input_ids"].to(device)
-                rejected_attention_mask = batch["rejected_attention_mask"].to(device)
-                rejected_labels = batch["rejected_labels"].to(device)
-
-                with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_autocast):
-                    logits_c, labels_c = _forward_logits_and_labels(
-                        model,
-                        signal,
-                        chosen_input_ids,
-                        chosen_attention_mask,
-                        chosen_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
-                    )
-                    logits_r, labels_r = _forward_logits_and_labels(
-                        model,
-                        signal,
-                        rejected_input_ids,
-                        rejected_attention_mask,
-                        rejected_labels,
-                        prompt_input_ids,
-                        prompt_attention_mask,
-                    )
-                    logp_c = _sequence_logp(logits_c, labels_c)
-                    logp_r = _sequence_logp(logits_r, labels_r)
-
-                margins = (logp_c - logp_r).detach().cpu().tolist()
-                idxs = batch["idx"].detach().cpu().tolist()
-
-                for idx, margin in zip(idxs, margins):
-                    record = dataset.dataset.records[idx] if isinstance(dataset, Subset) else dataset.records[idx]
+    try:
+        if args.use_existing_margin:
+            # No model forward - just (re)filter/reweight using precomputed margins.
+            with open(args.pairs, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if args.max_samples is not None and i >= int(args.max_samples):
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    if args.baseline_margin_key not in record:
+                        raise ValueError(
+                            f"Missing '{args.baseline_margin_key}' in record {i}. "
+                            "Remove --use_existing_margin or precompute margins first."
+                        )
+                    margin = float(record[args.baseline_margin_key])
                     effective_category, rule = _effective_category_and_overrides(record)
 
                     total += 1
                     all_margins.append(margin)
                     per_cat_total[effective_category] += 1
                     per_cat_all_margins[effective_category].append(margin)
-                    _write_record(record, float(margin), effective_category, rule)
+                    _write_record(record, margin, effective_category, rule)
+        else:
+            device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
+            model, tokenizer, config = load_model(args.base_checkpoint, device)
+
+            max_length = int(getattr(config, "max_token_length", 640))
+            dataset = DPOPairDataset(
+                path=args.pairs,
+                tokenizer=tokenizer,
+                config=config,
+                max_length=max_length,
+                waveform_key=getattr(config, "waveform_key", "waveform_path"),
+                prompt_key=getattr(config, "prompt_key", "prompt"),
+                chosen_key=getattr(config, "chosen_key", "chosen"),
+                rejected_key=getattr(config, "rejected_key", "rejected"),
+                weight_key=getattr(config, "weight_key", "weight"),
+            )
+
+            if args.max_samples and args.max_samples < len(dataset):
+                dataset = Subset(dataset, list(range(int(args.max_samples))))
+
+            loader = DataLoader(
+                dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=True,
+                collate_fn=collate_with_idx,
+            )
+
+            use_autocast = device.type == "cuda"
+            autocast_dtype = torch.bfloat16 if use_autocast else torch.float32
+
+            with torch.no_grad():
+                for batch in tqdm(loader, desc="Filtering", total=len(loader)):
+                    signal = batch["signal"].to(device)
+                    prompt_input_ids = batch["prompt_input_ids"].to(device)
+                    prompt_attention_mask = batch["prompt_attention_mask"].to(device)
+
+                    chosen_input_ids = batch["chosen_input_ids"].to(device)
+                    chosen_attention_mask = batch["chosen_attention_mask"].to(device)
+                    chosen_labels = batch["chosen_labels"].to(device)
+                    rejected_input_ids = batch["rejected_input_ids"].to(device)
+                    rejected_attention_mask = batch["rejected_attention_mask"].to(device)
+                    rejected_labels = batch["rejected_labels"].to(device)
+
+                    with torch.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_autocast):
+                        logits_c, labels_c = _forward_logits_and_labels(
+                            model,
+                            signal,
+                            chosen_input_ids,
+                            chosen_attention_mask,
+                            chosen_labels,
+                            prompt_input_ids,
+                            prompt_attention_mask,
+                        )
+                        logits_r, labels_r = _forward_logits_and_labels(
+                            model,
+                            signal,
+                            rejected_input_ids,
+                            rejected_attention_mask,
+                            rejected_labels,
+                            prompt_input_ids,
+                            prompt_attention_mask,
+                        )
+                        logp_c = _sequence_logp(logits_c, labels_c)
+                        logp_r = _sequence_logp(logits_r, labels_r)
+
+                    margins = (logp_c - logp_r).detach().cpu().tolist()
+                    idxs = batch["idx"].detach().cpu().tolist()
+
+                    for idx, margin in zip(idxs, margins):
+                        record = dataset.dataset.records[idx] if isinstance(dataset, Subset) else dataset.records[idx]
+                        effective_category, rule = _effective_category_and_overrides(record)
+
+                        total += 1
+                        all_margins.append(margin)
+                        per_cat_total[effective_category] += 1
+                        per_cat_all_margins[effective_category].append(margin)
+                        _write_record(record, float(margin), effective_category, rule)
 
         out_f.close()
 
-    def _summary(vals):
-        if not vals:
-            return {}
-        vals_sorted = sorted(vals)
-        n = len(vals_sorted)
-        def _pct(p):
-            if n == 1:
-                return vals_sorted[0]
-            idx = int(round(p * (n - 1)))
-            return vals_sorted[idx]
-        return {
-            "mean": sum(vals_sorted) / n,
-            "median": _pct(0.5),
-            "p05": _pct(0.05),
-            "p25": _pct(0.25),
-            "p75": _pct(0.75),
-            "p95": _pct(0.95),
+        def _summary(vals):
+            if not vals:
+                return {}
+            vals_sorted = sorted(vals)
+            n = len(vals_sorted)
+            def _pct(p):
+                if n == 1:
+                    return vals_sorted[0]
+                idx = int(round(p * (n - 1)))
+                return vals_sorted[idx]
+            return {
+                "mean": sum(vals_sorted) / n,
+                "median": _pct(0.5),
+                "p05": _pct(0.05),
+                "p25": _pct(0.25),
+                "p75": _pct(0.75),
+                "p95": _pct(0.95),
+            }
+
+        stats = {
+            "total": total,
+            "kept": kept,
+            "kept_ratio": kept / total if total else 0.0,
+            "min_margin": args.min_margin,
+            "all_margins": _summary(all_margins),
+            "kept_margins": _summary(kept_margins),
+            "output": args.output,
         }
 
-    stats = {
-        "total": total,
-        "kept": kept,
-        "kept_ratio": kept / total if total else 0.0,
-        "min_margin": args.min_margin,
-        "all_margins": _summary(all_margins),
-        "kept_margins": _summary(kept_margins),
-        "output": args.output,
-    }
+        # Per-category stats
+        per_category = {}
+        for cat in sorted(per_cat_total.keys()):
+            total_cat = int(per_cat_total[cat])
+            kept_cat = int(per_cat_kept.get(cat, 0))
+            min_margin_used_mean = (
+                sum(per_cat_min_margin_used.get(cat, [])) / len(per_cat_min_margin_used.get(cat, []))
+                if per_cat_min_margin_used.get(cat) else None
+            )
+            weight_mult_used_mean = (
+                sum(per_cat_weight_mult_used.get(cat, [])) / len(per_cat_weight_mult_used.get(cat, []))
+                if per_cat_weight_mult_used.get(cat) else None
+            )
+            per_category[cat] = {
+                "total": total_cat,
+                "kept": kept_cat,
+                "kept_ratio": (kept_cat / total_cat) if total_cat else 0.0,
+                "min_margin_config": category_min_margins.get(cat, None),
+                "weight_mult_config": category_weight_mult.get(cat, None),
+                "min_margin_used_mean": min_margin_used_mean,
+                "weight_mult_used_mean": weight_mult_used_mean,
+                "all_margins": _summary(per_cat_all_margins.get(cat, [])),
+                "kept_margins": _summary(per_cat_kept_margins.get(cat, [])),
+                "weight_base_mean": (sum(per_cat_weight_base.get(cat, [])) / len(per_cat_weight_base.get(cat, [])))
+                if per_cat_weight_base.get(cat) else None,
+                "weight_final_mean": (sum(per_cat_weight_final.get(cat, [])) / len(per_cat_weight_final.get(cat, [])))
+                if per_cat_weight_final.get(cat) else None,
+            }
+        stats["per_effective_category"] = per_category
 
-    # Per-category stats
-    per_category = {}
-    for cat in sorted(per_cat_total.keys()):
-        total_cat = int(per_cat_total[cat])
-        kept_cat = int(per_cat_kept.get(cat, 0))
-        min_margin_used_mean = (
-            sum(per_cat_min_margin_used.get(cat, [])) / len(per_cat_min_margin_used.get(cat, []))
-            if per_cat_min_margin_used.get(cat) else None
-        )
-        weight_mult_used_mean = (
-            sum(per_cat_weight_mult_used.get(cat, [])) / len(per_cat_weight_mult_used.get(cat, []))
-            if per_cat_weight_mult_used.get(cat) else None
-        )
-        per_category[cat] = {
-            "total": total_cat,
-            "kept": kept_cat,
-            "kept_ratio": (kept_cat / total_cat) if total_cat else 0.0,
-            "min_margin_config": category_min_margins.get(cat, None),
-            "weight_mult_config": category_weight_mult.get(cat, None),
-            "min_margin_used_mean": min_margin_used_mean,
-            "weight_mult_used_mean": weight_mult_used_mean,
-            "all_margins": _summary(per_cat_all_margins.get(cat, [])),
-            "kept_margins": _summary(per_cat_kept_margins.get(cat, [])),
-            "weight_base_mean": (sum(per_cat_weight_base.get(cat, [])) / len(per_cat_weight_base.get(cat, [])))
-            if per_cat_weight_base.get(cat) else None,
-            "weight_final_mean": (sum(per_cat_weight_final.get(cat, [])) / len(per_cat_weight_final.get(cat, [])))
-            if per_cat_weight_final.get(cat) else None,
-        }
-    stats["per_effective_category"] = per_category
+        print(json.dumps(stats, indent=2))
 
-    print(json.dumps(stats, indent=2))
+        if args.stats_json:
+            _atomic_json_dump(args.stats_json, stats)
 
-    if args.stats_json:
-        with open(args.stats_json, "w", encoding="utf-8") as f:
-            json.dump(stats, f, indent=2)
+        os.replace(out_tmp_path, args.output)
+        out_tmp_path = None
+    finally:
+        if not out_f.closed:
+            out_f.close()
+        if out_tmp_path and os.path.exists(out_tmp_path):
+            os.unlink(out_tmp_path)
 
 
 if __name__ == "__main__":

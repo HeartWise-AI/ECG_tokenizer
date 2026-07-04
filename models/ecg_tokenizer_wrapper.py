@@ -898,6 +898,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         bridge_codebook_dropout: Optional[float] = None,
         bridge_cross_every: Optional[int] = None,
         instruction_dropout: float = 0.0,
+        bridge_use_continuous_features: bool = False,
+        continuous_num_tokens: int = 32,
+        continuous_num_heads: int = 8,
+        bridge_continuous_only: bool = False,
         use_lora: bool = False,
         lora_config: Optional[dict[str, Any]] = None,
         tokenizer: Optional[Any] = None,
@@ -924,6 +928,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         pattern_loss_weight: Optional[float] = None,
         pattern_label_count: Optional[int] = None,
         pattern_bce_pos_weight: Optional[Any] = None,
+        lvef_loss_weight: Optional[float] = None,
+        lvef_head_loss_weight: Optional[float] = None,
+        shd_head_loss_weight: Optional[float] = None,
+        afib_head_loss_weight: Optional[float] = None,
         debug_ecg_injection: bool = False,
     ):
         """
@@ -957,6 +965,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.bridge_codebook_dropout = bridge_codebook_dropout
         self.bridge_cross_every = bridge_cross_every
         self.instruction_dropout = instruction_dropout
+        self.use_continuous_features = bool(bridge_use_continuous_features)
+        self.continuous_only = bool(bridge_continuous_only)
         self.pattern_loss_weight = pattern_loss_weight
         self.pattern_label_count = pattern_label_count
         self.pattern_bce_pos_weight = pattern_bce_pos_weight
@@ -1039,7 +1049,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_add_modality_embed': bridge_add_modality_embed,
                         'bridge_add_cls_token': bridge_add_cls_token,
                     })
-                elif decoder_name == ModelName.MEDGEMMA_DECODER.value or decoder_name == "MedGemma_Decoder":
+                elif decoder_name in {
+                    ModelName.MEDGEMMA_DECODER.value,
+                    "MedGemma_Decoder",
+                    ModelName.QWEN_DECODER.value,
+                    "Qwen_Decoder",
+                }:
                     decoder_kwargs.update({
                         'ecg_codebook_size': codebook_size,
                         'num_visual_tokens': num_visual_tokens,
@@ -1067,6 +1082,12 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_add_modality_embed': bridge_add_modality_embed,
                         'bridge_add_cls_token': bridge_add_cls_token,
                         'debug_ecg_injection': debug_ecg_injection,
+                        # P1: continuous-feature Perceiver path
+                        'use_continuous_features': bridge_use_continuous_features,
+                        'continuous_num_tokens': continuous_num_tokens,
+                        'continuous_num_heads': continuous_num_heads,
+                        # Phase B: skip the discrete code path, feed only continuous tokens
+                        'continuous_only': bridge_continuous_only,
                     })
                     # Drop explicit None values for Q-Former-only fields to prevent int/float(None) casts
                     for k in (
@@ -1085,6 +1106,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         decoder_kwargs['pattern_label_count'] = pattern_label_count
                     if pattern_bce_pos_weight is not None:
                         decoder_kwargs['pattern_bce_pos_weight'] = pattern_bce_pos_weight
+                    if lvef_loss_weight is not None:
+                        decoder_kwargs['lvef_loss_weight'] = lvef_loss_weight
+                    if lvef_head_loss_weight is not None:
+                        decoder_kwargs['lvef_head_loss_weight'] = lvef_head_loss_weight
+                    if shd_head_loss_weight is not None:
+                        decoder_kwargs['shd_head_loss_weight'] = shd_head_loss_weight
+                    if afib_head_loss_weight is not None:
+                        decoder_kwargs['afib_head_loss_weight'] = afib_head_loss_weight
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
                 
@@ -1720,6 +1749,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         prompt_input_ids: Optional[torch.Tensor] = None,  # For cross-attention without leakage
         prompt_attention_mask: Optional[torch.Tensor] = None,
         pattern_targets: Optional[torch.Tensor] = None,
+        lvef_gt: Optional[torch.Tensor] = None,
         **kwargs
     )->Union[Dict[str, Any], tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         """
@@ -1776,12 +1806,32 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                     'prompt_input_ids': prompt_input_ids,
                     'prompt_attention_mask': prompt_attention_mask,
                 }
+                # P1: feed the PRE-quantization encoder output (carries the VQ residual)
+                # to the parallel continuous Perceiver path.
+                if self.use_continuous_features:
+                    decoder_inputs['continuous_features'] = features
+                # Multi-ECG: per-row count of ECGs flat-concatenated into ecg_signal.
+                _ecg_counts = kwargs.get('ecg_counts')
+                if _ecg_counts is not None:
+                    decoder_inputs['ecg_counts'] = _ecg_counts
                 if pattern_targets is not None:
                     decoder_inputs['pattern_targets'] = pattern_targets
-                
+                if lvef_gt is not None:
+                    decoder_inputs['lvef_gt'] = lvef_gt
+                # Auxiliary bridge-head targets (masked scalar labels)
+                for _aux_key in ('aux_lvef_gt', 'aux_shd_gt', 'aux_afib_gt'):
+                    _aux_val = kwargs.get(_aux_key)
+                    if _aux_val is not None:
+                        decoder_inputs[_aux_key] = _aux_val
+
                 # Only add quantized_codes for decoders that support it
-                # GPT2 decoder doesn't accept quantized_codes
-                if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:
+                # GPT2 decoder doesn't accept quantized_codes.
+                # Phase B (continuous_only): the encoder no longer matches the VQ codebook, so the
+                # discrete codes are invalid — do NOT pass them; the decoder uses only continuous_features.
+                if (
+                    self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]
+                    and not self.continuous_only
+                ):
                     decoder_inputs['quantized_codes'] = quantized_code_ids
                 
                 if pixel_values is not None:
@@ -1888,7 +1938,10 @@ class ECG_Tokenizer_Wrapper(nn.Module):
             'max_token_length': max_token_length,
             **generate_kwargs,
         }
-        
+        # P1: pass pre-quant features to the continuous Perceiver path during generation.
+        if self.use_continuous_features:
+            decoder_inputs['continuous_features'] = features
+
         # Only add quantized_codes for decoders that support it
         # GPT2 decoder doesn't accept quantized_codes
         if self.decoder_name not in [ModelName.GPT2_DECODER.value, "GPT2_Decoder"]:

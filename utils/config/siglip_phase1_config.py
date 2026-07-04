@@ -86,6 +86,24 @@ class SiglipPhase1Config(HeartWiseConfig):
     bridge_use_cross_attention: bool | None = None
     bridge_intermediate_dim: int | None = None
 
+    # Phase A: train the ECG encoder end-to-end with the contrastive loss.
+    # When False (default) the encoder is frozen and run under no_grad
+    # (fully backward-compatible with all existing SigLIP Phase-1 runs).
+    train_encoder: bool = False
+    # LR for the encoder param group when train_encoder is True. If None,
+    # defaults to lr * 0.1 (resolved in the project at optimizer build time).
+    encoder_lr: float | None = None
+
+    # Phase A-v2: contrastive target source.
+    #   "bank"   -> score ECG features against the fixed 222-label text bank
+    #               (default; fully backward-compatible with all prior runs).
+    #   "report" -> ESI/MERL-style in-batch InfoNCE against per-ECG free-text
+    #               reports embedded with the same text-embedding mechanism.
+    contrastive_text_mode: str = "bank"
+    # Number of good (gt_rank==1) and bad (largest gt_rank) recall examples to
+    # log to a wandb.Table each validation pass when in "report" mode.
+    recall_log_examples: int = 8
+
     # Focal-InfoNCE knobs
     focal_infonce: bool = False
     focal_gamma_pos: float = 0.0
@@ -118,6 +136,13 @@ class SiglipPhase1Config(HeartWiseConfig):
     # Logging of generated token IDs (validation analysis)
     log_generated_token_ids: bool = False
     generated_token_sample_k: int = 50
+
+    # Cap on how many unique val ECGs get a full autoregressive report generated
+    # for the inspection CSV each epoch. 0 = unlimited (legacy behavior). On large
+    # decoders (e.g. MedGemma-27B) generating all ~3.6k val reports takes ~7h/epoch
+    # and only feeds the qualitative CSV — set a small cap (e.g. 64) to keep a
+    # sample without the per-epoch stall.
+    val_report_generation_max_ecgs: int = 0
 
     # Backwards compatibility alias for older configs using `model_name`
     @property

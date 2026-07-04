@@ -84,6 +84,26 @@ class LLMFinetuningConfig(HeartWiseConfig):
     bridge_bias_last_codebook: Optional[float] = None
     bridge_codebook_dropout: Optional[float] = None
     bridge_cross_every: Optional[int] = None
+    # P1: parallel continuous-feature (pre-quantization) Perceiver path. When enabled, the
+    # pre-quant encoder output is resampled into `continuous_num_tokens` soft tokens and
+    # concatenated with the code Q-Former tokens (recovers the VQ residual for morphology
+    # tasks like AFIB/LVEF). Defaults OFF — existing checkpoints/runs are unaffected.
+    bridge_use_continuous_features: bool = False
+    continuous_num_tokens: int = 32
+    continuous_num_heads: int = 8
+    # Phase B: when True, the discrete code/Q-Former path is SKIPPED at runtime and ONLY the
+    # continuous Perceiver tokens are fed to the LLM. Required when the encoder no longer matches
+    # the VQ codebook (e.g. a contrastively fine-tuned v3 encoder), so discrete codes are invalid.
+    # The code bridge is still BUILT (for clean checkpoint/LoRA key loading) but never executed.
+    # Defaults OFF — existing dual-path runs are unaffected.
+    bridge_continuous_only: bool = False
+    # Phase B: optional path to a checkpoint whose `encoder_state_dict` OVERRIDES the encoder
+    # weights after the normal tokenizer load (e.g. a contrastively fine-tuned v3 encoder).
+    contrastive_encoder_checkpoint: Optional[str] = None
+    # P2: unfreeze the VQ-VAE encoder during Stage-3 (codebook/quantizer stay frozen).
+    # Defaults to frozen (True) = current behavior. encoder_lr controls its (low) LR.
+    freeze_encoder: bool = True
+    encoder_lr: Optional[float] = None
     instruction_dropout: float = 0.0
     default_generation_kwargs: Optional[Dict[str, Any]] = None
 
@@ -116,12 +136,24 @@ class LLMFinetuningConfig(HeartWiseConfig):
     messages_column: Optional[str] = None      # JSON chat messages column (overrides prompt/answer columns)
     pattern_label_columns: Tuple[str, ...] = field(default_factory=tuple)  # Multilabel ECG targets
     pattern_loss_weight: float = 0.3
+    lvef_loss_weight: float = 0.0  # Soft-decoding Huber loss for LVEF predictions (0 = disabled)
+    prompt_variations_path: Optional[str] = None  # JSON file with prompt variations per category
 
     # Weighted sampling for minority class upsampling
     use_weighted_sampling: bool = False        # Enable WeightedRandomSampler for training
     sample_weight_column: str = "sample_weight"  # Column containing per-sample weights
     # Optional BCE pos_weight for auxiliary pattern head (float or list of floats)
     pattern_bce_pos_weight: Optional[Any] = None
+
+    # --- Auxiliary discrimination heads on the bridge pooled output (0 = disabled) ---
+    # Each head reads the Q-Former pooled ECG vector and is trained jointly with the LM loss.
+    # Losses are masked per-row: rows whose label column is NaN contribute zero.
+    lvef_head_loss_weight: float = 0.0   # regression head on EF (SmoothL1 on EF/100)
+    shd_head_loss_weight: float = 0.0    # binary BCE head
+    afib_head_loss_weight: float = 0.0   # binary BCE head
+    lvef_head_label_column: str = "deepecho_Visually_Estimated_EF"
+    shd_head_label_column: str = "echonext_shd_binary"
+    afib_head_label_column: str = "afib_label_5y"
     
     # Instruction tuning (with default)
     instruct_mode: bool = False
@@ -216,6 +248,15 @@ class LLMFinetuningConfig(HeartWiseConfig):
     write_val_generations: bool = True            # write val_generations JSON during validation
     # Optional perf knob: skip expensive generation during validation (loss/aux metrics only)
     skip_val_generation: bool = False
+
+    # Stop after N optimizer steps (for autoresearch abbreviated runs)
+    max_train_steps: Optional[int] = None
+
+    # Multi-ECG: column holding a list of waveform paths (temporally-nearby ECGs) per row.
+    # When set, the dataset emits N <start_of_image> anchors and the decoder splices one
+    # ECG block per anchor. None -> legacy single-ECG path (signal_path_column).
+    signal_paths_column: Optional[str] = None
+    max_ecgs: int = 8
 
     def __post_init__(self):
         """Flatten legacy nested LoRA configs into flat fields."""

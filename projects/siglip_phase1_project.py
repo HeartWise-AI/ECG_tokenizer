@@ -5,7 +5,7 @@ import os
 import csv
 import re
 from collections import Counter
-from typing import Any, Dict, Iterable, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -95,6 +95,90 @@ def select_tail_class_ids(
 
     filtered.sort(key=key_fn)
     return filtered[: max(0, int(top_n))]
+
+
+def _pool_token_embeddings(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    embedding_layer: nn.Module,
+) -> torch.Tensor:
+    """Mean-pool input-embedding vectors over non-pad tokens.
+
+    Shared by the fixed text-bank path (`_prepare_text_embeddings`) and the
+    Phase A-v2 per-report path so both use *identical* embedding semantics.
+    Returns L2-normalized [B, H] float embeddings.
+    """
+    mask = attention_mask.unsqueeze(-1).to(dtype=torch.float32)
+    token_embeds = embedding_layer(input_ids)  # [B, T, H]
+    summed = (token_embeds.float() * mask).sum(dim=1)
+    counts = mask.sum(dim=1).clamp_min(1.0)
+    pooled = summed / counts
+    return F.normalize(pooled, dim=-1)
+
+
+class ReportTextEmbedder:
+    """Embed free-text reports with the SAME mechanism used for the text bank.
+
+    Wraps the tokenizer + frozen input-embedding layer of the text tower and
+    exposes a single ``embed(reports) -> [B, H]`` call. Tokenization is cached
+    per unique report string (reports repeat heavily, e.g. "Sinus rhythm"), so
+    the per-step cost is dominated by the (cheap) embedding-lookup + mean-pool,
+    not by the tokenizer.
+    """
+
+    def __init__(
+        self,
+        tokenizer: Any,
+        embedding_layer: nn.Module,
+        max_length: int = 256,
+        device: Optional[torch.device] = None,
+    ) -> None:
+        self.tokenizer = tokenizer
+        self.embedding_layer = embedding_layer
+        self.max_length = int(max_length)
+        self.device = device or next(embedding_layer.parameters()).device
+        for param in self.embedding_layer.parameters():
+            param.requires_grad = False
+        self._tok_cache: Dict[str, tuple[list[int], int]] = {}
+
+    def to(self, device: torch.device) -> "ReportTextEmbedder":
+        self.embedding_layer = self.embedding_layer.to(device)
+        self.device = device
+        return self
+
+    def _tokenize_one(self, text: str) -> tuple[list[int], int]:
+        cached = self._tok_cache.get(text)
+        if cached is not None:
+            return cached
+        ids = self.tokenizer(
+            text if text else " ",
+            add_special_tokens=False,
+            truncation=True,
+            max_length=self.max_length,
+        )["input_ids"]
+        if not ids:
+            # Guarantee at least one token so mean-pool is well defined.
+            pad_id = self.tokenizer.pad_token_id or 0
+            ids = [int(pad_id)]
+        entry = (list(ids), len(ids))
+        self._tok_cache[text] = entry
+        return entry
+
+    @torch.no_grad()
+    def embed(self, reports: Sequence[str]) -> torch.Tensor:
+        """Return L2-normalized [B, H] embeddings for a list of report strings."""
+        tokenized = [self._tokenize_one(str(r)) for r in reports]
+        max_len = max((length for _, length in tokenized), default=1)
+        max_len = max(max_len, 1)
+        pad_id = int(self.tokenizer.pad_token_id or 0)
+        batch_ids = torch.full((len(tokenized), max_len), pad_id, dtype=torch.long)
+        attn = torch.zeros((len(tokenized), max_len), dtype=torch.long)
+        for row, (ids, length) in enumerate(tokenized):
+            batch_ids[row, :length] = torch.tensor(ids, dtype=torch.long)
+            attn[row, :length] = 1
+        batch_ids = batch_ids.to(self.device)
+        attn = attn.to(self.device)
+        return _pool_token_embeddings(batch_ids, attn, self.embedding_layer)
 
 
 class SiglipBridgeWrapper(nn.Module):
@@ -282,6 +366,12 @@ class SiglipPhase1Project(BaseProject):
 
     def _setup_extraction_objects(self) -> Dict[str, Any]:  # pragma: no cover - not used
         raise NotImplementedError("Embedding extraction is not implemented for SigLIP Phase-1")
+
+    def _setup_validation_objects(self) -> Dict[str, Any]:  # pragma: no cover - SigLIP validates in-loop during training
+        raise NotImplementedError("Standalone validation mode is not implemented for SigLIP Phase-1 (validation runs in-loop during train)")
+
+    def _setup_test_objects(self) -> Dict[str, Any]:  # pragma: no cover - SigLIP validates in-loop during training
+        raise NotImplementedError("Standalone test mode is not implemented for SigLIP Phase-1")
 
     def _setup_training_objects(self) -> Dict[str, Any]:
         device = torch.device("cuda", self.config.device) if torch.cuda.is_available() else torch.device("cpu")
@@ -586,6 +676,18 @@ class SiglipPhase1Project(BaseProject):
                 f"bridge_hidden_size={self.config.bridge_hidden_size} does not match text embedding dim {text_embeddings.shape[1]}"
             )
 
+        # Phase A-v2: per-ECG free-text report contrastive target. Build the
+        # shared text embedder only when requested; "bank" mode is untouched.
+        report_text_embedder: Optional[ReportTextEmbedder] = None
+        contrastive_text_mode = str(
+            getattr(self.config, "contrastive_text_mode", "bank") or "bank"
+        ).lower()
+        if contrastive_text_mode == "report":
+            report_text_embedder = self._build_report_text_embedder(
+                model_name=model_name_cfg,
+                device=device,
+            )
+
         encoder, quantizer, tokenizer_cfg = self._load_tokenizer_components(device=device)
         dummy = torch.zeros(1, self.config.num_leads, self.config.waveform_length, device=device)
         with torch.no_grad():
@@ -800,6 +902,39 @@ class SiglipPhase1Project(BaseProject):
                 }
             ]
 
+        # Phase A: add the encoder as its own (low-LR) param group so gradients
+        # from the contrastive loss reach the raw signal encoder. Gated on the
+        # train_encoder flag; default runs are unchanged.
+        if bool(getattr(self.config, "train_encoder", False)):
+            encoder_lr = getattr(self.config, "encoder_lr", None)
+            if encoder_lr is None or float(encoder_lr) <= 0.0:
+                encoder_lr = base_lr * 0.1
+            encoder_lr = float(encoder_lr)
+            encoder_params = [
+                param
+                for param in encoder.parameters()
+                if param.requires_grad and id(param) not in assigned_param_ids
+            ]
+            for param in encoder_params:
+                assigned_param_ids.add(id(param))
+            if encoder_params:
+                param_groups.append(
+                    {
+                        "params": encoder_params,
+                        "lr": encoder_lr,
+                        "weight_decay": weight_decay,
+                        "name": "encoder",
+                    }
+                )
+                if getattr(self.config, "is_ref_device", True):
+                    n_enc = sum(p.numel() for p in encoder_params)
+                    print(
+                        f"[SigLIP] train_encoder=True -> added encoder param group "
+                        f"({len(encoder_params)} tensors, {n_enc/1e6:.2f}M params) at lr={encoder_lr:.2e}."
+                    )
+            else:
+                print("[SigLIP] WARNING: train_encoder=True but no trainable encoder params found.")
+
         optimizer = optimizer_cls(param_groups, lr=base_lr, weight_decay=weight_decay)
 
         runner_kwargs = {
@@ -816,6 +951,7 @@ class SiglipPhase1Project(BaseProject):
             "validation_dataloader": validation_loader,
             "use_quantized_inputs": use_quantized_inputs,
             "tokenizer_config": tokenizer_cfg,
+            "report_text_embedder": report_text_embedder,
         }
         return runner_kwargs
 
@@ -856,9 +992,13 @@ class SiglipPhase1Project(BaseProject):
         else:
             print("[SigLIP] Pretrained tokenizer config: <missing>")
 
+        train_encoder = bool(getattr(self.config, "train_encoder", False))
         encoder_class = ModelRegistry.get(encoder_name)
         encoder: nn.Module = encoder_class().to(device)
-        encoder.eval()
+        if train_encoder:
+            encoder.train()
+        else:
+            encoder.eval()
 
         encoder_state = self._extract_module_state(state_dict, "encoder")
         if not encoder_state:
@@ -871,8 +1011,13 @@ class SiglipPhase1Project(BaseProject):
                 f"{missing_encoder.missing_keys}; Unexpected keys: {missing_encoder.unexpected_keys}."
             )
         print("[SigLIP] Encoder weights loaded successfully.")
-        for param in encoder.parameters():
-            param.requires_grad = False
+        if train_encoder:
+            for param in encoder.parameters():
+                param.requires_grad = True
+            print("[SigLIP] train_encoder=True -> encoder is TRAINABLE (warm-started from checkpoint).")
+        else:
+            for param in encoder.parameters():
+                param.requires_grad = False
 
         quantizer: Optional[nn.Module] = None
         quantizer_state = self._extract_module_state(state_dict, "quantizer")
@@ -1210,12 +1355,11 @@ class SiglipPhase1Project(BaseProject):
                     max_length=256,
                     add_special_tokens=False,
                 )
-                input_ids = inputs["input_ids"]
-                mask = inputs["attention_mask"].unsqueeze(-1).to(dtype=torch.float32)
-                token_embeds = embedding_layer(input_ids)  # [B, T, H]
-                summed = (token_embeds * mask).sum(dim=1)
-                counts = mask.sum(dim=1).clamp_min(1.0)
-                pooled = summed / counts
+                pooled = _pool_token_embeddings(
+                    inputs["input_ids"],
+                    inputs["attention_mask"],
+                    embedding_layer,
+                )
                 all_embeddings.append(pooled.cpu())
         embeddings = torch.cat(all_embeddings, dim=0)
         embeddings = F.normalize(embeddings.float(), dim=-1)
@@ -1241,3 +1385,45 @@ class SiglipPhase1Project(BaseProject):
                 "[SigLIP] Text embedding cache still unavailable after regeneration."
             )
         return embeddings, text_id_to_idx
+
+    def _build_report_text_embedder(
+        self,
+        model_name: str,
+        device: torch.device,
+    ) -> "ReportTextEmbedder":
+        """Build the per-report text embedder used by contrastive_text_mode='report'.
+
+        Uses the SAME tokenizer + input-embedding layer / mean-pool semantics as
+        the fixed text bank (`_prepare_text_embeddings`), so report and bank
+        embeddings live in one shared space.
+        """
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token_id is None:
+            if tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif tokenizer.bos_token is not None:
+                tokenizer.pad_token = tokenizer.bos_token
+            else:
+                raise ValueError(
+                    "Tokenizer does not define a pad/eos token required for report pooling."
+                )
+        text_model = AutoModel.from_pretrained(
+            model_name, torch_dtype=torch.float32, trust_remote_code=True
+        )
+        text_model.eval()
+        embedding_layer = text_model.get_input_embeddings()
+        # Detach the embedding layer from the full text model so we keep only the
+        # lightweight lookup table resident (the rest is garbage-collected).
+        embedder = ReportTextEmbedder(
+            tokenizer=tokenizer,
+            embedding_layer=embedding_layer,
+            max_length=256,
+            device=device,
+        ).to(device)
+        if getattr(self.config, "is_ref_device", True):
+            print(
+                f"[SigLIP] contrastive_text_mode=report -> built ReportTextEmbedder "
+                f"from '{model_name}' (embedding dim={embedding_layer.weight.shape[1]})."
+            )
+        return embedder
