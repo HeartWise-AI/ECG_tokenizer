@@ -90,9 +90,15 @@ class GPT2Decoder(nn.Module):
         if llm_input_embedding_size != self.llm_model.config.n_embd:
             raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.llm_model.config.n_embd}")
         
-        # Add special ECG token in llm embedding
-        self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
-        self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
+        # Add special tokens in the llm embedding: <ecg>, <q_start>, <q_end>.
+        # The delimiter tokens are used by the question-answering paths
+        # (_forward_with_questions / answer_question); ecg_token_id keeps its
+        # original value (first appended row) for backward compatibility.
+        base_vocab_size = len(self.llm_model.get_input_embeddings().weight)
+        self.llm_model.resize_token_embeddings(base_vocab_size + 3)
+        self.ecg_token_id = base_vocab_size
+        self.question_start_token_id = base_vocab_size + 1
+        self.question_end_token_id = base_vocab_size + 2
         self.eos_token_id = self.llm_model.config.eos_token_id
         
     def forward(
@@ -228,11 +234,11 @@ class GPT2Decoder(nn.Module):
             full_labels = None
         
         # Get input embeddings and replace the ECG token's embedding
-        input_embedding = self.gpt2.get_input_embeddings()(full_input_ids)
+        input_embedding = self.llm_model.get_input_embeddings()(full_input_ids)
         input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
         
         # Forward pass through GPT-2
-        outputs = self.gpt2(
+        outputs = self.llm_model(
             inputs_embeds=input_embedding,
             attention_mask=full_attention_mask,
             labels=full_labels
@@ -470,7 +476,7 @@ class GPT2Decoder(nn.Module):
         ], dim=1)
         
         # Get input embeddings and replace ECG token embedding
-        input_embedding = self.gpt2.get_input_embeddings()(input_ids)
+        input_embedding = self.llm_model.get_input_embeddings()(input_ids)
         input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
         
         # Set generation parameters
@@ -486,7 +492,7 @@ class GPT2Decoder(nn.Module):
         
         # Generate
         with torch.inference_mode():
-            result = self.gpt2.generate(
+            result = self.llm_model.generate(
                 inputs_embeds=input_embedding,
                 max_length=max_token_length,
                 **generation_params
