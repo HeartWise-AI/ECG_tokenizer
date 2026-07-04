@@ -1,0 +1,10 @@
+[
+  {
+    "name": "localization_st_elevation",
+    "prompt_regex": "\\bst\\s*elevation\\b",
+    "ignore_case": true,
+    "category_in": ["category_infarct_ischemia", "category_pericarditis"],
+    "n_samples": 3000,
+    "set_prompt_category": true
+  }
+]

@@ -8,7 +8,7 @@ from peft import LoraConfig, get_peft_model, TaskType
 
 from utils.enums import (
     ModelName,
-    AdapterName,
+    BridgeName,
 )
 from utils.registry import ModelRegistry
 from models.types import ModelT, ModelClassT
@@ -38,7 +38,7 @@ class Llama32ReportDecoder(nn.Module):
         huggingface_model_name: str = 'meta-llama/Llama-3.2-1B',
         llm_input_embedding_size: int = 2048,
         quantized_feature_shape: Tuple[int, int] = (128, 82),
-        adapter_name: AdapterName = AdapterName.LLAMA32_SEQUENCE_ADAPTER,
+        adapter_name: BridgeName = BridgeName.LLAMA32_SEQUENCE_BRIDGE,
         adapter_dropout: float = 0.2,
         label_ignore_index: int = -100,
         # LoRA (matches ECG-Byte exactly)

@@ -22,17 +22,17 @@ optimizer: !!str "AdamW"
 step_size: !!int 1
 gamma: !!float 0.1
 num_warmup_percent: !!float 0.1
-num_hard_restarts_cycles: !!float 1.0
+num_hard_restarts_cycles: !!float 0.5
 warm_restart_tmult: !!int 2
 # VQVAE parameters
 decoder_mode: !!str "llm"
 decoder_name: !!str "GPT2_Decoder"
 # LLM tokenizer parameters
 tokenizer_name: !!str "gpt2"
-max_token_length: !!int 256
+max_token_length: !!int 512
 # LLM model parameters
 huggingface_model_name: !!str "gpt2"
-adapter_name: !!str "GPT2_SequenceAdapter"
+bridge_name: !!str "GPT2_SequenceBridge"
 llm_input_embedding_size: !!int 768
 # Dataset parameters
 train_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_train_qa_interpretation_only.parquet"
@@ -48,3 +48,7 @@ metrics:
   - !!str "rouge"
   - !!str "bleu"
   - !!str "meteor"
+
+# Codebook selection (REQUIRED - prevents silent stage1 loading failures)
+num_codebooks_kept: 8  # Use all 8 codebooks
+codebook_offset: 0     # Start from first codebook

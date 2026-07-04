@@ -1,0 +1,44 @@
+pipeline_project: "ECG_Tokenizer_GRPO_Finetuning"
+runner_name: "ECG_Tokenizer_GRPO_Finetuning"
+model_name: "ECG_Tokenizer_Wrapper"
+run_mode: "train"
+wandb_project: "ECG_tokenizer_GRPO"
+wandb_entity: "mhi_ai"
+use_wandb: true
+# Checkpoint: CoT SFT checkpoint (m6htj38p - Chain-of-Thought SFT, ECG-R1 aligned)
+pretrained_tokenizer_path: "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_MedGemma/m6htj38p_20260223-231759/best_model.pt"
+# Dataset: CoT SFT parquet with messages column
+train_dataset_path: "/volume/ECG_tokenizer/output/cot_train_anomaly.parquet"
+signal_path_column: "waveform_path_psa"
+messages_column: "messages"
+report_column: "report"
+# GRPO hyperparameters
+group_size: 4
+epsilon_low: 0.2
+epsilon_high: 0.3
+beta: 0.01 # KL penalty weight to prevent policy drift
+# Reward weights
+reward_weights:
+  format: 0.1
+  diagnosis: 0.7
+  evidence: 0.2
+# Generation parameters
+temperature: 1.0
+top_p: 0.95
+max_new_tokens: 1024
+# Training
+num_epochs: 1
+batch_size: 2
+lr: 2.0e-6
+num_workers: 2
+grad_accum_steps: 4
+max_grad_norm: 0.5
+precision: "bf16"
+save_interval: 500
+log_interval: 10
+# Trainable subset
+trainable: "lora"
+# MedGemma prompt format (must match CoT SFT training)
+medgemma_prompt_style: true
+# Output directory base path
+base_checkpoint_path: "checkpoints"

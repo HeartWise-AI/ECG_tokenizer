@@ -1,0 +1,71 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info
+dist
+build
+eggs
+.eggs
+*.manifest
+*.spec
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+.python-version
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.nox
+
+# Documentation
+docs/_build
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# Large data files (should be mounted)
+*.parquet
+*.npy
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+outputs/
+wandb/
+logs/
+
+# Project-specific
+ECG_tokenizer/val_generations/
+val_generations/
+plots/
+*.png
+*.jpg
+*.jpeg

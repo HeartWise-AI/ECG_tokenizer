@@ -1,15 +1,19 @@
 import torch.nn as nn
 from typing import Union, Type, Protocol, Any, Iterator, TYPE_CHECKING
 from abc import abstractmethod
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase
+try:  # transformers < 4.43 fallback
+    from transformers import ProcessorMixin
+except ImportError:  # pragma: no cover
+    ProcessorMixin = PreTrainedTokenizerBase  # type: ignore[misc,assignment]
 
 if TYPE_CHECKING:
     from models import (
-        LinearAdapter, 
-        EmbeddingAdapter, 
-        SequenceAdapter,
+        LinearBridge,
+        EmbeddingBridge,
+        SequenceBridge,
         GPT2Decoder,
-        SimpleEmbeddingAdapter,
+        SimpleEmbeddingBridge,
         BertClassifier,
         ECG_Tokenizer_Wrapper,
         Conv_Encoder,
@@ -74,11 +78,11 @@ ModelClassT = Type[ModelProtocol]
 
 # Union-based types (for IDE navigation to concrete classes)
 ModelUnionT = Union[
-    "LinearAdapter", 
-    "EmbeddingAdapter", 
-    "SequenceAdapter",
+    "LinearBridge",
+    "EmbeddingBridge",
+    "SequenceBridge",
     "GPT2Decoder",
-    "SimpleEmbeddingAdapter",
+    "SimpleEmbeddingBridge",
     "BertClassifier",
     "ECG_Tokenizer_Wrapper",
     "Conv_Encoder",
@@ -89,3 +93,4 @@ ModelClassUnionT = Type[ModelUnionT]
 
 # Tokenizer types for type safety across different LLM tokenizers
 AutoTokenizerT = Union[AutoTokenizer, PreTrainedTokenizerBase]
+AutoProcessorT = Union[AutoProcessor, ProcessorMixin]

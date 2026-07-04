@@ -1,0 +1,68 @@
+command:
+  - torchrun
+  - "--nproc_per_node=2"
+  - "--master_port=29500"
+  - "scripts/main.py"
+  - "--base_config"
+  - "config/llm_finetuning/medgemma/medgemma_4b_cf_projection.yaml"
+  - ${args}
+name: "medgemma_cf_sweep"
+project: "ECG_tokenizer_MedGemma"
+entity: "mhi_ai"
+method: bayes
+metric:
+  name: cf_overall_acc
+  goal: maximize
+parameters:
+  llm_lr:
+    distribution: log_uniform_values
+    min: 0.00003
+    max: 0.0001
+  adapter_lr:
+    distribution: log_uniform_values
+    min: 0.0003
+    max: 0.001
+  llm_weight_decay:
+    values: [0.0, 0.00001, 0.0001]
+  adapter_weight_decay:
+    values: [0.0, 0.00001, 0.0001]
+  num_warmup_percent:
+    values: [0.0, 0.03, 0.05]
+  scheduler_type:
+    values: ["cosine", "linear_warmup", "cosine_with_warmup"]
+  optimizer:
+    values: ["AdamW"]
+  batch_size:
+    values: [8, 16]
+  gradient_accumulation_steps:
+    values: [8, 16, 32]
+  # Sweep phase-2 backbone freeze vs unfreeze
+  phase2_freeze_llm:
+    values: [true, false]
+  # LoRA span on LLM top layers; keeps adapters active across both phases
+  lora_top_k_layers:
+    values: [8, 12, 16]
+  # Keep bridge geometry fixed to Stage-1 for compatibility
+  num_query_tokens:
+    values: [32]
+  bridge_num_heads:
+    values: [12]
+  step_size:
+    values: [1, 5]
+  gamma:
+    distribution: uniform
+    min: 0.6
+    max: 0.95
+  project:
+    values: ["ECG_tokenizer_MedGemma"]
+  entity:
+    values: ["mhi_ai"]
+  name:
+    values: ["medgemma_cf_sweep"]
+early_terminate:
+  type: hyperband
+  min_iter: 3
+  eta: 2
+  s: 2
+run_mode: train
+use_wandb: true

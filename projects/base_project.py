@@ -50,6 +50,23 @@ class BaseProject(ABC):
         pass
     
     @abstractmethod
+    def _setup_validation_objects(self)->dict[str, Any]:
+        """Setup objects required for validation mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for validation.
+        """
+        pass
+    
+    @abstractmethod
+    def _setup_test_objects(self)->dict[str, Any]:
+        """Setup objects required for test mode.
+        
+        Returns:
+            dict[str, Any]: A dictionary containing the objects required for test.
+        """
+        pass
+    
     def _setup_extraction_objects(self)->dict[str, Any]:
         """Setup objects required for extraction mode.
         
@@ -100,7 +117,24 @@ class BaseProject(ABC):
             f"[{self.__class__.__name__}] Loading checkpoint: {checkpoint_path}"
         )
         
-        return torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        # Patch GemmaTokenizer for checkpoint compatibility with newer transformers.
+        # Checkpoints saved with a different transformers version may pickle the
+        # tokenizer with attributes that don't match the current __setstate__.
+        try:
+            from transformers.models.gemma.tokenization_gemma import GemmaTokenizer
+            _orig_setstate = GemmaTokenizer.__setstate__
+
+            def _compat_setstate(self, d):
+                if 'sp_model_proto' not in d:
+                    self.__dict__.update(d)
+                    return
+                _orig_setstate(self, d)
+
+            GemmaTokenizer.__setstate__ = _compat_setstate
+        except (ImportError, AttributeError):
+            pass
+
+        return torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     def run(self): 
         """Execute project workflow based on configured run mode.
@@ -123,6 +157,12 @@ class BaseProject(ABC):
         
         elif self.config.run_mode == RunMode.INFERENCE:
             runner_args.update(self._setup_inference_objects())
+        
+        elif self.config.run_mode == RunMode.VALIDATE:
+            runner_args.update(self._setup_validation_objects())
+        
+        elif self.config.run_mode == RunMode.TEST:
+            runner_args.update(self._setup_test_objects())
         
         runner_class: RunnerClassT = RunnerRegistry.get(self.config.runner_name)
         runner: RunnerT = runner_class(**runner_args)

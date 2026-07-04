@@ -1,0 +1,209 @@
+# pipeline project
+pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
+model_name: !!str "ECG_Tokenizer_Wrapper"
+runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
+run_mode: !!str "train"
+num_epochs: !!int 10
+seed: !!int 42
+base_checkpoint_path: !!str "checkpoints"
+pretrained_tokenizer_path: !!str "checkpoints/SigLIP_Phase1/siglip_phase1/l629t8n9_20251016-135122/checkpoints/siglip_phase1_best_epoch_9.pt"
+
+# wandb parameters
+wandb_project: !!str "ECG_tokenizer_MedGemma"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool true
+
+# training parameters
+llm_lr: !!float 5e-6
+adapter_lr: !!float 2e-4
+llm_weight_decay: !!float 1e-3
+adapter_weight_decay: !!float 1e-2
+scheduler_type: !!str "cosine_with_warmup"
+lr_step_period: !!int 1
+factor: !!float 0.5
+optimizer: !!str "AdamW"
+step_size: !!int 1
+gamma: !!float 0.8
+num_warmup_percent: !!float 0.03
+num_hard_restarts_cycles: !!float 0.5
+warm_restart_tmult: !!int 2
+
+# VQVAE parameters
+decoder_mode: !!str "llm"
+decoder_name: !!str "MedGemma_Decoder"
+
+# LLM tokenizer parameters
+tokenizer_name: !!str "google/medgemma-4b-it"
+max_token_length: !!int 640
+num_ecg_tokens: !!int 64
+
+# Instruction tuning
+instruct_mode: !!bool true
+prefix_tuning: !!bool false
+
+# LLM model parameters
+huggingface_model_name: !!str "google/medgemma-4b-it"
+bridge_name: !!str "InstructionAwareECGQFormerBridge"
+llm_input_embedding_size: !!int 2560
+
+# Bridge configuration
+bridge_mid_dim: !!int 768          # Stage-1 hidden size
+bridge_num_heads: !!int 12         # Stage-1 heads
+bridge_dropout: !!float 0.1
+bridge_num_special_tokens: !!int 4
+bridge_num_visual_tokens: !!int 32 # Stage-1 num_query_tokens
+bridge_qformer_layers: !!int 6     # Stage-1 layer count
+bridge_text_hidden_size: !!int 768
+bridge_bias_last_codebook: !!float 0.5
+bridge_codebook_dropout: !!float 0.0
+bridge_cross_every: !!int 2        # Stage-1 cross-attention frequency
+instruction_dropout: !!float 0.1
+
+# Projection bridge positional encoding (applies when using ECGProjectionBridge)
+bridge_use_sinusoidal_pos_emb: !!bool true
+bridge_pos_embedding_max_len: !!int 4096
+
+# Codebook selection
+num_codebooks_kept: !!int 8
+codebook_offset: !!int -1
+num_quantizers: !!int 8
+ecg_codebook_size: !!int 512
+
+# LoRA configuration
+use_lora: !!bool true
+lora_r: !!int 32
+lora_alpha: !!int 64
+lora_dropout: !!float 0.05
+lora_top_k_layers: !!int 12
+lora_target_modules:
+  - !!str q_proj
+  - !!str k_proj
+  - !!str v_proj
+  - !!str o_proj
+  - !!str gate_proj
+  - !!str up_proj
+  - !!str down_proj
+lora_bias: !!str "none"
+
+# Dataset parameters
+train_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/combined_train_qa_m200k_h200k.parquet"
+validation_dataset_path: !!str "/media/data1/datasets/ECG_Tokenizer/parquets/robert_dataset_qa/output/combined_test_qa_m5k_h5k.parquet"
+prompt_column: !!str "prompt"
+answer_column: !!str "generated_answer"
+category_column: !!str "prompt_category"
+# Pattern classification columns (77 ECG patterns from utils/constants.py)
+pattern_label_columns:
+  - "Sinusal"
+  - "Regular"
+  - "Monomorph"
+  - "QS complex in V1-V2-V3"
+  - "R complex in V5-V6"
+  - "T wave inversion (inferior - II, III, aVF)"
+  - "Left bundle branch block"
+  - "RaVL > 11 mm"
+  - "SV1 + RV5 or RV6 > 35 mm"
+  - "T wave inversion (lateral -I, aVL, V5-V6)"
+  - "T wave inversion (anterior - V3-V4)"
+  - "Left axis deviation"
+  - "Left ventricular hypertrophy"
+  - "Bradycardia"
+  - "Q wave (inferior - II, III, aVF)"
+  - "Afib"
+  - "Irregularly irregular"
+  - "Atrial tachycardia (>= 100 BPM)"
+  - "Nonspecific intraventricular conduction delay"
+  - "Premature ventricular complex"
+  - "Polymorph"
+  - "T wave inversion (septal- V1-V2)"
+  - "Right bundle branch block"
+  - "Ventricular paced"
+  - "ST elevation (anterior - V3-V4)"
+  - "ST elevation (septal - V1-V2)"
+  - "1st degree AV block"
+  - "Premature atrial complex"
+  - "Atrial flutter"
+  - "rSR' in V1-V2"
+  - "qRS in V5-V6-I, aVL"
+  - "Left anterior fascicular block"
+  - "Right axis deviation"
+  - "2nd degree AV block - mobitz 1"
+  - "ST depression (inferior - II, III, aVF)"
+  - "Acute pericarditis"
+  - "ST elevation (inferior - II, III, aVF)"
+  - "Low voltage"
+  - "Regularly irregular"
+  - "Junctional rhythm"
+  - "Left atrial enlargement"
+  - "ST elevation (lateral - I, aVL, V5-V6)"
+  - "Atrial paced"
+  - "Right ventricular hypertrophy"
+  - "Delta wave"
+  - "Wolff-Parkinson-White (Pre-excitation syndrome)"
+  - "Prolonged QT"
+  - "ST depression (anterior - V3-V4)"
+  - "QRS complex negative in III"
+  - "Q wave (lateral- I, aVL, V5-V6)"
+  - "Supraventricular tachycardia"
+  - "ST downslopping"
+  - "ST depression (lateral - I, avL, V5-V6)"
+  - "2nd degree AV block - mobitz 2"
+  - "U wave"
+  - "R/S ratio in V1-V2 >1"
+  - "RV1 + SV6 > 11 mm"
+  - "Left posterior fascicular block"
+  - "Right atrial enlargement"
+  - "ST depression (septal- V1-V2)"
+  - "Q wave (septal- V1-V2)"
+  - "Q wave (anterior - V3-V4)"
+  - "ST upslopping"
+  - "Right superior axis"
+  - "Ventricular tachycardia"
+  - "ST elevation (posterior - V7-V8-V9)"
+  - "Ectopic atrial rhythm (< 100 BPM)"
+  - "Lead misplacement"
+  - "Third Degree AV Block"
+  - "Acute MI"
+  - "Early repolarization"
+  - "Q wave (posterior - V7-V9)"
+  - "Bi-atrial enlargement"
+  - "LV pacing"
+  - "Brugada"
+  - "Ventricular Rhythm"
+  - "no_qrs"
+num_workers: !!int 12
+batch_size: !!int 16
+signal_path_column: !!str "waveform_path_psa"
+
+# ECG parameters
+ecg_waveform_length: !!int 2500
+ecg_num_leads: !!int 12
+
+# metrics
+metrics:
+  - !!str "rouge"
+  - !!str "bleu"
+  - !!str "meteor"
+
+# Debug defaults
+gradient_accumulation_steps: !!int 8
+dataloader_pin_memory: !!bool true
+compute_category_metrics: !!bool true
+category_metrics:
+  - !!str "rouge"
+  - !!str "bleu"
+  - !!str "meteor"
+pattern_loss_weight: !!float 0.3
+enable_attention_visualization: !!bool false
+attention_log_frequency: !!int 200
+plot_validation_ecgs: !!bool true
+num_validation_plots: !!int 6
+plot_selection_strategy: !!str "worst_random_best"
+
+# Generation defaults
+default_generation_kwargs:
+  do_sample: !!bool false
+  temperature: !!float 0.0
+  top_p: !!float 1.0
+  max_new_tokens: !!int 32
+  min_new_tokens: !!int 0
+  repetition_penalty: !!float 1.02

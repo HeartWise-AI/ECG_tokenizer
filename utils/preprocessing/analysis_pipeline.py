@@ -1,143 +1,200 @@
-import torch
+import hashlib
+import os
+import re
+from typing import Callable
+
 import numpy as np
 import pandas as pd
-import os
 from tqdm import tqdm
 
-from utils.preprocessing.ecg_signal_processor import ECGSignalProcessor
-from utils.constants import PTBXL_POWER_RATIO
+from utils.constants import WCRV2_DEFAULT_SCALE_FACTOR, WCRV2_SOURCE_SCALE_FACTORS
+from utils.files_handler import ECGFileHandler
+
 
 class AnalysisPipeline:
+    TARGET_LENGTH = 2500
+    TARGET_LEADS = 12
+
+    SwapLeadsFn = Callable[[np.ndarray, int, int], np.ndarray]
+
     @staticmethod
-    def save_and_preprocess_data(df: pd.DataFrame, output_folder: str, preprocessing_folder: str, preprocessing_n_workers: int, swap_leads_fn=None, swap_lead1=None, swap_lead2=None) -> pd.DataFrame:
-        # Initialize ECG signal processor
-        ecg_signal_processor = ECGSignalProcessor()
-        
-        # Ensure the preprocessing folder exists
-        os.makedirs(preprocessing_folder, exist_ok=True)
-        
-        # Find the column containing file paths
-        path_columns = [col for col in df.columns if 'path' in col.lower() or 'file' in col.lower()]
+    def _resolve_path_column(df: pd.DataFrame, path_column: str | None) -> str:
+        if path_column and path_column in df.columns:
+            return path_column
+
+        path_columns = [col for col in df.columns if "path" in col.lower() or "file" in col.lower()]
         if not path_columns:
             raise ValueError("No column with 'path' or 'file' in its name found in the dataframe")
-        
-        ecg_path_col = path_columns[0]  # Use the first matching column
+
+        for preferred in ("ecg_path", "filepath", "waveform_path_original", "waveform_path_psa", "xml_path", "ECG_path"):
+            if preferred in path_columns:
+                return preferred
+        return path_columns[0]
+
+    @staticmethod
+    def _sanitize_stem(stem: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+        return cleaned or "ecg"
+
+    @classmethod
+    def _build_output_base_path(cls, preprocessing_folder: str, row_pos: int, source_path: str) -> str:
+        stem = cls._sanitize_stem(os.path.splitext(os.path.basename(source_path))[0])
+        src_hash = hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:10]
+        file_id = f"{row_pos:09d}_{stem}_{src_hash}"
+        return os.path.join(preprocessing_folder, file_id)
+
+    @staticmethod
+    def _resample_signal(signal: np.ndarray, target_length: int) -> np.ndarray:
+        current_length = signal.shape[0]
+        if current_length == target_length:
+            return signal.astype(np.float32, copy=False)
+        if current_length < 2:
+            raise ValueError(f"Signal length must be >= 2 for interpolation; got {current_length}")
+
+        old_x = np.linspace(0.0, 1.0, num=current_length, dtype=np.float64)
+        new_x = np.linspace(0.0, 1.0, num=target_length, dtype=np.float64)
+        out = np.empty((target_length, signal.shape[1]), dtype=np.float32)
+        for lead_idx in range(signal.shape[1]):
+            out[:, lead_idx] = np.interp(new_x, old_x, signal[:, lead_idx]).astype(np.float32, copy=False)
+        return out
+
+    @classmethod
+    def _canonicalize_signal(cls, signal: np.ndarray) -> np.ndarray:
+        # MHI format can appear as (N, 12, 1)
+        if signal.ndim == 3 and signal.shape[-1] == 1:
+            signal = signal.squeeze(-1)
+
+        if signal.ndim != 2:
+            raise ValueError(f"Expected signal with 2 dimensions, got shape {signal.shape}")
+
+        # Some loaders return shape (12, N). We treat (12, 12) as already
+        # canonical because it is ambiguous and outside expected ECG lengths.
+        if signal.shape[0] == cls.TARGET_LEADS and signal.shape[1] != cls.TARGET_LEADS:
+            signal = signal.transpose(1, 0)
+
+        if signal.shape[1] != cls.TARGET_LEADS:
+            raise ValueError(f"Expected {cls.TARGET_LEADS} leads, got shape {signal.shape}")
+
+        if signal.shape[0] != cls.TARGET_LENGTH:
+            signal = cls._resample_signal(signal, target_length=cls.TARGET_LENGTH)
+
+        if not np.isfinite(signal).all():
+            raise ValueError("Signal contains NaN or Inf values")
+
+        return signal.astype(np.float32, copy=False)
+
+    @staticmethod
+    def _resolve_scale_factor(scale_factor: float | None, source: str | None) -> float:
+        """Resolve the WCRv2 ADC->mV scale factor.
+
+        Priority: explicit ``scale_factor`` > ``source`` match > MHI default.
+        ``source`` may be a canonical key (MHI, MIMIC, ...) or a free-form dataset
+        name; it is matched exact-first, then by substring. Unknown names fall back
+        to the MHI default (with a printed note) rather than raising, so the inference
+        path can pass an arbitrary dataset name safely.
+        """
+        if scale_factor is not None:
+            return float(scale_factor)
+        if source:
+            key = source.strip().upper()
+            if key in WCRV2_SOURCE_SCALE_FACTORS:
+                return WCRV2_SOURCE_SCALE_FACTORS[key]
+            # Longest keys first so 'MIMIC-IV' wins over 'MIMIC'.
+            for known in sorted(WCRV2_SOURCE_SCALE_FACTORS, key=len, reverse=True):
+                if known in key:
+                    return WCRV2_SOURCE_SCALE_FACTORS[known]
+            print(
+                f"Warning: unrecognized source '{source}' — falling back to MHI default "
+                f"scale {WCRV2_DEFAULT_SCALE_FACTOR}. Pass --scale to override."
+            )
+        return WCRV2_DEFAULT_SCALE_FACTOR
+
+    @staticmethod
+    def _to_amplitude_preserved_signal(
+        signal: np.ndarray,
+        scale_factor: float,
+    ) -> np.ndarray:
+        # WCRv2 (DeepECG-SSL v2) amplitude-preserved normalization: convert raw ADC
+        # units to millivolts with a fixed per-source scale factor. Unlike v1 spectral
+        # power matching or per-lead z-score, this preserves inter-patient voltage
+        # ratios required for voltage-dependent diagnoses (LVH, chamber enlargement).
+        return (
+            signal.astype(np.float32, copy=False) * np.float32(scale_factor)
+        ).astype(np.float32, copy=False)
+
+    @classmethod
+    def save_and_preprocess_data(
+        cls,
+        df: pd.DataFrame,
+        output_folder: str,
+        preprocessing_folder: str,
+        preprocessing_n_workers: int,
+        swap_leads_fn: SwapLeadsFn | None = None,
+        swap_lead1: int | None = None,
+        swap_lead2: int | None = None,
+        path_column: str | None = None,
+        include_optional_100hz_cluster: bool = False,
+        scale_factor: float | None = None,
+        source: str | None = None,
+    ) -> pd.DataFrame:
+        del output_folder  # Kept for backward compatibility with callers.
+        del preprocessing_n_workers  # Current deterministic path is intentionally single-threaded.
+        del include_optional_100hz_cluster  # Powerline flattening is intentionally disabled.
+
+        resolved_scale = cls._resolve_scale_factor(scale_factor=scale_factor, source=source)
+        os.makedirs(preprocessing_folder, exist_ok=True)
+
+        ecg_path_col = cls._resolve_path_column(df=df, path_column=path_column)
         print(f"Detected path column: {ecg_path_col}")
-        
-        # Process in batches to manage memory
-        batch_size = 10000
-        total_batches = (len(df) + batch_size - 1) // batch_size
-        processed_df = pd.DataFrame()
-        
-        for batch_idx in range(total_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min((batch_idx + 1) * batch_size, len(df))
-            
-            print(f"\nProcessing batch {batch_idx + 1}/{total_batches}")
-            print(f"Batch size: {end_idx - start_idx} records")
-            
+        print(
+            f"Using WCRv2 amplitude-preserved normalization: signal_mV = raw * "
+            f"{resolved_scale} (source={source or 'default(MHI)'})"
+        )
+
+        processed_rows: list[pd.Series] = []
+        skipped = 0
+
+        for row_pos in tqdm(range(len(df)), total=len(df), desc="Preprocessing signals"):
+            row = df.iloc[row_pos]
+            source_path_raw = row.get(ecg_path_col)
+            if pd.isna(source_path_raw):
+                skipped += 1
+                print(f"Warning: Skipping row {row_pos} - missing path in '{ecg_path_col}'")
+                continue
+
+            source_path = str(source_path_raw)
             try:
-                batch_df = df.iloc[start_idx:end_idx].copy()
-                ecgs = []
-                for index, row in tqdm(batch_df.iterrows(), total=len(batch_df), desc="Loading NPY files"):
-                    try:
-                        lead_array = np.load(row[ecg_path_col])
-                        if np.isnan(lead_array).any():
-                            continue
-                        
-                        file_id = os.path.basename(row[ecg_path_col]).replace(".npy", "")
-                        
-                        # Shape corrections
-                        if lead_array.shape[-1] == 1:
-                            lead_array = lead_array.squeeze(-1)
-                        if lead_array.shape[0] == 12:  # transpose if needed
-                            lead_array = lead_array.transpose(1, 0)
-                            
-                        # Handle different lengths
-                        if lead_array.shape[0] != 2500:
-                            if lead_array.shape[0] < 2500:
-                                print(f"Warning: Skipping {file_id} - signal length {lead_array.shape[0]} < 2500")
-                                continue
-                            else:
-                                step = lead_array.shape[0] // 2500
-                                lead_array = lead_array[::step, :]
-                                
-                        if lead_array.shape[1] != 12:
-                            print(f"Warning: Skipping {file_id} - incorrect number of leads: {lead_array.shape[1]}")
-                            continue
-                            
-                        new_path = os.path.join(preprocessing_folder, f"{file_id}")
-                        batch_df.at[index, ecg_path_col] = new_path
-                        ecgs.append([new_path, lead_array])
-                        
-                    except Exception as e:
-                        print(f"Error processing file {row[ecg_path_col]}: {str(e)}")
-                        continue
-                       
-                # Fix: Use 'ecg_path' as column name for consistency 
-                ecg_signals_df = pd.DataFrame(ecgs, columns=['ecg_path', 'ecg_signal'])
-                
-                if len(ecg_signals_df) == 0:
-                    print(f"Warning: No valid signals in batch {batch_idx + 1}")
-                    continue
-                
-                print("Scaling ECG signals...")
-                scaled_signals_df = ecg_signal_processor.scale_ecg_signals(
-                    df=ecg_signals_df, 
-                    power_ratio=PTBXL_POWER_RATIO
+                raw_signal = ECGFileHandler.load_ecg_signal_raw(source_path)
+                canonical_signal = cls._canonicalize_signal(raw_signal)
+                processed_signal = cls._to_amplitude_preserved_signal(
+                    signal=canonical_signal,
+                    scale_factor=resolved_scale,
                 )
 
-                # print("Processing ECG signals...")
-                cleaned_signals_df = ecg_signal_processor.clean_and_process_ecg_leads(
-                    df=scaled_signals_df,
-                    max_workers=preprocessing_n_workers
+                if swap_leads_fn is not None and swap_lead1 is not None and swap_lead2 is not None:
+                    processed_signal = swap_leads_fn(processed_signal, swap_lead1, swap_lead2)
+
+                output_base_path = cls._build_output_base_path(
+                    preprocessing_folder=preprocessing_folder,
+                    row_pos=row_pos,
+                    source_path=source_path,
                 )
-                
-                # Save processed signals
-                print("Saving processed signals...")
-                for _, row in tqdm(cleaned_signals_df.iterrows(), total=len(cleaned_signals_df), desc="Saving signals"):
-                    # Add .npy extension to the file path explicitly
-                    save_path = f"{row['ecg_path']}.npy"
-                
-                    # Ensure directory exists for this file
-                    save_dir = os.path.dirname(save_path)
-                    os.makedirs(save_dir, exist_ok=True)
-                    
-                    # Apply lead swapping if function is provided
-                    signal_to_save = row['ecg_signal']
-                    if swap_leads_fn is not None and swap_lead1 is not None and swap_lead2 is not None:
-                        try:
-                            signal_to_save = swap_leads_fn(signal_to_save, swap_lead1, swap_lead2)
-                            # Log every 100th swap to avoid flooding console
-                            if _ % 100 == 0:
-                                print(f"Swapped {swap_lead1} and {swap_lead2} leads for signal {_}")
-                        except Exception as e:
-                            print(f"Warning: Failed to swap leads for signal {_}: {e}")
-                    
-                    # Save the numpy array
-                    np.save(
-                        file=save_path,
-                        arr=signal_to_save
-                    )
-                    
-                    # Update the path in the dataframe to include .npy extension
-                    # Find rows where the path matches (without .npy extension) and update them
-                    matches = batch_df[ecg_path_col] == row['ecg_path']
-                    if matches.any():
-                        batch_df.loc[matches, ecg_path_col] = save_path
-                
-                # Append processed batch
-                processed_df = pd.concat([processed_df, batch_df], ignore_index=True)
-                
-                # Clear memory
-                del ecg_signals_df, scaled_signals_df, cleaned_signals_df, batch_df
-                
-            except Exception as e:
-                print(f"Error processing batch {batch_idx + 1}: {str(e)}")
+                save_path = f"{output_base_path}.npy"
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                np.save(file=save_path, arr=processed_signal.astype(np.float32, copy=False))
+
+                row_out = row.copy()
+                row_out[ecg_path_col] = save_path
+                processed_rows.append(row_out)
+
+            except Exception as exc:
+                skipped += 1
+                print(f"Error processing row {row_pos} ({source_path}): {exc}")
                 continue
-                
-        if len(processed_df) == 0:
+
+        if not processed_rows:
             raise ValueError("No data was successfully processed")
-            
-        print(f"\nCompleted processing {len(processed_df)} files")
+
+        processed_df = pd.DataFrame(processed_rows).reset_index(drop=True)
+        print(f"\nCompleted processing {len(processed_df)} files (skipped: {skipped})")
         return processed_df

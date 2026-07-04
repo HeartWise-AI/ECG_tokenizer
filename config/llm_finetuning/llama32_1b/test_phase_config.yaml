@@ -1,0 +1,118 @@
+# Test config for verifying two-stage training
+pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
+model_name: !!str "ECG_Tokenizer_Wrapper"
+runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
+run_mode: !!str "train"
+num_epochs: !!int 3 # Quick test: 1 phase 1, 2 phase 2
+seed: !!int 42
+# Two-stage training configuration (quick test)
+training_phases:
+  phase1_alignment:
+    epochs: !!int 1 # Just 1 epoch for phase 1
+    freeze_llm: !!bool true
+    use_lora: !!bool false
+    ecg_embedding_lr: !!float 1e-3
+    adapter_lr: !!float 1e-3
+    cross_attention_lr: !!float 1e-3
+    warmup_steps: !!int 10
+    log_frequency: !!int 2
+  phase2_finetuning:
+    epochs: !!int 2 # 2 epochs for phase 2
+    freeze_llm: !!bool false
+    use_lora: !!bool true
+    llm_lr: !!float 1e-6
+    ecg_embedding_lr: !!float 1e-5
+    adapter_lr: !!float 1e-5
+    cross_attention_lr: !!float 1e-5
+    warmup_steps: !!int 10
+    log_frequency: !!int 5
+# Debug and monitoring settings
+debug_config:
+  show_sample_outputs: !!bool true
+  samples_per_epoch: !!int 1
+  log_attention_weights: !!bool true
+  log_gradient_norms: !!bool true
+  verbose_loss_logging: !!bool true
+base_checkpoint_path: !!str "checkpoints"
+pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
+# wandb parameters
+wandb_project: !!str "ECG_tokenizer_LLM_test"
+wandb_entity: !!str "mhi_ai"
+use_wandb: !!bool false
+# training parameters
+llm_lr: !!float 1e-7
+adapter_lr: !!float 1e-6
+llm_weight_decay: !!float 1e-2
+adapter_weight_decay: !!float 1e-4
+scheduler_type: !!str "cosine_with_warmup"
+lr_step_period: !!int 1
+factor: !!float 0.3
+optimizer: !!str "AdamW"
+step_size: !!int 1
+gamma: !!float 0.1
+num_warmup_percent: !!float 0.1
+num_hard_restarts_cycles: !!float 0.5
+warm_restart_tmult: !!int 2
+# VQVAE parameters
+decoder_mode: !!str "llm"
+decoder_name: !!str "Llama32_Decoder"
+# LLM tokenizer parameters
+tokenizer_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
+max_token_length: !!int 448
+ecg_token_start_id: !!int 128258
+# Instruction tuning
+instruct_mode: !!bool true
+# LLM model parameters
+huggingface_model_name: !!str "meta-llama/Llama-3.2-1B-Instruct"
+bridge_name: !!str "Llama32_ECGProjectionBridge"
+llm_input_embedding_size: !!int 2048
+# Sequence token specific parameters
+use_cross_attention: !!bool true
+num_attention_heads: !!int 8
+intermediate_dim: !!int 1024
+# ECG code bridge parameters
+ecg_codebook_size: !!int 192
+bridge_mid_dim: !!int 512
+bridge_num_visual_tokens: !!int 48
+bridge_num_heads: !!int 8
+bridge_dropout: !!float 0.1
+bridge_num_special_tokens: !!int 4
+# LoRA parameters
+use_lora: !!bool false
+lora_r: !!int 16
+lora_alpha: !!int 32
+lora_dropout: !!float 0.05
+lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+lora_bias: "none"
+# Dataset parameters (smaller subset for testing)
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_train_complete_qa_dataset.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/mimic_test_complete_qa_dataset.parquet"
+# Dataset column configuration
+prompt_column: !!str "prompt"
+answer_column: !!str "generated_answer"
+category_column: !!str "prompt_category"
+num_workers: !!int 4 # Reduced for testing
+batch_size: !!int 4 # Very small for quick testing
+signal_path_column: !!str "waveform_path_psa"
+# ECG parameters
+ecg_waveform_length: !!int 2500
+ecg_num_leads: !!int 12
+# metrics
+metrics:
+  - !!str "rouge"
+  - !!str "bleu"
+# Per-category metrics configuration
+compute_category_metrics: !!bool false # Disabled for quick test
+# Memory optimization
+gradient_accumulation_steps: !!int 1 # No accumulation for testing
+dataloader_pin_memory: !!bool true
+# Sequence length management
+max_sequence_length: !!int 528
+num_ecg_tokens: !!int 48
+# Attention visualization
+enable_attention_visualization: !!bool false # Disabled for quick test
+attention_log_frequency: !!int 10
+
+# Codebook selection (REQUIRED)
+num_codebooks_kept: 8
+codebook_offset: 0

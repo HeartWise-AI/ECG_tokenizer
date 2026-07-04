@@ -1,4 +1,5 @@
 import os
+import json
 import wandb
 import heapq
 import torch
@@ -23,8 +24,9 @@ from utils.config import ECGTokenizerTrainingConfig
 from utils.metrics.ecg_metrics import compute_metrics
 from utils.schedulers import scheduler_is_per_iteration
 from utils.enums import RunMode, DecoderMode, RunnerName
-from utils.constants import ECG_CATEGORIES, ECG_PATTERNS
-from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper, ResidualVQ
+from utils.constants import DEEPECG_CATEGORIES, ECG_PATTERNS
+from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+from models.local_residual_vq import ResidualVQ
 from runners.base_runner import BaseRunner
 
 
@@ -329,10 +331,28 @@ class ECGTokenizerRunner(BaseRunner):
             metrics_dict = compute_metrics(labels_df, pred_df)
             
             # Add metrics to gathered_metrics
-            for category in ECG_CATEGORIES:
+            for category in DEEPECG_CATEGORIES:
                 for metric_name in metrics_dict[category]:
                     gathered_metrics[f"{mode}/{category}_{metric_name}"] = metrics_dict[category][metric_name]
-        
+
+            # Optionally save full metrics JSON when running inference without W&B
+            if (
+                not getattr(self.config, "use_wandb", False)
+                and getattr(self.config, "is_ref_device", True)
+                and getattr(self.config, "run_mode", RunMode.TRAIN) == RunMode.INFERENCE
+            ):
+                os.makedirs(self.config.output_dir, exist_ok=True)
+                metrics_path = os.path.join(self.config.output_dir, "inference_metrics.json")
+                with open(metrics_path, "w") as f:
+                    # Cast numpy types to native for JSON serialization
+                    json.dump(metrics_dict, f, indent=2, default=float)
+                print(f"[Inference] Saved metrics to {metrics_path}")
+
+                if os.environ.get("SAVE_PREDICTIONS"):
+                    preds_path = os.path.join(self.config.output_dir, "inference_predictions.npz")
+                    np.savez_compressed(preds_path, predictions=all_preds.float().cpu().numpy(), labels=all_lbls.float().cpu().numpy(), columns=ECG_PATTERNS)
+                    print(f"[Inference] Saved predictions to {preds_path}")
+
         # Plot and log best/worst reconstructions if wandb is initialized and we're on reference device
         # and we're in reconstruction mode
         if self.decoder_mode == DecoderMode.RECONSTRUCTION and self.wandb_wrapper is not None and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
@@ -587,9 +607,25 @@ class ECGTokenizerRunner(BaseRunner):
 
     def inference(self):
         """
-        Inference is not implemented for the ECGTokenizerRunner.
+        Run inference by reusing the validation path.
         """
-        raise NotImplementedError("Inference not implemented for ECGTokenizerRunner")
+        if self.validation_dataloader is None:
+            raise ValueError("Validation dataloader is not set for inference.")
+
+        # Ensure model is in eval mode
+        self.ecg_tokenizer.eval()
+
+        # Reuse validation epoch logic (epoch index 0 for logging)
+        metrics = self._run_epoch(
+            mode=RunMode.VALIDATE,
+            epoch=0
+        )
+
+        # Log metrics on ref device
+        if self.wandb_wrapper and self.wandb_wrapper.is_initialized() and self.config.is_ref_device:
+            self.wandb_wrapper.log({f"Inference/{k}": v for k, v in metrics.items()})
+
+        return metrics
 
     def validate(self):
         """
