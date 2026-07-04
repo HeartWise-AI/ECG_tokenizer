@@ -90,9 +90,15 @@ class GPT2Decoder(nn.Module):
         if llm_input_embedding_size != self.llm_model.config.n_embd:
             raise ValueError(f"Embedding size {llm_input_embedding_size} does not match GPT-2 hidden size {self.llm_model.config.n_embd}")
         
-        # Add special ECG token in llm embedding
-        self.llm_model.resize_token_embeddings(len(self.llm_model.get_input_embeddings().weight) + 1)
-        self.ecg_token_id = len(self.llm_model.get_input_embeddings().weight) - 1
+        # Add special tokens in the llm embedding: <ecg>, <q_start>, <q_end>.
+        # The delimiter tokens are used by the question-answering paths
+        # (_forward_with_questions / answer_question); ecg_token_id keeps its
+        # original value (first appended row) for backward compatibility.
+        base_vocab_size = len(self.llm_model.get_input_embeddings().weight)
+        self.llm_model.resize_token_embeddings(base_vocab_size + 3)
+        self.ecg_token_id = base_vocab_size
+        self.question_start_token_id = base_vocab_size + 1
+        self.question_end_token_id = base_vocab_size + 2
         self.eos_token_id = self.llm_model.config.eos_token_id
         
     def forward(
@@ -228,11 +234,11 @@ class GPT2Decoder(nn.Module):
             full_labels = None
         
         # Get input embeddings and replace the ECG token's embedding
-        input_embedding = self.gpt2.get_input_embeddings()(full_input_ids)
+        input_embedding = self.llm_model.get_input_embeddings()(full_input_ids)
         input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
         
         # Forward pass through GPT-2
-        outputs = self.gpt2(
+        outputs = self.llm_model(
             inputs_embeds=input_embedding,
             attention_mask=full_attention_mask,
             labels=full_labels
@@ -303,71 +309,91 @@ class GPT2Decoder(nn.Module):
 
     @torch.no_grad()
     def generate_report(
-        self, 
+        self,
         quantized_features: torch.Tensor,
-        max_token_length: int = 512, 
+        max_token_length: int = 512,
         **generate_kwargs
-    ) -> Union[GenerateOutput, torch.Tensor]:
+    ) -> torch.Tensor:
         """
-        Generate clinical report from quantized ECG features.
-        
+        Generate clinical report from quantized ECG features via manual autoregressive loop.
+
+        Workaround for transformers>=4.45 bug where `GPT2LMHeadModel.generate(inputs_embeds=...)`
+        re-feeds the original inputs_embeds at every step instead of the newly generated token.
+
         Args:
             quantized_features: ECG features from tokenizer (batch, seq_len, features).
-            max_token_length: Maximum number of tokens to generate.
-            **generate_kwargs: Additional parameters for GPT-2 generation.
-            
+            max_token_length: Maximum total tokens to generate (not counting the seed position).
+            **generate_kwargs: `do_sample`, `temperature`, `top_p`, `top_k`, `eos_token_id`.
+
         Returns:
             Generated token IDs (batch, generated_length).
-            
-        Example:
-            >>> features = tokenizer.encode(ecg_signal)  # (1, 128, 82)
-            >>> tokens = decoder.generate_report(features, max_token_length=100)
-            >>> report = tokenizer.decode(tokens[0])
         """
-        # Transform features to embedding space
         if len(quantized_features.shape) == 3:
             adapter_input = quantized_features.unsqueeze(1)
         else:
             adapter_input = quantized_features
-            
+
         ecg_embedding: torch.Tensor = self.adapter(adapter_input)
-        
-        # Prepare input
         batch_size: int = ecg_embedding.size(0)
-        ecg_token: torch.Tensor = torch.full(
-            (batch_size, 1),
-            self.ecg_token_id,
-            dtype=torch.long,
-            device=ecg_embedding.device
-        )
-        
-        # Create attention mask
-        attention_mask: torch.Tensor = torch.ones((batch_size, 1), device=ecg_embedding.device)
-        
-        # Get input embeddings
-        input_embedding: torch.Tensor = self.llm_model.get_input_embeddings()(ecg_token)
+        device = ecg_embedding.device
+
+        params = {**self.default_generation_params, **generate_kwargs}
+        do_sample: bool = bool(params.get("do_sample", False))
+        temperature: float = float(params.get("temperature", 1.0))
+        top_p: float = float(params.get("top_p", 1.0))
+        top_k: int = int(params.get("top_k", 0))
+        eos_token_id: int = int(params.get("eos_token_id", self.eos_token_id))
+
+        wte = self.llm_model.get_input_embeddings()
+        ecg_token = torch.full((batch_size, 1), self.ecg_token_id, dtype=torch.long, device=device)
+        input_embedding = wte(ecg_token)
         input_embedding[:, 0, :] = ecg_embedding
 
-        # Set generation parameters
-        generation_params = generate_kwargs.copy()
-        generation_params.setdefault("attention_mask", attention_mask)
-        generation_params.setdefault("pad_token_id", self.eos_token_id)
-        generation_params.setdefault("eos_token_id", self.eos_token_id)
-        generation_params.setdefault("use_cache", True)
-        
-        # Apply default parameters
-        for key, value in self.default_generation_params.items():
-            generation_params.setdefault(key, value)
-        
-        # Generate
-        with torch.inference_mode():
-            result = self.llm_model.generate(
-                inputs_embeds=input_embedding,
-                max_length=max_token_length,
-                **generation_params
-            )
-        
-        return result
+        outputs = self.llm_model(inputs_embeds=input_embedding, use_cache=True)
+        past_kv = outputs.past_key_values
+        logits = outputs.logits[:, -1, :]
+        next_tokens = self._sample_next(logits, do_sample, temperature, top_p, top_k)
+
+        generated = [next_tokens]
+        finished = next_tokens.eq(eos_token_id)
+
+        for _ in range(max_token_length - 1):
+            if finished.all():
+                break
+            out = self.llm_model(input_ids=next_tokens.unsqueeze(-1), past_key_values=past_kv, use_cache=True)
+            past_kv = out.past_key_values
+            logits = out.logits[:, -1, :]
+            sampled = self._sample_next(logits, do_sample, temperature, top_p, top_k)
+            next_tokens = torch.where(finished, torch.full_like(sampled, eos_token_id), sampled)
+            finished = finished | next_tokens.eq(eos_token_id)
+            generated.append(next_tokens)
+
+        return torch.stack(generated, dim=1)
+
+    @staticmethod
+    def _sample_next(
+        logits: torch.Tensor,
+        do_sample: bool,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+    ) -> torch.Tensor:
+        if not do_sample:
+            return logits.argmax(dim=-1)
+        if temperature != 1.0:
+            logits = logits / max(temperature, 1e-8)
+        if top_k > 0:
+            topk_vals, _ = logits.topk(top_k, dim=-1)
+            logits = torch.where(logits < topk_vals[:, [-1]], torch.full_like(logits, float("-inf")), logits)
+        if 0.0 < top_p < 1.0:
+            sorted_logits, sorted_idx = logits.sort(dim=-1, descending=True)
+            cum_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
+            mask = cum_probs > top_p
+            mask[..., 0] = False
+            sorted_logits = sorted_logits.masked_fill(mask, float("-inf"))
+            logits = torch.full_like(logits, float("-inf")).scatter(-1, sorted_idx, sorted_logits)
+        probs = logits.softmax(dim=-1)
+        return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
     @torch.no_grad()
     def answer_question(
@@ -450,7 +476,7 @@ class GPT2Decoder(nn.Module):
         ], dim=1)
         
         # Get input embeddings and replace ECG token embedding
-        input_embedding = self.gpt2.get_input_embeddings()(input_ids)
+        input_embedding = self.llm_model.get_input_embeddings()(input_ids)
         input_embedding[:, 0, :] = ecg_embedding  # Replace ECG token embedding
         
         # Set generation parameters
@@ -466,7 +492,7 @@ class GPT2Decoder(nn.Module):
         
         # Generate
         with torch.inference_mode():
-            result = self.gpt2.generate(
+            result = self.llm_model.generate(
                 inputs_embeds=input_embedding,
                 max_length=max_token_length,
                 **generation_params

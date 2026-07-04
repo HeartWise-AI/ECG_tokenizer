@@ -2,19 +2,16 @@
 pipeline_project: !!str "ECG_Tokenizer_LLM_Finetuning"
 model_name: !!str "ECG_Tokenizer_Wrapper"
 runner_name: !!str "ECG_Tokenizer_LLM_Finetuning"
-run_mode: !!str "validate"
-num_epochs: !!int 10
+run_mode: !!str "train"
+num_epochs: !!int 20
 seed: !!int 42
 base_checkpoint_path: !!str "checkpoints"
-# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Classification/6l7oogin_20250608-111318/best_model_epoch_7.pt"
-# pretrained_tokenizer_path: !!str "checkpoints/ECG_Tokenizer_Training/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
 pretrained_tokenizer_path: !!str "/media/data1/models/ECG_Tokenizer/ECG_Tokenizer_Reconstruction/tfq5q94l_20250622-004552/best_model_epoch_10.pt"
 # wandb parameters
-wandb_project: !!str "ECG_Tokenizer_LLM_Finetuning"
+wandb_project: !!str "ECG_tokenizer_LLM_finetuning_gpt2"
 wandb_entity: !!str "mhi_ai"
-use_wandb: !!bool false
-# training parameters
-llm_lr: !!float 5e-5
+use_wandb: !!bool true
+llm_lr: !!float 2e-5
 adapter_lr: !!float 5e-4
 llm_weight_decay: !!float 1e-2
 adapter_weight_decay: !!float 1e-4
@@ -38,11 +35,11 @@ huggingface_model_name: !!str "gpt2"
 bridge_name: !!str "GPT2_SequenceBridge"
 llm_input_embedding_size: !!int 768
 # Dataset parameters
-train_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_train_updated.parquet"
-validation_dataset_path: !!str "/volume/ECG_tokenizer/output/MHI/mimic_mhi_psa_test_updated_stratified_20%.parquet"
+train_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_train_qa_interpretation_only.parquet"
+validation_dataset_path: !!str "/volume/ECG_tokenizer/output/combined_test_interpretation_only.parquet"
 num_workers: !!int 12
 batch_size: !!int 16
-signal_path_column: !!str "waveform_path_psa" # waveform_path_psa or waveform_path_original
+signal_path_column: !!str "waveform_path_psa"
 # ECG parameters
 ecg_waveform_length: !!int 2500
 ecg_num_leads: !!int 12

@@ -766,7 +766,13 @@ class LLMFinetuningRunner(BaseRunner):
                 world_size=self.config.world_size,
                 device_ids=self.config.device
             )
-            
+
+            # Save checkpoint after training, before validation (so we don't lose weights if val crashes)
+            if self.config.is_ref_device:
+                train_loss = epoch_metrics.get(f'{RunMode.TRAIN}/loss', float('inf'))
+                self._save_model(epoch=epoch, loss=train_loss, is_best=False)
+                print(f"Checkpoint saved after training epoch {epoch} (train_loss={train_loss:.4f})")
+
             epoch_metrics: dict[str, float] = self._run_epoch(
                 RunMode.VALIDATE,
                 epoch,
