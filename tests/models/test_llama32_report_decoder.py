@@ -5,7 +5,7 @@ import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
 from models.llama32_report_decoder import Llama32ReportDecoder
-from utils.enums import AdapterName
+from utils.enums import BridgeName
 
 
 def _tiny_llama_base() -> LlamaForCausalLM:
@@ -43,7 +43,7 @@ class TestLlama32ReportDecoder(unittest.TestCase):
             huggingface_model_name="dummy/llama-tiny",
             llm_input_embedding_size=64,
             quantized_feature_shape=(128, 82),
-            adapter_name=AdapterName.LLAMA32_SEQUENCE_ADAPTER,
+            adapter_name=BridgeName.LLAMA32_SEQUENCE_BRIDGE,
             adapter_dropout=0.0,
             lora_r=4,
             lora_alpha=8,
