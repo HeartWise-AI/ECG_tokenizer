@@ -143,14 +143,16 @@ class TestModelsIntegration(unittest.TestCase):
                         adapter_dropout=0.2
                     )
 
+                    # Unreachable EOS -> full budget, so every bridge must drive
+                    # multi-token generation to the exact length (a bridge that
+                    # degenerates to an early stop would be caught).
                     generated = model.generate_report(
                         quantized_features=self.quantized_features,
                         max_token_length=max_token_length,
+                        eos_token_id=999999,
                     )
 
-                    # Shape/dtype only — different bridges yield different tokens.
-                    self.assertEqual(generated.shape[0], self.batch_size)
-                    self.assertLessEqual(generated.shape[1], max_token_length)
+                    self.assertEqual(generated.shape, (self.batch_size, max_token_length))
                     self.assertEqual(generated.dtype, torch.long)
 
 if __name__ == '__main__':

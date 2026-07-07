@@ -201,6 +201,12 @@ def main(
 
     # Summary
     n = len(df_sample)
+    if n == 0:
+        print(f"\nNo samples to evaluate (val_path={val_path} yielded 0 rows).")
+        with open(output_path, "w") as f:
+            json.dump({"summary": {k: 0.0 for k in total_rewards}, "results": []}, f, indent=2)
+        print(f"Results saved to: {output_path}")
+        return
     print(f"\n{'='*80}")
     print(f"SUMMARY ({n} samples)")
     print(f"{'='*80}")
