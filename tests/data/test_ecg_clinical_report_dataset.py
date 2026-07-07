@@ -75,14 +75,14 @@ class TestECGClinicalReportDataset:
         # Create a batch with some valid items and some None items
         batch = [
             {
-                'ecg_signal': torch.tensor(np.random.randn(12, 2500)),
+                'signal': torch.tensor(np.random.randn(12, 2500)),
                 'input_ids': torch.tensor([1, 2, 3, 4, 5]),
                 'attention_mask': torch.tensor([1, 1, 1, 1, 1]),
                 'labels': torch.tensor([1, 2, 3, 4, 5]),
             },
             None,  # Invalid item
             {
-                'ecg_signal': torch.tensor(np.random.randn(12, 2500)),
+                'signal': torch.tensor(np.random.randn(12, 2500)),
                 'input_ids': torch.tensor([6, 7, 8, 9, 10]),
                 'attention_mask': torch.tensor([1, 1, 1, 1, 1]),
                 'labels': torch.tensor([6, 7, 8, 9, 10]),
@@ -92,8 +92,8 @@ class TestECGClinicalReportDataset:
         result = custom_collate_fn(batch)
         
         # Should filter out None items
-        assert 'ecg_signal' in result
-        assert len(result['ecg_signal']) == 2  # 2 valid items
+        assert 'signal' in result
+        assert len(result['signal']) == 2  # 2 valid items
         assert len(result['input_ids']) == 2
         assert len(result['attention_mask']) == 2
     
