@@ -13,22 +13,33 @@ from utils.enums import BridgeName
 
 class TestModelsIntegration(unittest.TestCase):
     
-    @patch('models.decoder.gpt2_decoder.GPT2LMHeadModel')
-    def setUp(self, mock_gpt2):
-        # Mock GPT2 model to avoid loading from HuggingFace
+    def setUp(self):
+        # Keep the GPT-2 mock active for the whole test. The previous @patch on
+        # setUp expired before the test bodies constructed GPT2Decoder, so they
+        # loaded real GPT-2 from HuggingFace (network/cache-dependent).
+        gpt2_patcher = patch('models.decoder.gpt2_decoder.GPT2LMHeadModel')
+        mock_gpt2 = gpt2_patcher.start()
+        self.addCleanup(gpt2_patcher.stop)
+
+        self.batch_size = 4
         self.mock_gpt2_instance = mock_gpt2.from_pretrained.return_value
         self.mock_gpt2_instance.config.n_embd = 768
+        self.mock_gpt2_instance.config.eos_token_id = 50256
         self.mock_gpt2_instance.get_input_embeddings().weight.size = lambda: torch.Size([50257, 768])
-        
+        self.mock_gpt2_instance.get_input_embeddings().return_value = torch.randn(self.batch_size, 11, 768)
+
+        # Forward output carries real tensors so both the forward tests and the
+        # manual generation loop run without touching real HuggingFace weights.
+        fwd = MagicMock()
+        fwd.loss = torch.tensor(0.5)
+        fwd.logits = torch.randn(self.batch_size, 11, 50257)
+        fwd.past_key_values = None
+        self.mock_gpt2_instance.return_value = fwd
+
         # Set up common test variables
-        self.batch_size = 4
         self.quantized_features = torch.randn(self.batch_size, 8, 128, 160)
         self.input_ids = torch.randint(0, 50256, (self.batch_size, 10))
         self.attention_mask = torch.ones(self.batch_size, 10)
-        
-        # Configure mock returns
-        self.mock_gpt2_instance.get_input_embeddings().return_value = torch.randn(self.batch_size, 11, 768)
-        self.mock_gpt2_instance.return_value.loss = torch.tensor(0.5)
         
     def test_integration_with_embedding_bridge(self):
         """Test integration of GPT2WithEmbedding with EmbeddingBridge"""
@@ -115,15 +126,12 @@ class TestModelsIntegration(unittest.TestCase):
             self.assertIsNotNone(outputs)
     
     def test_report_generation_with_different_bridges(self):
-        """Test report generation with different bridges"""
+        """Report generation runs a manual autoregressive loop (not `.generate`);
+        assert output shape/dtype per bridge."""
         bridges = [EmbeddingBridge, LinearBridge, SimpleEmbeddingBridge]
         bridge_names = [BridgeName.GPT2_EMBEDDING_BRIDGE, BridgeName.GPT2_LINEAR_BRIDGE, BridgeName.GPT2_SIMPLE_EMBEDDING_BRIDGE]
-        
-        # Set token length to 19 to match actual generated output (from error message)
-        token_length = 19
-        expected_output = torch.randint(0, 50256, (self.batch_size, token_length))
-        self.mock_gpt2_instance.generate.return_value = expected_output
-        
+        max_token_length = 20
+
         for bridge_cls, bridge_name in zip(bridges, bridge_names):
             with self.subTest(bridge=bridge_name):
                 with patch.object(ModelRegistry, 'get', return_value=bridge_cls):
@@ -134,17 +142,16 @@ class TestModelsIntegration(unittest.TestCase):
                         bridge_name=bridge_name,
                         adapter_dropout=0.2
                     )
-                    
-                    # Test generate_report
+
                     generated = model.generate_report(
                         quantized_features=self.quantized_features,
-                        max_token_length=20  # Keep max_token_length as 20
+                        max_token_length=max_token_length,
                     )
-                    
-                    # Check only output shape, not exact values
-                    self.assertEqual(generated.size(), expected_output.size())
-                    # Different bridges produce different embeddings, leading to different generated text
-                    # No need to check for exact equality
+
+                    # Shape/dtype only — different bridges yield different tokens.
+                    self.assertEqual(generated.shape[0], self.batch_size)
+                    self.assertLessEqual(generated.shape[1], max_token_length)
+                    self.assertEqual(generated.dtype, torch.long)
 
 if __name__ == '__main__':
     unittest.main()

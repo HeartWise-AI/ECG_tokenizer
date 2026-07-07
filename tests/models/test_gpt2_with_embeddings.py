@@ -89,21 +89,26 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         self.mock_gpt2_instance.assert_called_once()
         
     def test_generate_report(self):
-        """Test report generation"""
-        # Configure mocks
-        expected_output = torch.randint(0, 50256, (self.batch_size, 19))
-        self.mock_gpt2_instance.generate.return_value = expected_output
-        
-        # Run generate_report
+        """Report generation runs a manual autoregressive loop (forward +
+        _sample_next); `.generate()` is intentionally not used, so the mocked
+        forward must return real logit tensors."""
+        fwd = MagicMock()
+        fwd.logits = torch.randn(self.batch_size, 11, 50257)
+        fwd.past_key_values = None
+        self.mock_gpt2_instance.return_value = fwd
+        # wte(ecg_token) must be a real tensor for the in-place ECG embedding write.
+        self.mock_gpt2_instance.get_input_embeddings().return_value = torch.randn(self.batch_size, 1, 768)
+
         generated = self.model.generate_report(
             quantized_features=self.quantized_features,
-            max_token_length=20
+            max_token_length=20,
         )
 
-        # Assertions
+        # Assertions — shape/dtype, not a stale `.generate` call.
         self.mock_adapter.assert_called_with(self.quantized_features)
-        self.mock_gpt2_instance.generate.assert_called_once()
-        self.assertTrue(torch.equal(generated, expected_output))
+        self.assertEqual(generated.shape[0], self.batch_size)
+        self.assertLessEqual(generated.shape[1], 20)
+        self.assertEqual(generated.dtype, torch.long)
         
 if __name__ == '__main__':
     unittest.main() 
