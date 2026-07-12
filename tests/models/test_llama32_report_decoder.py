@@ -4,7 +4,7 @@ from unittest.mock import patch
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
-from models.llama32_report_decoder import Llama32ReportDecoder
+from models.decoder.llama32_report_decoder import Llama32ReportDecoder
 from utils.enums import BridgeName
 
 
@@ -34,7 +34,7 @@ class TestLlama32ReportDecoder(unittest.TestCase):
 
     def setUp(self):
         self.base_patcher = patch(
-            "models.llama32_report_decoder.LlamaForCausalLM.from_pretrained",
+            "models.decoder.llama32_report_decoder.LlamaForCausalLM.from_pretrained",
             return_value=_tiny_llama_base(),
         )
         self.base_patcher.start()
