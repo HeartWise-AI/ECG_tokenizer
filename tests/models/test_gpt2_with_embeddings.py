@@ -99,15 +99,17 @@ class TestGPT2WithEmbedding(unittest.TestCase):
         # wte(ecg_token) must be a real tensor for the in-place ECG embedding write.
         self.mock_gpt2_instance.get_input_embeddings().return_value = torch.randn(self.batch_size, 1, 768)
 
+        # Unreachable EOS -> loop runs the full budget, so length is exact and a
+        # truncation/off-by-one regression in the manual loop would be caught.
         generated = self.model.generate_report(
             quantized_features=self.quantized_features,
             max_token_length=20,
+            eos_token_id=999999,
         )
 
-        # Assertions — shape/dtype, not a stale `.generate` call.
+        # Assertions — exact shape/dtype, not a stale `.generate` call.
         self.mock_adapter.assert_called_with(self.quantized_features)
-        self.assertEqual(generated.shape[0], self.batch_size)
-        self.assertLessEqual(generated.shape[1], 20)
+        self.assertEqual(generated.shape, (self.batch_size, 20))
         self.assertEqual(generated.dtype, torch.long)
         
 if __name__ == '__main__':
