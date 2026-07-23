@@ -39,7 +39,7 @@ use_wandb: true
 max_train_steps: 14207
 resume_checkpoint_path: "checkpoints/ECG_Tokenizer_LLM_Finetuning/ECG_tokenizer_MedGemma/v93n471z_20260323-201700/checkpoint_step_1500.pt"
 lvef_loss_weight: 0.2
-prompt_variations_path: "dataset_generation/prompt_variations_per_prompt.json"
+prompt_variations_path: "/volume/ECG_Dataset_QA/dataset_generation/prompt_variations_per_prompt.json"
 # --- END EXPERIMENT CONFIG ---
 
 # Optimizer & scheduler (champion safe LRs)

@@ -106,7 +106,7 @@ dataset_weights:
 use_weighted_sampling: true
 sample_weight_column: "sample_weight"
 # Prompt variations (per-prompt level)
-prompt_variations_path: "dataset_generation/prompt_variations_per_prompt.json"
+prompt_variations_path: "/volume/ECG_Dataset_QA/dataset_generation/prompt_variations_per_prompt.json"
 # ============================================================
 validation_dataset_path: "/volume/ECG_tokenizer/output/combined_test_qa_m25k_h25k.parquet"
 prompt_column: "prompt"
