@@ -136,3 +136,45 @@ claim until Stage-2/3 beats the current e4d on the LLM-judge eval.
   `scripts/{train_tokenizer_aux,probe_tokenizer,build_tokenizer_aux_targets,adapt_tokenizer_ckpt}.py`
 - Configs: `config/ecg_text_stage1/winner_*.yaml`,
   `config/llm_finetuning/medgemma/e4d_x1split_retrain.yaml`
+
+---
+
+## Downstream results: tokenizer → bridge → LLM
+
+Full write-up (with literature references): Notion "Information Cascade: Tokenizer → Q-Former → LLM".
+
+### Stage 1 — tokenizer (raw codes, frozen probe, patient-grouped, mV)
+| tokenizer | diag | LVEF≤40 | AFib 5y | SHD | ACS |
+|---|---|---|---|---|---|
+| e4d's `tfq5q94l` (recon-only) | 0.758 | 0.75 | 0.60 | 0.65 | 0.72 |
+| DeepECG-SSL v2 WCR (external SSL, frozen) | 0.82 | 0.80 | 0.63 | 0.62 | 0.84 |
+| **`x1_split` (recon+aux+split)** | **0.865** | **0.85** | **0.78** | **0.69** | 0.83 |
+
+### Stage 2 — Q-Former bridge output (what the LLM receives)
+| bridge | diag | LVEF≤40 | AFib 5y | SHD | ACS |
+|---|---|---|---|---|---|
+| e4d bridge (`j4bb0w33`) | 0.808 | 0.74 | **0.55** (≈age+sex floor 0.62) | 0.65 | 0.78 |
+| kept=2 (coarse codebooks [0,1]) | 0.851 | 0.78 | 0.73 | 0.68 | 0.81 |
+| kept=8 (all codebooks) | 0.828 | 0.76 | 0.69 | 0.67 | 0.78 |
+
+Bridge loss vs raw codes: LVEF −0.07, AFib −0.05. Query collapse ruled out (off-diagonal cosine 0.24 / 0.17 vs 0.923 collapsed).
+⚠️ The probe does **not** predict generation: kept=2 probes best on every endpoint yet collapses on ACS/JSON at the LLM stage.
+
+### Stage 3 — LLM generated outputs (full 49,776-row REGEN test)
+Deterministic (`scripts/score_deterministic.py`; LVEF = AUROC from parsed EF, others = balanced accuracy):
+| endpoint | e4d | kept=2 | **kept=8** |
+|---|---|---|---|
+| LVEF ≤40 | 0.80 | 0.82 | **0.83** |
+| AFib 5y | 0.65 | 0.72 | **0.73** |
+| SHD | 0.67 | 0.68 | **0.68** |
+| ACS-acute | 0.72 | 0.62 | **0.74** |
+
+LLM-judge (all re-scored with the **current** MiniMax judge, stratified-3000 seed 42):
+**overall e4d 0.643 · kept=2 0.582 · kept=8 0.658** — kept=8 is the first configuration to beat production e4d.
+Biggest gains: chamber +0.19, AFib +0.10, conduction +0.04. **Holdout: `json_interpretation` 0.518 vs e4d 0.784 (−0.27), which did NOT recover with more codebooks.**
+
+⚠️ **Never compare across judge versions.** The pre-existing e4d judge CSV is from Jan 2026 (older judge + smaller ontology) and produces a spurious +0.16. Always re-score the baseline with the current judge on the same sample.
+
+### Two defects found in the bridge (see Notion §5)
+1. `models/bridge/bridge.py:677` collapses the 8 RVQ codebooks with a **softmax convex combination** (an average) although RVQ is **additive**. Measured: gate weights 0.305→0.017 (18.4× disparity), mixed-vector norm 22.6 vs 172.7 for the plain sum. Fix: `concat(8×d) → Linear` initialised to the identity-sum.
+2. The encoder emits `(B, 128 channels, 82 timesteps)` and `ResidualVQ(dim=82)` quantises the last dim, so the bridge's 128 positions are **channels, not time** — `_time_pe` encodes channel index and no query can address a temporal window. This is the leading explanation for the unrecovered `json_interpretation` deficit.

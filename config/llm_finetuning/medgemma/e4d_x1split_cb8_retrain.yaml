@@ -54,7 +54,7 @@ num_warmup_percent: 0.256 # 5000 steps / 19531 total steps ≈ 25.6%
 num_hard_restarts_cycles: 0.5
 warm_restart_tmult: 2
 # Warm-start bridge from Stage-1 (8CB Q-Former checkpoint)
-stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1_x1split_fulletg/lcmext9q_20260804-030747/checkpoints/stage1_best_epoch_006.pt"  # x1_split full-ETG bridge, epoch 6 (next-acc 0.871 = e4d, best retrieval r@1 0.327)
+stage1_checkpoint_path: "checkpoints/ECG_Text_Stage1/ecg_text_stage1_x1split_cb8_fulletg/y8y2jp85_20260807-223801/checkpoints/stage1_best_epoch_005.pt"  # kept=8 full-ETG bridge, epoch 5 (next-acc 0.875, reads ALL 8 codebooks)
 decoder_mode: "llm"
 decoder_name: "MedGemma_Decoder"
 tokenizer_name: "google/medgemma-4b-it"
@@ -83,7 +83,7 @@ use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
 # Codebook selection (match Stage-1 j4bb0w33 - 8 codebooks)
-num_codebooks_kept: 2  # cb2_off0 winner (coarse codebooks [0,1])
+num_codebooks_kept: 8  # kept=8 (all codebooks) — recover fine-detail json/ACS/interpretation
 codebook_offset: 0  # coarse codebooks [0,1]
 num_quantizers: 8
 ecg_codebook_size: 512
