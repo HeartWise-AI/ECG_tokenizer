@@ -249,6 +249,11 @@ def generate_answer(
     
     generation_kwargs = dict(getattr(config, "default_generation_kwargs", {}) or {})
     generation_kwargs.setdefault("max_new_tokens", 96)
+    # CLI override wins over the checkpoint config: structured (JSON) answers can exceed the
+    # 96-token default and a truncated answer is unparseable, scoring 0 regardless of content.
+    _mnt = os.environ.get("ECG_MAX_NEW_TOKENS")
+    if _mnt:
+        generation_kwargs["max_new_tokens"] = int(_mnt)
     # Use stochastic sampling (matching validation behavior) - no do_sample/temperature override
     generation_kwargs.setdefault("no_repeat_ngram_size", 5)
     generation_kwargs.setdefault("repetition_penalty", 1.1)
