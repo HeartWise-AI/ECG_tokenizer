@@ -30,6 +30,12 @@ from utils.registry import RunnerRegistry
 from utils.config.ecg_text_stage1_config import ECGTextStage1Config
 from utils.metrics.siglip_metrics import compute_recall_at_many
 from utils.debug import ensure_dir
+
+# dataset_generation now lives in a separate repo (/volume/ECG_Dataset_QA).
+# Ensure it is importable regardless of PYTHONPATH.
+import sys as _sys
+if "/volume/ECG_Dataset_QA" not in _sys.path:
+    _sys.path.insert(0, "/volume/ECG_Dataset_QA")
 from dataset_generation.siglip_shared import SIGLIP_TARGETED_HARD_NEGATIVES
 
 

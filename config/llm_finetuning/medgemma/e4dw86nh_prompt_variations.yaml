@@ -103,7 +103,7 @@ category_column: "prompt_category"
 # PROMPT VARIATIONS (per-prompt level, NOT category level)
 # Each original prompt is only replaced by variations of itself.
 # ============================================================
-prompt_variations_path: "dataset_generation/prompt_variations_per_prompt.json"
+prompt_variations_path: "/volume/ECG_Dataset_QA/dataset_generation/prompt_variations_per_prompt.json"
 # ============================================================
 num_workers: 24
 batch_size: 16

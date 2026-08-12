@@ -12,6 +12,12 @@ from torch.utils.data import Dataset
 
 from utils.ddp import DistributedUtils
 from utils.constants import lead_to_idx
+
+# dataset_generation now lives in a separate repo (/volume/ECG_Dataset_QA).
+# Ensure it is importable regardless of PYTHONPATH.
+import sys as _sys
+if "/volume/ECG_Dataset_QA" not in _sys.path:
+    _sys.path.insert(0, "/volume/ECG_Dataset_QA")
 from dataset_generation.siglip_shared import SIGLIP_TARGETED_HARD_NEGATIVES
 
 

@@ -28,6 +28,7 @@ from models.ecg_tokenizer_wrapper import (
 )
 from models.local_residual_vq import ResidualVQ
 from models.text_encoder import TextEncoder
+from models.scalable_encoder import ScalableEncoder
 
 __all__ = [
     "ECGCodeBridge",
@@ -57,4 +58,5 @@ __all__ = [
     "ECG_Tokenizer_Quantizer_RVQ",
     "ResidualVQ",
     "TextEncoder",
+    "ScalableEncoder",
 ]

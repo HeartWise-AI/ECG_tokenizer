@@ -1,0 +1,314 @@
+{
+  "tag": "BRIDGE_X1SPLIT_PT",
+  "repr": "bridge_ETC_pooled",
+  "bridge_ckpt": "/volume/ECG_tokenizer/checkpoints/ECG_Text_Stage1/ecg_text_stage1_x1split_fulletg/lcmext9q_20260804-030747/checkpoints/stage1_last_epoch_009.pt",
+  "dim": 768,
+  "n": 10000,
+  "diagnostic": {
+    "Sinusal": {
+      "auroc": 0.9372,
+      "n_pos": 7676
+    },
+    "Regular": {
+      "auroc": 0.8963,
+      "n_pos": 8208
+    },
+    "Monomorph": {
+      "auroc": 0.8237,
+      "n_pos": 7956
+    },
+    "QS complex in V1-V2-V3": {
+      "auroc": 0.9441,
+      "n_pos": 278
+    },
+    "R complex in V5-V6": {
+      "auroc": 0.9597,
+      "n_pos": 503
+    },
+    "T wave inversion (inferior - II, III, aVF)": {
+      "auroc": 0.6932,
+      "n_pos": 2410
+    },
+    "Left bundle branch block": {
+      "auroc": 0.9404,
+      "n_pos": 646
+    },
+    "RaVL > 11 mm": {
+      "auroc": 0.8784,
+      "n_pos": 436
+    },
+    "SV1 + RV5 or RV6 > 35 mm": {
+      "auroc": 0.904,
+      "n_pos": 224
+    },
+    "T wave inversion (lateral -I, aVL, V5-V6)": {
+      "auroc": 0.7403,
+      "n_pos": 2558
+    },
+    "T wave inversion (anterior - V3-V4)": {
+      "auroc": 0.7419,
+      "n_pos": 1604
+    },
+    "Left axis deviation": {
+      "auroc": 0.8168,
+      "n_pos": 1756
+    },
+    "Left ventricular hypertrophy": {
+      "auroc": 0.8478,
+      "n_pos": 1489
+    },
+    "Bradycardia": {
+      "auroc": 0.9844,
+      "n_pos": 1557
+    },
+    "Q wave (inferior - II, III, aVF)": {
+      "auroc": 0.7763,
+      "n_pos": 1507
+    },
+    "Afib": {
+      "auroc": 0.9699,
+      "n_pos": 1156
+    },
+    "Irregularly irregular": {
+      "auroc": 0.9502,
+      "n_pos": 1300
+    },
+    "Atrial tachycardia (>= 100 BPM)": {
+      "auroc": 0.9559,
+      "n_pos": 48
+    },
+    "Nonspecific intraventricular conduction delay": {
+      "auroc": 0.8595,
+      "n_pos": 322
+    },
+    "Premature ventricular complex": {
+      "auroc": 0.8258,
+      "n_pos": 981
+    },
+    "Polymorph": {
+      "auroc": 0.8109,
+      "n_pos": 138
+    },
+    "T wave inversion (septal- V1-V2)": {
+      "auroc": 0.7378,
+      "n_pos": 1231
+    },
+    "Right bundle branch block": {
+      "auroc": 0.954,
+      "n_pos": 1230
+    },
+    "Ventricular paced": {
+      "auroc": 0.959,
+      "n_pos": 496
+    },
+    "ST elevation (anterior - V3-V4)": {
+      "auroc": 0.8845,
+      "n_pos": 229
+    },
+    "ST elevation (septal - V1-V2)": {
+      "auroc": 0.8137,
+      "n_pos": 190
+    },
+    "1st degree AV block": {
+      "auroc": 0.9433,
+      "n_pos": 1251
+    },
+    "Premature atrial complex": {
+      "auroc": 0.8552,
+      "n_pos": 430
+    },
+    "Atrial flutter": {
+      "auroc": 0.8957,
+      "n_pos": 157
+    },
+    "rSR' in V1-V2": {
+      "auroc": 0.8872,
+      "n_pos": 468
+    },
+    "qRS in V5-V6-I, aVL": {
+      "auroc": 0.8405,
+      "n_pos": 185
+    },
+    "Left anterior fascicular block": {
+      "auroc": 0.8734,
+      "n_pos": 669
+    },
+    "Right axis deviation": {
+      "auroc": 0.8841,
+      "n_pos": 208
+    },
+    "2nd degree AV block - mobitz 1": {
+      "auroc": 0.9189,
+      "n_pos": 45
+    },
+    "ST depression (inferior - II, III, aVF)": {
+      "auroc": 0.7407,
+      "n_pos": 491
+    },
+    "Acute pericarditis": {
+      "auroc": 0.9282,
+      "n_pos": 94
+    },
+    "ST elevation (inferior - II, III, aVF)": {
+      "auroc": 0.8872,
+      "n_pos": 304
+    },
+    "Low voltage": {
+      "auroc": 0.8247,
+      "n_pos": 687
+    },
+    "Regularly irregular": {
+      "auroc": 0.7893,
+      "n_pos": 307
+    },
+    "Junctional rhythm": {
+      "auroc": 0.8356,
+      "n_pos": 139
+    },
+    "Left atrial enlargement": {
+      "auroc": 0.713,
+      "n_pos": 437
+    },
+    "ST elevation (lateral - I, aVL, V5-V6)": {
+      "auroc": 0.863,
+      "n_pos": 214
+    },
+    "Atrial paced": {
+      "auroc": 0.9204,
+      "n_pos": 223
+    },
+    "Right ventricular hypertrophy": {
+      "auroc": 0.887,
+      "n_pos": 107
+    },
+    "Prolonged QT": {
+      "auroc": 0.8171,
+      "n_pos": 794
+    },
+    "ST depression (anterior - V3-V4)": {
+      "auroc": 0.7696,
+      "n_pos": 214
+    },
+    "QRS complex negative in III": {
+      "auroc": 0.7263,
+      "n_pos": 1037
+    },
+    "Q wave (lateral- I, aVL, V5-V6)": {
+      "auroc": 0.7979,
+      "n_pos": 218
+    },
+    "Supraventricular tachycardia": {
+      "auroc": 0.7489,
+      "n_pos": 43
+    },
+    "ST downslopping": {
+      "auroc": 0.8058,
+      "n_pos": 1103
+    },
+    "ST depression (lateral - I, avL, V5-V6)": {
+      "auroc": 0.7462,
+      "n_pos": 1218
+    },
+    "2nd degree AV block - mobitz 2": {
+      "auroc": 0.9334,
+      "n_pos": 54
+    },
+    "R/S ratio in V1-V2 >1": {
+      "auroc": 0.9334,
+      "n_pos": 215
+    },
+    "RV1 + SV6 > 11 mm": {
+      "auroc": 0.9098,
+      "n_pos": 86
+    },
+    "ST depression (septal- V1-V2)": {
+      "auroc": 0.6824,
+      "n_pos": 50
+    },
+    "Q wave (septal- V1-V2)": {
+      "auroc": 0.8493,
+      "n_pos": 682
+    },
+    "Q wave (anterior - V3-V4)": {
+      "auroc": 0.8616,
+      "n_pos": 931
+    },
+    "ST upslopping": {
+      "auroc": 0.8053,
+      "n_pos": 177
+    },
+    "Ectopic atrial rhythm (< 100 BPM)": {
+      "auroc": 0.6892,
+      "n_pos": 129
+    },
+    "Acute MI": {
+      "auroc": 0.9175,
+      "n_pos": 358
+    },
+    "Early repolarization": {
+      "auroc": 0.8397,
+      "n_pos": 135
+    },
+    "Q wave (posterior - V7-V9)": {
+      "auroc": 0.8621,
+      "n_pos": 34
+    }
+  },
+  "physiologic": {
+    "axis_left": {
+      "auroc": 0.8168,
+      "ci": [
+        0.7978,
+        0.8358
+      ],
+      "n_test": 3024,
+      "n_pos": 563
+    },
+    "axis_right": {
+      "auroc": 0.8841,
+      "ci": [
+        0.8486,
+        0.9147
+      ],
+      "n_test": 3024,
+      "n_pos": 53
+    },
+    "lvef_le40": {
+      "auroc": 0.7795,
+      "ci": [
+        0.7412,
+        0.8157
+      ],
+      "n_test": 840,
+      "n_pos": 153
+    },
+    "shd": {
+      "auroc": 0.6812,
+      "ci": [
+        0.6465,
+        0.7143
+      ],
+      "n_test": 943,
+      "n_pos": 496
+    },
+    "afib_5y": {
+      "auroc": 0.7251,
+      "ci": [
+        0.6919,
+        0.7577
+      ],
+      "n_test": 981,
+      "n_pos": 361
+    },
+    "acs_acute": {
+      "auroc": 0.8086,
+      "ci": [
+        0.7514,
+        0.8576
+      ],
+      "n_test": 317,
+      "n_pos": 115
+    }
+  },
+  "diagnostic_macro_auroc": 0.8514
+}

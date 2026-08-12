@@ -1,0 +1,71 @@
+# Stage-1 Q-Former sweep — NEW TOKENIZER (x1_split: ScalableEncoder + split codebooks)
+#
+# Focused Bayesian sweep over the axes that matter for the split-latent tokenizer, on top of
+# winner_base_config.yaml (adapted x1_split, MedGemma-4B text encoder = e4d decoder base).
+#
+# KEY new axis: codebook_offset. x1_split concentrates endpoint (LVEF/AFib/SHD) information in
+# the COARSE codebooks [0,1] (sem_codebooks=2). The bridge selects `num_codebooks_kept` codebooks
+# starting at a resolved offset (offset<0 -> last-N; offset>=0 -> first-N). So (kept=2, offset=0)
+# feeds codebooks [0,1] (endpoint-rich), while the legacy default (kept=1, offset=-1) keeps only
+# the last/finest codebook [7]. The sweep discovers the best selection for this tokenizer.
+command:
+  - torchrun
+  - "--nproc_per_node=2"
+  - "--master_port=29548"
+  - "scripts/main.py"
+  - "--base_config"
+  - "config/ecg_text_stage1/winner_base_config.yaml"
+  - ${args}
+
+name: "ecg_text_stage1_x1split_sweep"
+project: "ecg_text_stage1_x1split"
+entity: "mhi_ai"
+method: bayes
+
+metric:
+  name: val/loss
+  goal: minimize
+
+parameters:
+  # --- codebook selection: the primary axis for the split tokenizer ---
+  num_codebooks_kept:
+    values: [1, 2, 4, 8]
+  codebook_offset:
+    values: [0, -1]
+  bridge_bias_last_codebook:
+    values: [0.0, 0.5]
+  # --- bridge capacity ---
+  num_query_tokens:
+    values: [16, 32, 48]
+  bridge_num_layers:
+    values: [6, 8]
+  cross_every:
+    values: [1, 2]
+  # --- optimization ---
+  lr:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.0003
+  weight_decay:
+    values: [0.0, 0.01]
+  # --- contrastive/generative loss balance ---
+  etg_weight:
+    values: [0.5, 1.0]
+  etm_hard_neg_k:
+    values: [1, 2]
+  # fixed identity params
+  name:
+    values: ["ecg_text_stage1_x1split_sweep"]
+  project:
+    values: ["ecg_text_stage1_x1split"]
+  entity:
+    values: ["mhi_ai"]
+
+early_terminate:
+  type: hyperband
+  min_iter: 3
+  eta: 2
+  s: 2
+
+run_mode: train
+use_wandb: true
