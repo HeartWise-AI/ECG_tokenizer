@@ -40,12 +40,36 @@ if not hasattr(_gemma_mod, "tokenization_gemma_fast"):
     sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = shim
     _gemma_mod.tokenization_gemma_fast = shim
 
-import transformers.tokenization_utils as _tok_utils
-if not hasattr(_tok_utils, "Trie"):
-    class _Trie:
-        def __init__(self, *a, **kw): pass
-        def __setstate__(self, state): pass
-    _tok_utils.Trie = _Trie
+def _install_trie_shim():
+    """transformers >=5 moved Trie out of tokenization_utils and may lazily replace
+    that module AFTER we patch it, so (mirroring scripts/main.py) force-set the real
+    Trie on every registered alias and re-run before every torch.load."""
+    try:
+        try:
+            from transformers.tokenization_python import Trie as _Trie
+        except ImportError:
+            try:
+                from transformers.tokenization_utils_base import Trie as _Trie
+            except ImportError:
+                class _Trie:  # last resort: no-op unpickle target
+                    def __init__(self, *a, **kw): pass
+                    def __setstate__(self, state): pass
+        for mod_name in ("transformers.tokenization_utils",
+                         "transformers.tokenization_utils_sentencepiece"):
+            mod = sys.modules.get(mod_name)
+            if mod is None and mod_name == "transformers.tokenization_utils":
+                mod = importlib.import_module(mod_name)
+            if mod is not None and not hasattr(mod, "Trie"):
+                mod.Trie = _Trie
+    except Exception:
+        pass
+
+_install_trie_shim()
+_orig_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    _install_trie_shim()
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
 
 _gemma_tok = importlib.import_module("transformers.models.gemma.tokenization_gemma")
 if hasattr(_gemma_tok.GemmaTokenizer, "__setstate__"):
@@ -116,6 +140,8 @@ def load_model(checkpoint_path: str, device: str):
         bridge_text_hidden_size=getattr(cfg, "bridge_text_hidden_size", 768),
         bridge_bias_last_codebook=getattr(cfg, "bridge_bias_last_codebook", 0.5),
         bridge_codebook_dropout=getattr(cfg, "bridge_codebook_dropout", 0.0),
+        bridge_mix_strategy=getattr(cfg, "bridge_mix_strategy", None),
+        bridge_token_axis=getattr(cfg, "bridge_token_axis", None),
         bridge_cross_every=getattr(cfg, "bridge_cross_every", 2),
         instruction_dropout=0.0,
         use_lora=use_lora,

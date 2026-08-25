@@ -69,6 +69,8 @@ class ECGTextStage1Config(HeartWiseConfig):
     log_every_steps: int
     checkpoint_every: int
     checkpoint_dir: str | None
+    bridge_mix_strategy: str = "softmax"
+    bridge_token_axis: str = "channel"
     tail_enable: bool = False
     tail_select_mode: str = "topN"
     tail_top_n: int = 50

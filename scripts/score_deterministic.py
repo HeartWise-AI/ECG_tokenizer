@@ -55,8 +55,10 @@ def main():
     ap.add_argument("--tag", default="model")
     a = ap.parse_args()
     files = glob.glob(a.paths) if any(c in a.paths for c in "*?[") else [a.paths]
-    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True).drop_duplicates(
-        subset=[c for c in ("waveform_name", "question") if c in pd.read_csv(files[0], nrows=1).columns])
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    dedup_cols = [c for c in ("waveform_name", "question", "json_key", "prompt") if c in df.columns]
+    if dedup_cols:
+        df = df.drop_duplicates(subset=dedup_cols)
     print(f"[{a.tag}] {len(df):,} rows from {len(files)} file(s)")
 
     # ---- LVEF: proper AUROC from parsed EF ----

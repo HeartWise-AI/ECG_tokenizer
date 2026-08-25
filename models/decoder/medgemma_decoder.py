@@ -259,6 +259,8 @@ class MedGemmaDecoder(nn.Module):
         qformer_text_hidden = int(unused_kwargs.pop("bridge_text_hidden_size", bridge_mid_dim))
         qformer_bias_last = float(unused_kwargs.pop("bridge_bias_last_codebook", 0.5))
         qformer_codebook_dropout = float(unused_kwargs.pop("bridge_codebook_dropout", 0.0))
+        qformer_mix_strategy = str(unused_kwargs.pop("bridge_mix_strategy", "softmax") or "softmax")
+        qformer_token_axis = str(unused_kwargs.pop("bridge_token_axis", "channel") or "channel")
         qformer_cross_every = int(unused_kwargs.pop("bridge_cross_every", 2))
         instruction_dropout = float(unused_kwargs.pop("instruction_dropout", 0.0))
 
@@ -429,6 +431,8 @@ class MedGemmaDecoder(nn.Module):
                 num_special_tokens=bridge_num_special_tokens,
                 bias_last_codebook=qformer_bias_last,
                 codebook_dropout=qformer_codebook_dropout,
+                mix_strategy=qformer_mix_strategy,
+                token_axis=qformer_token_axis,
                 cross_every=qformer_cross_every,
             )
             self.bridge_config = {
@@ -443,6 +447,8 @@ class MedGemmaDecoder(nn.Module):
                 "text_hidden_size": qformer_text_hidden,
                 "bias_last_codebook": qformer_bias_last,
                 "codebook_dropout": qformer_codebook_dropout,
+                "mix_strategy": qformer_mix_strategy,
+                "token_axis": qformer_token_axis,
                 "cross_every": qformer_cross_every,
             }
         elif _matches(qformer_bridge_aliases):
@@ -461,6 +467,8 @@ class MedGemmaDecoder(nn.Module):
                 num_special_tokens=bridge_num_special_tokens,
                 bias_last_codebook=qformer_bias_last,
                 codebook_dropout=qformer_codebook_dropout,
+                mix_strategy=qformer_mix_strategy,
+                token_axis=qformer_token_axis,
             )
             self.bridge_config = {
                 "style": "qformer",
@@ -474,6 +482,8 @@ class MedGemmaDecoder(nn.Module):
                 "text_hidden_size": qformer_text_hidden,
                 "bias_last_codebook": qformer_bias_last,
                 "codebook_dropout": qformer_codebook_dropout,
+                "mix_strategy": qformer_mix_strategy,
+                "token_axis": qformer_token_axis,
             }
         elif _matches(sequence_token_aliases):
             self.bridge = SequenceTokenBridge(
@@ -1037,6 +1047,19 @@ class MedGemmaDecoder(nn.Module):
         # Also enforce token count and hidden dim based on checkpoint metadata.
         meta_dim = self.stage1_metadata.get("bridge_token_dim")
         _require_match("bridge_hidden_size (checkpoint)", meta_dim, actual_hidden)
+
+        # mix_strategy / token_axis are structural (different fusion parameters and kv
+        # geometry): a mismatch makes strict=False loading silently drop weights, so fail hard.
+        for cfg_key, attr in (("bridge_mix_strategy", "mix_strategy"),
+                              ("bridge_token_axis", "token_axis")):
+            expected = cfg.get(cfg_key)
+            actual = getattr(self.bridge, attr, None)
+            if expected is not None and actual is not None and str(expected) != str(actual):
+                raise ValueError(
+                    f"Stage-1 checkpoint '{stage1_checkpoint_path}' was trained with "
+                    f"{cfg_key}='{expected}' but the current config instantiated "
+                    f"'{actual}'. Set {cfg_key}: {expected} in the Stage-3 config."
+                )
 
         if mismatches:
             details = "; ".join(mismatches)
