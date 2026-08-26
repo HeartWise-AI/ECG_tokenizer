@@ -83,6 +83,8 @@ class LLMFinetuningConfig(HeartWiseConfig):
     bridge_text_hidden_size: Optional[int] = None
     bridge_bias_last_codebook: Optional[float] = None
     bridge_codebook_dropout: Optional[float] = None
+    bridge_mix_strategy: Optional[str] = None
+    bridge_token_axis: Optional[str] = None
     bridge_cross_every: Optional[int] = None
     # P1: parallel continuous-feature (pre-quantization) Perceiver path. When enabled, the
     # pre-quant encoder output is resampled into `continuous_num_tokens` soft tokens and

@@ -35,6 +35,7 @@ from transformers import AutoTokenizer  # noqa: E402
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper  # noqa: E402
 from utils.enums import DecoderMode  # noqa: E402
 from utils.files_handler import load_yaml  # noqa: E402
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option  # noqa: E402
 
 
 def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
@@ -112,6 +113,8 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
         bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
         bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_mix_strategy=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_mix_strategy"),
+        bridge_token_axis=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_token_axis"),
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,

@@ -1126,6 +1126,7 @@ class SiglipPhase1Project(BaseProject):
                     num_special_tokens=int(getattr(self.config, "bridge_num_special_tokens", 0)),
                     bias_last_codebook=float(getattr(self.config, "bridge_bias_last_codebook", 0.5)),
                     codebook_dropout=float(getattr(self.config, "bridge_codebook_dropout", 0.0)),
+                    mix_strategy=str(getattr(self.config, "bridge_mix_strategy", "softmax") or "softmax"),
                 )
             else:
                 kwargs = dict(

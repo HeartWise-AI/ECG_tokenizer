@@ -541,6 +541,9 @@ class ECGQFormerBridge(nn.Module):
         num_special_tokens: int = 4,
         bias_last_codebook: float = 0.5,
         codebook_dropout: float = 0.0,
+        mix_strategy: str = "softmax",
+        token_axis: str = "channel",
+        codebook_dim: int = 82,
     ) -> None:
         super().__init__()
 
@@ -548,6 +551,17 @@ class ECGQFormerBridge(nn.Module):
             raise ValueError(f"d_mid ({d_mid}) must be divisible by num_heads ({num_heads}).")
         if num_codebooks <= 0:
             raise ValueError("num_codebooks must be positive for ECGQFormerBridge.")
+        if mix_strategy not in ("softmax", "sum", "concat_linear"):
+            raise ValueError(
+                f"mix_strategy must be 'softmax', 'sum', or 'concat_linear'; got '{mix_strategy}'."
+            )
+        if token_axis not in ("channel", "time"):
+            raise ValueError(f"token_axis must be 'channel' or 'time'; got '{token_axis}'.")
+        if token_axis == "time" and mix_strategy == "softmax":
+            raise ValueError(
+                "mix_strategy='softmax' is incompatible with token_axis='time'; "
+                "use 'sum' or 'concat_linear'."
+            )
 
         self.vocab_size = int(vocab_size)
         self.pad_id = int(vocab_size)
@@ -556,6 +570,9 @@ class ECGQFormerBridge(nn.Module):
         self.num_query_tokens = int(num_query_tokens)
         self.bias_last_codebook = float(bias_last_codebook)
         self.codebook_dropout = float(codebook_dropout)
+        self.mix_strategy = str(mix_strategy)
+        self.token_axis = str(token_axis)
+        self.codebook_dim = int(codebook_dim)
 
         total_vocab = self.vocab_size + max(1, int(num_special_tokens))
         self.embed_tables = nn.ModuleList([
@@ -564,11 +581,38 @@ class ECGQFormerBridge(nn.Module):
         ])
 
         self.input_norm = nn.RMSNorm(d_mid)
-        self.mix_gate = nn.Sequential(
-            nn.Linear(self.num_codebooks * d_mid, d_mid),
-            nn.GELU(),
-            nn.Linear(d_mid, self.num_codebooks),
-        )
+        if self.token_axis == "time":
+            # Step 3.2: kv positions are TIME slices, not channels. Codes are assigned
+            # per channel (RVQ dim=codebook_dim quantises the time course), so the ids
+            # carry no time axis - rebuild the continuous post-quant tensor z through the
+            # FROZEN quantizer itself (get_output_from_indices; the x1_split RVQ uses
+            # implicit neural codebooks, so levels >=1 are MLP-conditioned on the running
+            # sum and no static table can reproduce them), transpose it time-major, and
+            # project each time slice to d_mid with an identity init: at step 0 the kv
+            # features ARE zᵀ (+PE) - the probe-validated view. The quantizer is attached
+            # by reference via attach_quantizer() and is NOT part of this module's params.
+            object.__setattr__(self, "_frozen_rvq", None)
+            self.time_proj = nn.Linear(self.num_steps, d_mid)
+            with torch.no_grad():
+                self.time_proj.weight.zero_()
+                self.time_proj.weight[: self.num_steps, : self.num_steps] = torch.eye(self.num_steps)
+                self.time_proj.bias.zero_()
+        elif self.mix_strategy == "softmax":
+            self.mix_gate = nn.Sequential(
+                nn.Linear(self.num_codebooks * d_mid, d_mid),
+                nn.GELU(),
+                nn.Linear(d_mid, self.num_codebooks),
+            )
+        elif self.mix_strategy == "concat_linear":
+            # RVQ is additive: sum(e_d) is the vector the tokenizer's decoder consumes.
+            # Initialise each d_mid x d_mid block to the identity so the projection starts
+            # as the plain sum and can only diverge from it if the data asks for it.
+            self.mix_proj = nn.Linear(self.num_codebooks * d_mid, d_mid)
+            with torch.no_grad():
+                self.mix_proj.weight.copy_(
+                    torch.eye(d_mid).repeat(1, self.num_codebooks)
+                )
+                self.mix_proj.bias.zero_()
 
         self.register_buffer("time_pe_cache", torch.empty(0), persistent=False)
 
@@ -594,11 +638,64 @@ class ECGQFormerBridge(nn.Module):
 
         self.dropout = nn.Dropout(dropout if dropout and dropout > 0 else 0.0)
 
+    def attach_quantizer(self, rvq: nn.Module) -> None:
+        """Attach the FROZEN ResidualVQ by reference (token_axis='time' only).
+
+        Stored via object.__setattr__ so it is NOT registered as a submodule: its
+        weights stay out of this bridge's state_dict/optimizer and are owned by the
+        tokenizer that loaded them. A reference stays valid if the owner loads new
+        weights in place afterwards."""
+        if self.token_axis != "time":
+            raise RuntimeError("attach_quantizer is only meaningful for token_axis='time'.")
+        if not hasattr(rvq, "get_output_from_indices"):
+            raise TypeError("attach_quantizer expects a ResidualVQ with get_output_from_indices.")
+
+        cb = getattr(rvq, "codebooks", None)
+        quantizer_count = getattr(rvq, "num_quantizers", None)
+        if quantizer_count is None:
+            layers = getattr(rvq, "layers", None)
+            if layers is not None:
+                quantizer_count = len(layers)
+            elif cb is not None and getattr(cb, "ndim", 0) >= 3:
+                quantizer_count = int(cb.shape[0])
+        if quantizer_count is None:
+            raise TypeError("attach_quantizer could not determine the quantizer count.")
+        if int(quantizer_count) != self.num_codebooks:
+            raise ValueError(
+                f"quantizer num_quantizers {int(quantizer_count)} != "
+                f"bridge num_codebooks {self.num_codebooks}."
+            )
+
+        quantizer_dim = getattr(rvq, "dim", None)
+        if quantizer_dim is None and cb is not None and getattr(cb, "ndim", 0) >= 2:
+            quantizer_dim = int(cb.shape[-1])
+        if quantizer_dim is None:
+            raise TypeError("attach_quantizer could not determine the quantizer codebook dimension.")
+        if int(quantizer_dim) != self.codebook_dim:
+            raise ValueError(
+                f"quantizer codebook_dim {int(quantizer_dim)} != "
+                f"bridge codebook_dim {self.codebook_dim}."
+            )
+        object.__setattr__(self, "_frozen_rvq", rvq)
+
     @property
     def num_tokens(self) -> int:
         return self.num_query_tokens
 
     def _prepare_ids(self, ecg_ids: torch.Tensor) -> torch.Tensor:
+        if self.token_axis == "time":
+            if ecg_ids.dim() != 3:
+                raise ValueError(
+                    "token_axis='time' requires ECG ids shaped "
+                    f"[batch, seq, {self.num_codebooks}]; got {tuple(ecg_ids.shape)}."
+                )
+            if ecg_ids.size(-1) != self.num_codebooks:
+                raise ValueError(
+                    f"token_axis='time' requires exactly {self.num_codebooks} codebooks; "
+                    f"got {ecg_ids.size(-1)}."
+                )
+            return ecg_ids
+
         if ecg_ids.dim() == 2:
             ecg_ids = ecg_ids.unsqueeze(-1)
         elif ecg_ids.dim() != 3:
@@ -630,11 +727,12 @@ class ECGQFormerBridge(nn.Module):
             self.time_pe_cache = pe
         return self.time_pe_cache[:length].to(device=device, dtype=dtype)
 
-    def forward(
-        self,
-        ecg_ids: torch.Tensor,
-        attn_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _embed_and_fuse(self, ecg_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Embed per-codebook ids and fuse them into one vector per position.
+
+        Returns (mixed [B, L, d_mid] - normalised, dropout applied - and
+        valid_positions [B, L], True where at least one codebook holds a real code).
+        """
         if ecg_ids.dtype != torch.long:
             ecg_ids = ecg_ids.long()
 
@@ -642,47 +740,120 @@ class ECGQFormerBridge(nn.Module):
         batch_size, seq_len, _ = ecg_ids.shape
 
         original_ids = ecg_ids
-        ids = ecg_ids.clamp_min(0)
+        if self.token_axis == "time":
+            invalid_ids = (ecg_ids < 0) | (ecg_ids >= self.vocab_size)
+            if bool(invalid_ids.any()):
+                raise ValueError(
+                    f"token_axis='time' requires RVQ ids in range [0, {self.vocab_size}); "
+                    "padding and invalid ids are not supported."
+                )
+            ids = ecg_ids
+        else:
+            ids = ecg_ids.clamp_min(0)
         valid_levels = original_ids >= 0
         if self.pad_id is not None:
             valid_levels = valid_levels & (original_ids != self.pad_id)
 
+        if self.token_axis == "time":
+            rvq = getattr(self, "_frozen_rvq", None)
+            if rvq is None:
+                raise RuntimeError(
+                    "token_axis='time' requires attach_quantizer(rvq) before the first forward."
+                )
+            # ids: [B, L(channels), num_codebooks] -> exact post-quant tensor z through the
+            # frozen quantizer decode (handles implicit-neural-codebook levels correctly).
+            # The INC decode materialises large per-level intermediates, so rebuild in
+            # small batch chunks - z itself is tiny (B x 128 x 82).
+            chunk = int(getattr(self, "rebuild_chunk", 64) or 64)
+            with torch.no_grad():
+                parts = [
+                    rvq.get_output_from_indices(ids[i:i + chunk])
+                    for i in range(0, ids.size(0), chunk)
+                ]
+                z = torch.cat(parts, dim=0)                      # [B, L, codebook_dim]
+            expected_shape = (batch_size, seq_len, self.codebook_dim)
+            if tuple(z.shape) != expected_shape:
+                raise RuntimeError(
+                    "quantizer reconstruction shape mismatch: "
+                    f"expected {expected_shape}, got {tuple(z.shape)}."
+                )
+            z = z.to(dtype=self.time_proj.weight.dtype)
+            zt = z.permute(0, 2, 1)                              # [B, D(time), L(channels)]
+            mixed = self.time_proj(zt)
+            time_pe = self._time_pe(self.codebook_dim, mixed.size(-1), mixed.device, mixed.dtype)
+            mixed = mixed + time_pe.unsqueeze(0)
+            mixed = self.input_norm(mixed)
+            mixed = self.dropout(mixed)
+            # every time slice of a full-length ECG is a valid kv position
+            valid_positions = torch.ones(batch_size, self.codebook_dim,
+                                         dtype=torch.bool, device=mixed.device)
+            return mixed, valid_positions
+
         embeddings: List[torch.Tensor] = []
         for level, table in enumerate(self.embed_tables):
             level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
-            level_embed = table(level_ids)
-            embeddings.append(level_embed)
+            embeddings.append(table(level_ids))
         x_stack = torch.stack(embeddings, dim=2)  # [B, L, num_codebooks, d_mid]
 
         time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
-        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
-
         level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
-        x_stack = x_stack * level_mask
 
-        gate_input = x_stack.reshape(batch_size, seq_len, -1)
-        gate_logits = self.mix_gate(gate_input)
+        if self.mix_strategy == "softmax":
+            x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
+            x_stack = x_stack * level_mask
 
-        if self.bias_last_codebook:
-            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
+            gate_input = x_stack.reshape(batch_size, seq_len, -1)
+            gate_logits = self.mix_gate(gate_input)
 
-        if self.training and self.codebook_dropout > 0.0:
-            drop_prob = torch.rand_like(gate_logits) < self.codebook_dropout
-            drop_prob = drop_prob & valid_levels
-            gate_logits = gate_logits.masked_fill(drop_prob, -1e4)
+            if self.bias_last_codebook:
+                gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
 
-        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
-        gate_logits = gate_logits + mask_logits
+            if self.training and self.codebook_dropout > 0.0:
+                drop_prob = torch.rand_like(gate_logits) < self.codebook_dropout
+                drop_prob = drop_prob & valid_levels
+                gate_logits = gate_logits.masked_fill(drop_prob, -1e4)
 
-        weights = gate_logits.softmax(dim=-1)
-        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
+            mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
+            gate_logits = gate_logits + mask_logits
+
+            weights = gate_logits.softmax(dim=-1)
+            mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
+        else:
+            # Additive fusion: invalid levels are zeroed so they contribute nothing to the
+            # sum, and the positional encoding is added once after fusion (the softmax gate
+            # folds it in at weight-sum 1; an unscaled per-level add would inject it
+            # num_codebooks times).
+            x_stack = x_stack * level_mask
+            if self.training and self.codebook_dropout > 0.0:
+                keep = (
+                    torch.rand(
+                        batch_size, seq_len, self.num_codebooks, 1,
+                        device=x_stack.device,
+                    )
+                    >= self.codebook_dropout
+                )
+                x_stack = x_stack * keep.to(x_stack.dtype)
+            if self.mix_strategy == "sum":
+                mixed = x_stack.sum(dim=2)
+            else:
+                mixed = self.mix_proj(x_stack.reshape(batch_size, seq_len, -1))
+            mixed = mixed + time_pe.unsqueeze(0)
 
         valid_positions = valid_levels.any(dim=-1)
         mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
         mixed = self.input_norm(mixed)
         mixed = self.dropout(mixed)
+        return mixed, valid_positions
 
-        if attn_mask is not None:
+    def forward(
+        self,
+        ecg_ids: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        mixed, valid_positions = self._embed_and_fuse(ecg_ids)
+        batch_size = mixed.size(0)
+
+        if attn_mask is not None and self.token_axis == "channel":
             if attn_mask.dim() > 2:
                 raise ValueError("attn_mask for ECGQFormerBridge must be [batch, seq].")
             attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)
@@ -922,6 +1093,9 @@ class ECGQFormerBridgeStage1(ECGQFormerBridge):
         num_special_tokens: int = 4,
         bias_last_codebook: float = 0.5,
         codebook_dropout: float = 0.0,
+        mix_strategy: str = "softmax",
+        token_axis: str = "channel",
+        codebook_dim: int = 82,
         *,
         txt_vocab_size: int,
         txt_pad_id: int,
@@ -948,6 +1122,9 @@ class ECGQFormerBridgeStage1(ECGQFormerBridge):
             num_special_tokens=num_special_tokens,
             bias_last_codebook=bias_last_codebook,
             codebook_dropout=codebook_dropout,
+            mix_strategy=mix_strategy,
+            token_axis=token_axis,
+            codebook_dim=codebook_dim,
         )
 
         self.txt_pad_id = int(txt_pad_id)
@@ -1063,52 +1240,9 @@ class ECGQFormerBridgeStage1(ECGQFormerBridge):
         ecg_ids: torch.Tensor,
         attn_mask: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if ecg_ids.dtype != torch.long:
-            ecg_ids = ecg_ids.long()
+        mixed, valid_positions = self._embed_and_fuse(ecg_ids)
 
-        ecg_ids = self._prepare_ids(ecg_ids)
-        batch_size, seq_len, _ = ecg_ids.shape
-
-        original_ids = ecg_ids
-        ids = ecg_ids.clamp_min(0)
-        valid_levels = original_ids >= 0
-        if self.pad_id is not None:
-            valid_levels = valid_levels & (original_ids != self.pad_id)
-
-        embeddings: List[torch.Tensor] = []
-        for level, table in enumerate(self.embed_tables):
-            level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
-            embeddings.append(table(level_ids))
-        x_stack = torch.stack(embeddings, dim=2)
-
-        time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
-        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
-
-        level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
-        x_stack = x_stack * level_mask
-
-        gate_input = x_stack.reshape(batch_size, seq_len, -1)
-        gate_logits = self.mix_gate(gate_input)
-
-        if self.bias_last_codebook:
-            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
-
-        if self.training and self.codebook_dropout > 0.0:
-            drop_mask = (torch.rand_like(gate_logits) < self.codebook_dropout) & valid_levels
-            gate_logits = gate_logits.masked_fill(drop_mask, -1e4)
-
-        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
-        gate_logits = gate_logits + mask_logits
-
-        weights = gate_logits.softmax(dim=-1)
-        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
-
-        valid_positions = valid_levels.any(dim=-1)
-        mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
-        mixed = self.input_norm(mixed)
-        mixed = self.dropout(mixed)
-
-        if attn_mask is not None:
+        if attn_mask is not None and self.token_axis == "channel":
             if attn_mask.dim() > 2:
                 raise ValueError("ecg attn_mask must be 2D for ECGQFormerBridgeStage1.")
             attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)
@@ -1239,6 +1373,9 @@ class InstructionAwareECGQFormerBridge(ECGQFormerBridge):
         num_special_tokens: int = 4,
         bias_last_codebook: float = 0.5,
         codebook_dropout: float = 0.0,
+        mix_strategy: str = "softmax",
+        token_axis: str = "channel",
+        codebook_dim: int = 82,
         *,
         cross_every: int = 2,
     ) -> None:
@@ -1256,6 +1393,9 @@ class InstructionAwareECGQFormerBridge(ECGQFormerBridge):
             num_special_tokens=num_special_tokens,
             bias_last_codebook=bias_last_codebook,
             codebook_dropout=codebook_dropout,
+            mix_strategy=mix_strategy,
+            token_axis=token_axis,
+            codebook_dim=codebook_dim,
         )
 
         if cross_every <= 0:
@@ -1379,53 +1519,9 @@ class InstructionAwareECGQFormerBridge(ECGQFormerBridge):
         ecg_ids: torch.Tensor,
         attn_mask: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if ecg_ids.dtype != torch.long:
-            ecg_ids = ecg_ids.long()
+        mixed, valid_positions = self._embed_and_fuse(ecg_ids)
 
-        ecg_ids = self._prepare_ids(ecg_ids)
-        batch_size, seq_len, _ = ecg_ids.shape
-
-        original_ids = ecg_ids
-        ids = ecg_ids.clamp_min(0)
-        valid_levels = original_ids >= 0
-        pad_id = getattr(self, "pad_id", None)
-        if pad_id is not None:
-            valid_levels = valid_levels & (original_ids != pad_id)
-
-        embeddings: List[torch.Tensor] = []
-        for level, table in enumerate(self.embed_tables):
-            level_ids = ids[..., level].clamp(max=table.num_embeddings - 1)
-            embeddings.append(table(level_ids))
-        x_stack = torch.stack(embeddings, dim=2)
-
-        time_pe = self._time_pe(seq_len, x_stack.size(-1), x_stack.device, x_stack.dtype)
-        x_stack = x_stack + time_pe.unsqueeze(0).unsqueeze(2)
-
-        level_mask = valid_levels.unsqueeze(-1).to(x_stack.dtype)
-        x_stack = x_stack * level_mask
-
-        gate_input = x_stack.reshape(batch_size, seq_len, -1)
-        gate_logits = self.mix_gate(gate_input)
-
-        if self.bias_last_codebook:
-            gate_logits[..., -1] = gate_logits[..., -1] + float(self.bias_last_codebook)
-
-        if self.training and self.codebook_dropout > 0.0:
-            drop_mask = (torch.rand_like(gate_logits) < self.codebook_dropout) & valid_levels
-            gate_logits = gate_logits.masked_fill(drop_mask, -1e4)
-
-        mask_logits = (~valid_levels).to(gate_logits.dtype) * -1e4
-        gate_logits = gate_logits + mask_logits
-
-        weights = gate_logits.softmax(dim=-1)
-        mixed = (weights.unsqueeze(-1) * x_stack).sum(dim=2)
-
-        valid_positions = valid_levels.any(dim=-1)
-        mixed = mixed * valid_positions.unsqueeze(-1).to(mixed.dtype)
-        mixed = self.input_norm(mixed)
-        mixed = self.dropout(mixed)
-
-        if attn_mask is not None:
+        if attn_mask is not None and self.token_axis == "channel":
             if attn_mask.dim() > 2:
                 raise ValueError("ecg attn_mask must be 2D for instruction-aware bridge.")
             attn_mask_bool = attn_mask.to(dtype=torch.bool, device=mixed.device)

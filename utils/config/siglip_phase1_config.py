@@ -58,6 +58,7 @@ class SiglipPhase1Config(HeartWiseConfig):
     codebook_offset: int = 0
     bridge_bias_last_codebook: float = 0.5
     bridge_codebook_dropout: float = 0.0
+    bridge_mix_strategy: str = "softmax"
     num_query_tokens: int | None = None
     lm_loss_weight: float = 1.0
     siglip_loss_weight: float = 0.5
