@@ -18,6 +18,7 @@ import numpy as np, pandas as pd, torch
 import models  # noqa: F401 — populates registry (incl. ScalableEncoder, ECGQFormerBridgeStage1)
 from utils.registry import ModelRegistry
 from utils.constants import ECG_PATTERNS
+from utils.ecg_waveform import load_ecg_waveform
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
@@ -45,7 +46,7 @@ def load_tokenizer(dev, tok_path=TOK):
     return enc.to(dev).eval(), q.to(dev).eval()
 
 
-def load_bridge(ckpt_path, dev):
+def load_bridge(ckpt_path, dev, q):
     sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg, msd = sd["config"], sd["model_state_dict"]
     g = lambda k, d=None: (cfg.get(k, d) if isinstance(cfg, dict) else getattr(cfg, k, d))
@@ -60,15 +61,18 @@ def load_bridge(ckpt_path, dev):
         num_special_tokens=int(g("bridge_num_special_tokens", 4)),
         bias_last_codebook=float(g("bridge_bias_last_codebook", 0.5)),
         codebook_dropout=float(g("bridge_codebook_dropout", 0.0)),
+        mix_strategy=str(g("bridge_mix_strategy", "softmax") or "softmax"),
+        token_axis=str(g("bridge_token_axis", "channel") or "channel"),
         txt_vocab_size=txt_vocab, txt_pad_id=0, txt_cls_id=1,
         cross_every=int(g("cross_every", 2)), bert_layers=g("bert_layers"),
     )
+    if getattr(bridge, "token_axis", "channel") == "time":
+        rvq = getattr(q, "quantizer", q)
+        bridge.attach_quantizer(rvq)
     res = bridge.load_state_dict(msd, strict=False)
-    ecg_keys = [k for k in bridge.state_dict() if any(t in k for t in ("embed_tables", "queries", "stage1_blocks", "_pool", "ecg", "time"))]
-    ecg_missing = [k for k in res.missing_keys if any(t in k for t in ("embed_tables", "queries", "stage1_blocks", "_pool", "ecg", "time"))]
-    print(f"  bridge loaded @ epoch {sd.get('epoch')}: {len(msd)} keys | missing {len(res.missing_keys)} (ECG-path missing {len(ecg_missing)}) | unexpected {len(res.unexpected_keys)}")
-    if ecg_missing:
-        print("  WARNING ECG-path missing:", ecg_missing[:6])
+    if res.missing_keys or res.unexpected_keys:
+        raise RuntimeError(f"Bridge checkpoint keys mismatch: {res}")
+    print(f"  bridge loaded @ epoch {sd.get('epoch')}: {len(msd)} keys")
     return bridge.to(dev).eval(), keep, off
 
 
@@ -86,14 +90,7 @@ def extract(enc, q, bridge, paths, dev, keep, off, repr_mode="etc", bs=24, lengt
     for i in range(0, len(paths), bs):
         sigs = []
         for p in paths[i:i + bs]:
-            try:
-                s = np.load(p).astype(np.float32)
-            except Exception:
-                s = np.zeros((length, 12), np.float32)
-            if s.ndim == 3: s = s.squeeze(-1)
-            if s.shape[0] > length: s = s[:: max(1, s.shape[0] // length), :]
-            if s.shape[0] < length: s = np.pad(s, ((0, length - s.shape[0]), (0, 0)))
-            sigs.append(np.transpose(s[:length], (1, 0)))
+            sigs.append(load_ecg_waveform(p, target_length=length, num_leads=12))
         x = torch.from_numpy(np.stack(sigs)).to(dev)
         feats = enc(x)
         qo = q(feats, return_all_codes=True)
@@ -152,7 +149,7 @@ def main():
     print(f"[{a.tag}] probing tokenizer+bridge on {len(qa):,} ECGs | mix {qa['dataset'].value_counts().to_dict()}")
 
     enc, q = load_tokenizer(dev, a.tok)
-    bridge, keep, off = load_bridge(bridge_ckpt, dev)
+    bridge, keep, off = load_bridge(bridge_ckpt, dev, q)
     print(f"  codebook slice: indices[..., {off}:{off+keep}]")
     t = time.time()
     X = extract(enc, q, bridge, qa["waveform_path_psa"].tolist(), dev, keep, off, repr_mode=a.repr_mode)

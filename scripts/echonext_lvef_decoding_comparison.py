@@ -13,10 +13,10 @@ Usage:
 import os
 import sys
 import re
-import json
 import warnings
 import types as _types
 import importlib as _importlib
+from pathlib import Path
 
 os.environ.setdefault("LOCAL_RANK", "0")
 os.environ.setdefault("RANK", "0")
@@ -40,6 +40,8 @@ from transformers import AutoTokenizer
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
 from utils.files_handler import load_yaml
+from utils.artifact_provenance import atomic_write_json  # noqa: E402
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option  # noqa: E402
 
 # ─── Config helpers ───────────────────────────────────────────────────────────
 
@@ -136,6 +138,8 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
         bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
         bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_mix_strategy=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_mix_strategy"),
+        bridge_token_axis=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_token_axis"),
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,
@@ -532,6 +536,10 @@ def run_strategy(
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    output_path = Path(
+        "/volume/ECG_tokenizer/autoresearch/echonext_lvef_decoding_comparison.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -590,9 +598,6 @@ def main():
           f"range=[{lvef_gt.min():.1f}, {lvef_gt.max():.1f}]")
 
     # ─── Save detailed results ────────────────────────────────────────────
-    output_dir = "/volume/ECG_tokenizer/autoresearch"
-    output_path = os.path.join(output_dir, "echonext_lvef_decoding_comparison.json")
-
     save_data = {
         "ground_truth_stats": {
             "mean": float(lvef_gt.mean()),
@@ -618,8 +623,7 @@ def main():
             ],
         }
 
-    with open(output_path, "w") as f:
-        json.dump(save_data, f, indent=2)
+    atomic_write_json(output_path, save_data)
     print(f"\nDetailed results saved to: {output_path}")
 
 

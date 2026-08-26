@@ -12,6 +12,7 @@ import torch
 from transformers import AutoTokenizer
 
 from projects.base_project import BaseProject
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option
 from utils.enums import DecoderMode
 from utils.files_handler import load_yaml
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
@@ -63,6 +64,8 @@ _CHECKPOINT_CONFIG_KEYS = (
     "bridge_text_hidden_size",
     "bridge_bias_last_codebook",
     "bridge_codebook_dropout",
+    "bridge_mix_strategy",
+    "bridge_token_axis",
     "bridge_cross_every",
     "instruction_dropout",
     "num_ecg_tokens",
@@ -180,6 +183,19 @@ class RLFinetuningProjectBase(BaseProject):
         checkpoint_dir = os.path.dirname(checkpoint_path)
         config_yaml_path = os.path.join(checkpoint_dir, "config.yaml")
         yaml_config = load_yaml(config_yaml_path) if os.path.exists(config_yaml_path) else None
+        bridge_mix_strategy = resolve_checkpoint_bridge_option(
+            pretrained_config,
+            yaml_config,
+            "bridge_mix_strategy",
+        )
+        bridge_token_axis = resolve_checkpoint_bridge_option(
+            pretrained_config,
+            yaml_config,
+            "bridge_token_axis",
+        )
+        for config in (pretrained_config, self.config):
+            config.bridge_mix_strategy = bridge_mix_strategy
+            config.bridge_token_axis = bridge_token_axis
 
         tokenizer = AutoTokenizer.from_pretrained(pretrained_config.tokenizer_name)
         if tokenizer.pad_token is None:
@@ -250,6 +266,8 @@ class RLFinetuningProjectBase(BaseProject):
             bridge_text_hidden_size=getattr(pretrained_config, "bridge_text_hidden_size", None),
             bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(pretrained_config, "bridge_bias_last_codebook", None)),
             bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(pretrained_config, "bridge_codebook_dropout", None)),
+            bridge_mix_strategy=pretrained_config.bridge_mix_strategy,
+            bridge_token_axis=pretrained_config.bridge_token_axis,
             bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(pretrained_config, "bridge_cross_every", None)),
             instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(pretrained_config, "instruction_dropout", 0.0)),
             stage1_checkpoint_path=None,

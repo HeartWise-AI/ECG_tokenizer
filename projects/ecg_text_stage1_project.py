@@ -230,12 +230,21 @@ class ECGTextStage1Project(BaseProject):
             num_special_tokens=int(self.config.bridge_num_special_tokens),
             bias_last_codebook=float(self.config.bridge_bias_last_codebook),
             codebook_dropout=float(self.config.bridge_codebook_dropout),
+            mix_strategy=str(getattr(self.config, "bridge_mix_strategy", "softmax") or "softmax"),
+            token_axis=str(getattr(self.config, "bridge_token_axis", "channel") or "channel"),
             txt_vocab_size=txt_vocab_size,
             txt_pad_id=txt_pad_id,
             txt_cls_id=txt_cls_id,
             cross_every=int(self.config.cross_every),
             bert_layers=bert_layers,
         ).to(device)
+
+        if getattr(bridge, "token_axis", "channel") == "time":
+            # time-axis kv rebuilds z from ids through the frozen quantizer decode
+            # (x1_split uses implicit neural codebooks - static tables cannot reproduce z).
+            rvq = getattr(quantizer, "quantizer", quantizer)
+            bridge.attach_quantizer(rvq)
+            print("[Stage1] bridge token_axis=time: frozen quantizer attached")
 
         optimizer = self._build_optimizer(bridge, text_encoder)
 

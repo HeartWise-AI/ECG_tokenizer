@@ -127,6 +127,7 @@ class MedGemmaDecoder(nn.Module):
         self._stage1_checkpoint_used = False
         self.stage1_metadata: Dict[str, Any] = {}
         self._stage1_config_path: Optional[Path] = None
+        self._stage1_declared_bridge_layers: Optional[int] = None
         self.debug_ecg_injection = bool(unused_kwargs.pop("debug_ecg_injection", False))
         self.add_dec_token = bool(unused_kwargs.pop("add_dec_token", True))
         self.pass_token_type_ids = bool(unused_kwargs.pop("pass_token_type_ids", True))
@@ -259,6 +260,13 @@ class MedGemmaDecoder(nn.Module):
         qformer_text_hidden = int(unused_kwargs.pop("bridge_text_hidden_size", bridge_mid_dim))
         qformer_bias_last = float(unused_kwargs.pop("bridge_bias_last_codebook", 0.5))
         qformer_codebook_dropout = float(unused_kwargs.pop("bridge_codebook_dropout", 0.0))
+        qformer_mix_strategy = str(unused_kwargs.pop("bridge_mix_strategy", "softmax") or "softmax")
+        qformer_token_axis = str(unused_kwargs.pop("bridge_token_axis", "channel") or "channel")
+        qformer_codebook_dim = int(quantized_feature_shape[-1])
+        if qformer_codebook_dim <= 0:
+            raise ValueError(
+                "quantized_feature_shape must provide a positive codebook dimension."
+            )
         qformer_cross_every = int(unused_kwargs.pop("bridge_cross_every", 2))
         instruction_dropout = float(unused_kwargs.pop("instruction_dropout", 0.0))
 
@@ -429,6 +437,9 @@ class MedGemmaDecoder(nn.Module):
                 num_special_tokens=bridge_num_special_tokens,
                 bias_last_codebook=qformer_bias_last,
                 codebook_dropout=qformer_codebook_dropout,
+                mix_strategy=qformer_mix_strategy,
+                token_axis=qformer_token_axis,
+                codebook_dim=qformer_codebook_dim,
                 cross_every=qformer_cross_every,
             )
             self.bridge_config = {
@@ -443,6 +454,9 @@ class MedGemmaDecoder(nn.Module):
                 "text_hidden_size": qformer_text_hidden,
                 "bias_last_codebook": qformer_bias_last,
                 "codebook_dropout": qformer_codebook_dropout,
+                "mix_strategy": qformer_mix_strategy,
+                "token_axis": qformer_token_axis,
+                "codebook_dim": qformer_codebook_dim,
                 "cross_every": qformer_cross_every,
             }
         elif _matches(qformer_bridge_aliases):
@@ -461,6 +475,9 @@ class MedGemmaDecoder(nn.Module):
                 num_special_tokens=bridge_num_special_tokens,
                 bias_last_codebook=qformer_bias_last,
                 codebook_dropout=qformer_codebook_dropout,
+                mix_strategy=qformer_mix_strategy,
+                token_axis=qformer_token_axis,
+                codebook_dim=qformer_codebook_dim,
             )
             self.bridge_config = {
                 "style": "qformer",
@@ -474,6 +491,9 @@ class MedGemmaDecoder(nn.Module):
                 "text_hidden_size": qformer_text_hidden,
                 "bias_last_codebook": qformer_bias_last,
                 "codebook_dropout": qformer_codebook_dropout,
+                "mix_strategy": qformer_mix_strategy,
+                "token_axis": qformer_token_axis,
+                "codebook_dim": qformer_codebook_dim,
             }
         elif _matches(sequence_token_aliases):
             self.bridge = SequenceTokenBridge(
@@ -923,6 +943,32 @@ class MedGemmaDecoder(nn.Module):
             return metadata
 
         state_dict = checkpoint.get("model_state_dict", checkpoint)
+        embedded_config = checkpoint.get("config") if isinstance(checkpoint, dict) else None
+        config_keys = (
+            "bridge_num_layers",
+            "bridge_num_heads",
+            "bridge_num_special_tokens",
+            "num_query_tokens",
+            "cross_every",
+            "bridge_hidden_size",
+            "bridge_mix_strategy",
+            "bridge_token_axis",
+        )
+        metadata["checkpoint_config"] = {
+            key: (
+                embedded_config.get(key)
+                if isinstance(embedded_config, dict)
+                else getattr(embedded_config, key, None)
+            )
+            for key in config_keys
+            if embedded_config is not None
+            and (
+                embedded_config.get(key)
+                if isinstance(embedded_config, dict)
+                else getattr(embedded_config, key, None)
+            )
+            is not None
+        }
         key_candidates = [
             "decoder.bridge.positional_embedding.weight",
             "module.decoder.bridge.positional_embedding.weight",
@@ -975,14 +1021,22 @@ class MedGemmaDecoder(nn.Module):
         if self.bridge is None:
             return
 
-        # Prefer explicit config values saved alongside Stage-1 training.
+        embedded_cfg = self.stage1_metadata.get("checkpoint_config", {})
+        if not isinstance(embedded_cfg, dict):
+            embedded_cfg = {}
+
+        # A sidecar is a legacy fallback. Embedded checkpoint structure is authoritative.
         cfg_path = self._stage1_config_path or self._infer_stage1_config_path(stage1_checkpoint_path)
-        cfg: Dict[str, Any] = {}
+        sidecar_cfg: Dict[str, Any] = {}
         if cfg_path is not None and cfg_path.exists():
             try:
-                cfg = load_yaml(str(cfg_path))
+                sidecar_cfg = load_yaml(str(cfg_path))
             except Exception as exc:
                 warnings.warn(f"Failed to load Stage-1 config at '{cfg_path}': {exc}")
+
+        def _expected(key: str) -> Any:
+            value = embedded_cfg.get(key)
+            return value if value is not None else sidecar_cfg.get(key)
 
         mismatches: list[str] = []
 
@@ -998,12 +1052,18 @@ class MedGemmaDecoder(nn.Module):
                 mismatches.append(f"{name} (config {exp_int} vs model {act_int})")
 
         # Extract expectations from Stage-1 config if present.
-        expected_layers = cfg.get("bridge_num_layers")
-        expected_heads = cfg.get("bridge_num_heads")
-        expected_special = cfg.get("bridge_num_special_tokens")
-        expected_queries = cfg.get("num_query_tokens")
-        expected_cross_every = cfg.get("cross_every")
-        expected_hidden = cfg.get("bridge_hidden_size")
+        expected_layers = _expected("bridge_num_layers")
+        self._stage1_declared_bridge_layers = None
+        if expected_layers is not None:
+            try:
+                self._stage1_declared_bridge_layers = int(expected_layers)
+            except (TypeError, ValueError):
+                pass
+        expected_heads = _expected("bridge_num_heads")
+        expected_special = _expected("bridge_num_special_tokens")
+        expected_queries = _expected("num_query_tokens")
+        expected_cross_every = _expected("cross_every")
+        expected_hidden = _expected("bridge_hidden_size")
 
         # Derive actual bridge settings from the instantiated module.
         actual_layers = len(getattr(self.bridge, "blocks", []))
@@ -1037,6 +1097,26 @@ class MedGemmaDecoder(nn.Module):
         # Also enforce token count and hidden dim based on checkpoint metadata.
         meta_dim = self.stage1_metadata.get("bridge_token_dim")
         _require_match("bridge_hidden_size (checkpoint)", meta_dim, actual_hidden)
+
+        # mix_strategy / token_axis are structural (different fusion parameters and kv
+        # geometry): a mismatch makes strict=False loading silently drop weights, so fail hard.
+        for cfg_key, attr in (("bridge_mix_strategy", "mix_strategy"),
+                              ("bridge_token_axis", "token_axis")):
+            embedded = embedded_cfg.get(cfg_key)
+            sidecar = sidecar_cfg.get(cfg_key)
+            if embedded is not None and sidecar is not None and str(embedded) != str(sidecar):
+                raise ValueError(
+                    f"Stage-1 sidecar {cfg_key}='{sidecar}' conflicts with embedded "
+                    f"checkpoint value '{embedded}'."
+                )
+            expected = embedded if embedded is not None else sidecar
+            actual = getattr(self.bridge, attr, None)
+            if expected is not None and actual is not None and str(expected) != str(actual):
+                raise ValueError(
+                    f"Stage-1 checkpoint '{stage1_checkpoint_path}' was trained with "
+                    f"{cfg_key}='{expected}' but the current config instantiated "
+                    f"'{actual}'. Set {cfg_key}: {expected} in the Stage-3 config."
+                )
 
         if mismatches:
             details = "; ".join(mismatches)
@@ -1103,6 +1183,147 @@ class MedGemmaDecoder(nn.Module):
     # ------------------------------------------------------------------
     # Token initialization helpers (borrowed from LLaMA decoder)
     # ------------------------------------------------------------------
+    def _validate_and_record_stage1_load(
+        self,
+        load_info: Dict[str, Any],
+        component_identifier: str,
+    ) -> None:
+        self.bridge_load_info = load_info
+        missing = load_info.get("missing_keys") or []
+        unexpected = load_info.get("unexpected_keys") or []
+        shape_mismatched = load_info.get("shape_mismatched_keys") or []
+        structural_markers = (
+            "embed_tables.",
+            "queries",
+            "blocks.",
+            "input_norm.",
+            "mix_gate.",
+            "mix_proj.",
+            "time_proj.",
+        )
+
+        def _is_structural(key: str) -> bool:
+            return key == "queries" or any(
+                marker in key for marker in structural_markers
+            )
+
+        structural_missing = [key for key in missing if _is_structural(key)]
+        structural_unexpected = [key for key in unexpected if _is_structural(key)]
+        structural_shapes = [
+            item for item in shape_mismatched if _is_structural(item[0])
+        ]
+        if structural_missing or structural_unexpected or structural_shapes:
+            raise RuntimeError(
+                f"{component_identifier} Stage-1 structural checkpoint mismatch: "
+                f"missing={structural_missing}, "
+                f"unexpected={structural_unexpected}, "
+                f"shape_mismatched={structural_shapes}"
+            )
+
+        stage1_blocks = load_info.get("stage1_block_count")
+        model_blocks = load_info.get("model_block_count")
+        declared_blocks = getattr(self, "_stage1_declared_bridge_layers", None)
+        if declared_blocks is None:
+            checkpoint_config = getattr(self, "stage1_metadata", {}).get(
+                "checkpoint_config", {}
+            )
+            declared_blocks = (
+                checkpoint_config.get("bridge_num_layers")
+                if isinstance(checkpoint_config, dict)
+                else None
+            )
+        if declared_blocks is not None:
+            try:
+                declared_blocks = int(declared_blocks)
+            except (TypeError, ValueError):
+                declared_blocks = None
+
+        def _require_checkpoint_blocks(
+            label: str,
+            observed: Any,
+            model_count: Any,
+        ) -> None:
+            if not isinstance(observed, int) or not isinstance(model_count, int):
+                return
+            if declared_blocks is not None and observed != declared_blocks:
+                raise RuntimeError(
+                    f"{component_identifier} Stage-1 checkpoint declares "
+                    f"{declared_blocks} {label} blocks but contains {observed}."
+                )
+            if model_count > 0 and observed == 0:
+                raise RuntimeError(
+                    f"{component_identifier} Stage-1 checkpoint contains no "
+                    f"{label} block tensors for a model with {model_count} blocks."
+                )
+
+        _require_checkpoint_blocks("Q-Former", stage1_blocks, model_blocks)
+        if (
+            isinstance(stage1_blocks, int)
+            and isinstance(model_blocks, int)
+            and stage1_blocks != model_blocks
+        ):
+            warnings.warn(
+                f"{component_identifier} Stage-1 checkpoint expects {stage1_blocks} "
+                f"blocks but config instantiated {model_blocks}. Loading available "
+                "tensors despite mismatch.",
+                UserWarning,
+            )
+        stage1_instr_blocks = load_info.get("stage1_instruction_block_count")
+        model_instr_blocks = load_info.get("model_instruction_block_count")
+        _require_checkpoint_blocks(
+            "instruction Q-Former",
+            stage1_instr_blocks,
+            model_instr_blocks,
+        )
+        if (
+            isinstance(stage1_instr_blocks, int)
+            and isinstance(model_instr_blocks, int)
+            and stage1_instr_blocks != model_instr_blocks
+        ):
+            warnings.warn(
+                f"{component_identifier} Stage-1 checkpoint expects "
+                f"{stage1_instr_blocks} instruction blocks but config instantiated "
+                f"{model_instr_blocks}. Loading available tensors despite mismatch.",
+                UserWarning,
+            )
+
+        if missing or shape_mismatched:
+            details = []
+            if missing:
+                details.append(f"missing tensors: {', '.join(missing[:5])}")
+            if shape_mismatched:
+                mismatch_preview = ", ".join(
+                    f"{name} (ckpt={ckpt_shape}, model={model_shape})"
+                    for name, ckpt_shape, model_shape in shape_mismatched[:5]
+                )
+                details.append(f"shape mismatches: {mismatch_preview}")
+            warnings.warn(
+                f"{component_identifier} Stage-1 checkpoint partially loaded: "
+                f"{len(missing)} missing, {len(shape_mismatched)} shape mismatches. "
+                + " ".join(details),
+                UserWarning,
+            )
+
+        summary: list[str] = []
+        if isinstance(stage1_blocks, int) and isinstance(model_blocks, int):
+            added_blocks = model_blocks - stage1_blocks
+            if added_blocks > 0:
+                summary.append(f"{added_blocks} new Q-Former layers initialised")
+        if isinstance(stage1_instr_blocks, int) and isinstance(model_instr_blocks, int):
+            added_instruction_blocks = model_instr_blocks - stage1_instr_blocks
+            if added_instruction_blocks > 0:
+                summary.append(
+                    f"{added_instruction_blocks} new instruction layers initialised"
+                )
+        partial = load_info.get("partially_loaded_keys") or []
+        if partial:
+            summary.append(f"partially loaded {len(partial)} tensors (tokenizer alignment)")
+        reinitialised = load_info.get("reinitialized_keys") or []
+        if reinitialised:
+            summary.append("reinitialised tensors: " + ", ".join(reinitialised))
+        if summary:
+            print(f"[Stage1] {component_identifier}: " + "; ".join(summary))
+
     def _load_stage1_weights(
         self,
         *,
@@ -1117,69 +1338,14 @@ class MedGemmaDecoder(nn.Module):
         if hasattr(stage1_component, "load_stage1_checkpoint"):
             try:
                 load_info = stage1_component.load_stage1_checkpoint(stage1_checkpoint_path, strict=False)
-                self.bridge_load_info = load_info
-                missing = load_info.get("missing_keys") or []
-                shape_mismatched = load_info.get("shape_mismatched_keys") or []
-                stage1_blocks = load_info.get("stage1_block_count")
-                model_blocks = load_info.get("model_block_count")
-                if isinstance(stage1_blocks, int) and isinstance(model_blocks, int) and stage1_blocks != model_blocks:
-                    warnings.warn(
-                        f"{component_identifier} Stage-1 checkpoint expects {stage1_blocks} blocks but config instantiated {model_blocks}. "
-                        "Loading available tensors despite mismatch.",
-                        UserWarning,
-                    )
-                stage1_instr_blocks = load_info.get("stage1_instruction_block_count")
-                model_instr_blocks = load_info.get("model_instruction_block_count")
-                if isinstance(stage1_instr_blocks, int) and isinstance(model_instr_blocks, int) and stage1_instr_blocks != model_instr_blocks:
-                    warnings.warn(
-                        f"{component_identifier} Stage-1 checkpoint expects {stage1_instr_blocks} instruction blocks but config instantiated {model_instr_blocks}. "
-                        "Loading available tensors despite mismatch.",
-                        UserWarning,
-                    )
-                if missing or shape_mismatched:
-                    missing_preview = ", ".join(missing[:5])
-                    mismatch_preview = ", ".join(
-                        f"{name} (ckpt={ckpt_shape}, model={model_shape})"
-                        for name, ckpt_shape, model_shape in shape_mismatched[:5]
-                    )
-                    details = []
-                    if missing:
-                        details.append(f"missing tensors: {missing_preview}")
-                    if shape_mismatched:
-                        details.append(f"shape mismatches: {mismatch_preview}")
-                    warnings.warn(
-                        f"{component_identifier} Stage-1 checkpoint partially loaded: "
-                        f"{len(missing)} missing, {len(shape_mismatched)} shape mismatches. "
-                        + (" ".join(details) if details else ""),
-                        UserWarning,
-                    )
-
-                summary: list[str] = []
-                stage1_layers = load_info.get("stage1_block_count")
-                model_layers = load_info.get("model_block_count")
-                if isinstance(stage1_layers, int) and isinstance(model_layers, int):
-                    diff = model_layers - stage1_layers
-                    if diff > 0:
-                        summary.append(f"{diff} new Q-Former layers initialised")
-                stage1_instr = load_info.get("stage1_instruction_block_count")
-                model_instr = load_info.get("model_instruction_block_count")
-                if isinstance(stage1_instr, int) and isinstance(model_instr, int):
-                    diff = model_instr - stage1_instr
-                    if diff > 0:
-                        summary.append(f"{diff} new instruction layers initialised")
-                partial = load_info.get("partially_loaded_keys") or []
-                if partial:
-                    summary.append(f"partially loaded {len(partial)} tensors (tokenizer alignment)")
-                reinit = load_info.get("reinitialized_keys") or []
-                if reinit:
-                    summary.append("reinitialised tensors: " + ", ".join(reinit))
-                if summary:
-                    print(f"[Stage1] {component_identifier}: " + "; ".join(summary))
+                self._validate_and_record_stage1_load(load_info, component_identifier)
                 return True
             except FileNotFoundError as exc:
                 raise FileNotFoundError(
                     f"Stage-1 checkpoint not found at '{stage1_checkpoint_path}'."
                 ) from exc
+            except (RuntimeError, ValueError):
+                raise
             except Exception as exc:
                 warnings.warn(
                     f"Failed to load Stage-1 checkpoint '{stage1_checkpoint_path}': {exc}"
@@ -1712,7 +1878,11 @@ class MedGemmaDecoder(nn.Module):
             pad_id = getattr(self.bridge, "pad_id", None)
             if codes.dim() == 4 and codes.size(0) == 1:
                 codes = codes.squeeze(0)
-            if codes.dim() == 3 and codes.size(-1) == 1:
+            if (
+                codes.dim() == 3
+                and codes.size(-1) == 1
+                and getattr(self.bridge, "token_axis", "channel") != "time"
+            ):
                 codes = codes.squeeze(-1)
             if codes.dim() not in (2, 3):
                 raise ValueError(
@@ -1729,7 +1899,12 @@ class MedGemmaDecoder(nn.Module):
                     attn_mask = codes != pad_id
                 else:
                     attn_mask = codes >= 0
-            codes = codes.clamp_min(0).to(dtype=torch.long)
+            if (
+                getattr(self.bridge, "token_axis", "channel") != "time"
+                and not isinstance(self.bridge, ECGQFormerBridge)
+            ):
+                codes = codes.clamp_min(0)
+            codes = codes.to(dtype=torch.long)
             attn_mask = attn_mask.to(device=device, dtype=torch.bool)
             return codes, attn_mask
 

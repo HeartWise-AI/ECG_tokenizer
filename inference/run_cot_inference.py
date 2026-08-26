@@ -88,6 +88,8 @@ def main(
         bridge_text_hidden_size=getattr(cfg, "bridge_text_hidden_size", None),
         bridge_bias_last_codebook=getattr(cfg, "bridge_bias_last_codebook", None),
         bridge_codebook_dropout=getattr(cfg, "bridge_codebook_dropout", None),
+        bridge_mix_strategy=getattr(cfg, "bridge_mix_strategy", None),
+        bridge_token_axis=getattr(cfg, "bridge_token_axis", None),
         bridge_cross_every=getattr(cfg, "bridge_cross_every", None),
         instruction_dropout=0.0, stage1_checkpoint_path=None,
         use_lora=bool(getattr(cfg, "use_lora", False)),

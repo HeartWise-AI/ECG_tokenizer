@@ -13,15 +13,16 @@ Usage:
 """
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
-import re
 import subprocess
 import sys
+import tempfile
 import types
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -40,12 +41,36 @@ if not hasattr(_gemma_mod, "tokenization_gemma_fast"):
     sys.modules["transformers.models.gemma.tokenization_gemma_fast"] = shim
     _gemma_mod.tokenization_gemma_fast = shim
 
-import transformers.tokenization_utils as _tok_utils
-if not hasattr(_tok_utils, "Trie"):
-    class _Trie:
-        def __init__(self, *a, **kw): pass
-        def __setstate__(self, state): pass
-    _tok_utils.Trie = _Trie
+def _install_trie_shim():
+    """transformers >=5 moved Trie out of tokenization_utils and may lazily replace
+    that module AFTER we patch it, so (mirroring scripts/main.py) force-set the real
+    Trie on every registered alias and re-run before every torch.load."""
+    try:
+        try:
+            from transformers.tokenization_python import Trie as _Trie
+        except ImportError:
+            try:
+                from transformers.tokenization_utils_base import Trie as _Trie
+            except ImportError:
+                class _Trie:  # last resort: no-op unpickle target
+                    def __init__(self, *a, **kw): pass
+                    def __setstate__(self, state): pass
+        for mod_name in ("transformers.tokenization_utils",
+                         "transformers.tokenization_utils_sentencepiece"):
+            mod = sys.modules.get(mod_name)
+            if mod is None and mod_name == "transformers.tokenization_utils":
+                mod = importlib.import_module(mod_name)
+            if mod is not None and not hasattr(mod, "Trie"):
+                mod.Trie = _Trie
+    except Exception:
+        pass
+
+_install_trie_shim()
+_orig_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    _install_trie_shim()
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
 
 _gemma_tok = importlib.import_module("transformers.models.gemma.tokenization_gemma")
 if hasattr(_gemma_tok.GemmaTokenizer, "__setstate__"):
@@ -62,7 +87,11 @@ if hasattr(_gemma_tok.GemmaTokenizer, "__setstate__"):
     _gemma_tok.GemmaTokenizer.__setstate__ = _patched_setstate
 
 from transformers import AutoTokenizer
-from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+from utils.artifact_provenance import (
+    atomic_write_json,
+    ordered_files_identity,
+    python_implementation_identity,
+)
 
 
 SYSTEM_MSG = (
@@ -70,8 +99,24 @@ SYSTEM_MSG = (
     "in a concise, structured way."
 )
 
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+IMPLEMENTATION_SOURCE_ROOTS = (
+    REPOSITORY_ROOT / "models",
+    REPOSITORY_ROOT / "data",
+    REPOSITORY_ROOT / "utils",
+)
+IMPLEMENTATION_RUNTIME_PACKAGES = (
+    "numpy",
+    "pandas",
+    "sentencepiece",
+    "torch",
+    "transformers",
+)
+
 
 def load_model(checkpoint_path: str, device: str):
+    from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
+
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
     hf_name = getattr(cfg, "huggingface_model_name", "google/medgemma-4b-it")
@@ -116,6 +161,8 @@ def load_model(checkpoint_path: str, device: str):
         bridge_text_hidden_size=getattr(cfg, "bridge_text_hidden_size", 768),
         bridge_bias_last_codebook=getattr(cfg, "bridge_bias_last_codebook", 0.5),
         bridge_codebook_dropout=getattr(cfg, "bridge_codebook_dropout", 0.0),
+        bridge_mix_strategy=getattr(cfg, "bridge_mix_strategy", None),
+        bridge_token_axis=getattr(cfg, "bridge_token_axis", None),
         bridge_cross_every=getattr(cfg, "bridge_cross_every", 2),
         instruction_dropout=0.0,
         use_lora=use_lora,
@@ -208,6 +255,7 @@ PARTIAL_REQUIRED_COLUMNS = {
     "ground_truth",
     "prompt_category",
     "checkpoint_path",
+    "run_fingerprint",
 }
 
 
@@ -222,26 +270,102 @@ def _partial_checkpoint_path(value) -> str:
     return str(Path(raw).resolve()) if raw else ""
 
 
-def expected_partial_identity(sub_row: pd.Series, checkpoint: str) -> Dict[str, object]:
+def waveform_name(path: str) -> str:
+    name = Path(path).name
+    return name[:-4] if name.endswith(".npy") else name
+
+
+def file_sha256(path: str | Path) -> str:
+    """Return a content identity for an artifact used by a resumable run."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def subset_sha256(sub: pd.DataFrame) -> str:
+    """Hash ordered, output-defining subset fields without pickle serialization."""
+    fields = [
+        "source_row_idx",
+        "waveform_path_psa",
+        "prompt",
+        "generated_answer",
+        "prompt_category",
+    ]
+    missing = [field for field in fields if field not in sub.columns]
+    if missing:
+        raise ValueError(f"subset missing fingerprint fields: {missing}")
+    digest = hashlib.sha256()
+    for record in sub[fields].to_dict(orient="records"):
+        payload = json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
+        digest.update(payload.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def build_run_fingerprint(
+    checkpoint: str,
+    sub: pd.DataFrame,
+    *,
+    max_new_tokens: int,
+    batch_size: int,
+    group_by_prompt: bool,
+    generation_microbatch_size: int | None,
+) -> str:
+    contract = {
+        "schema_version": 2,
+        "checkpoint_sha256": file_sha256(checkpoint),
+        "subset_sha256": subset_sha256(sub),
+        "implementation": python_implementation_identity(
+            (Path(__file__), *IMPLEMENTATION_SOURCE_ROOTS),
+            runtime_packages=IMPLEMENTATION_RUNTIME_PACKAGES,
+        ),
+        "ordered_waveforms": ordered_files_identity(
+            sub["waveform_path_psa"].astype(str).tolist()
+        ),
+        "max_new_tokens": int(max_new_tokens),
+        "batch_size": int(batch_size),
+        "group_by_prompt": bool(group_by_prompt),
+        "generation_microbatch_size": generation_microbatch_size,
+    }
+    payload = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def expected_partial_identity(
+    sub_row: pd.Series,
+    checkpoint: str,
+    run_fingerprint: str,
+) -> Dict[str, object]:
     return {
         "source_row_idx": int(sub_row["source_row_idx"]),
         "waveform_path": str(sub_row["waveform_path_psa"]),
+        "waveform_name": waveform_name(str(sub_row["waveform_path_psa"])),
         "question": str(sub_row["prompt"]),
         "ground_truth": str(sub_row["generated_answer"]),
         "prompt_category": str(sub_row["prompt_category"]),
         "checkpoint_path": str(Path(checkpoint).resolve()),
+        "run_fingerprint": run_fingerprint,
     }
 
 
-def validate_partial_resume_row(partial_row: pd.Series, sub_row: pd.Series, checkpoint: str) -> None:
-    expected = expected_partial_identity(sub_row, checkpoint)
+def validate_partial_resume_row(
+    partial_row: pd.Series,
+    sub_row: pd.Series,
+    checkpoint: str,
+    run_fingerprint: str,
+) -> None:
+    expected = expected_partial_identity(sub_row, checkpoint, run_fingerprint)
     actual = {
         "source_row_idx": None if pd.isna(partial_row["source_row_idx"]) else int(partial_row["source_row_idx"]),
         "waveform_path": _csv_str(partial_row["waveform_path"]),
+        "waveform_name": _csv_str(partial_row["waveform_name"]),
         "question": _csv_str(partial_row["question"]),
         "ground_truth": _csv_str(partial_row["ground_truth"]),
         "prompt_category": _csv_str(partial_row["prompt_category"], default="unknown"),
         "checkpoint_path": _partial_checkpoint_path(partial_row["checkpoint_path"]),
+        "run_fingerprint": _csv_str(partial_row["run_fingerprint"]),
     }
     mismatches = [key for key, expected_value in expected.items() if actual[key] != expected_value]
     if mismatches:
@@ -250,6 +374,155 @@ def validate_partial_resume_row(partial_row: pd.Series, sub_row: pd.Series, chec
             for key in mismatches
         )
         raise ValueError(details)
+    generation = _csv_str(partial_row["generation"]).strip()
+    if not generation or generation.startswith("[ERROR:"):
+        raise ValueError("generation is empty or records an error")
+
+
+def generate_batch_with_isolation(batch, generator):
+    """Generate a batch, retry rows individually, and never publish error strings."""
+    try:
+        outputs = generator(batch)
+    except Exception as exc:
+        if len(batch) > 1:
+            isolated = []
+            for item in batch:
+                isolated.extend(generate_batch_with_isolation([item], generator))
+            return isolated
+        raise RuntimeError(f"generation failed for row_idx={int(batch[0][0])}: {exc}") from exc
+    if len(outputs) != len(batch):
+        raise RuntimeError(
+            f"generation returned {len(outputs)} outputs for {len(batch)} input rows"
+        )
+    clean = [str(output).strip() for output in outputs]
+    for (idx, _), output in zip(batch, clean):
+        if not output or output.startswith("[ERROR:"):
+            raise RuntimeError(
+                f"generation failed for row_idx={int(idx)}: empty or error output"
+            )
+    return clean
+
+
+def atomic_write_csv(frame: pd.DataFrame, path: str | Path) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="",
+        dir=destination.parent,
+        prefix=destination.name + ".",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            frame.to_csv(handle, index=False)
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def publish_csv_for_stable_run(
+    frame: pd.DataFrame,
+    path: str | Path,
+    verify_current: Callable[[str], None],
+    publication: str,
+) -> None:
+    """Publish one CSV only if run inputs stay stable through the atomic write."""
+    destination = Path(path)
+    verify_current(publication)
+    atomic_write_csv(frame, destination)
+    published_sha256 = file_sha256(destination)
+    try:
+        verify_current(publication)
+    except BaseException:
+        try:
+            if destination.is_file() and file_sha256(destination) == published_sha256:
+                destination.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def load_resumable_generations(
+    partial_csv_path: Path,
+    sub: pd.DataFrame,
+    checkpoint: str,
+    run_fingerprint: str,
+    *,
+    resume_partial: bool,
+) -> Dict[int, Dict[str, object]]:
+    generations_by_idx: Dict[int, Dict[str, object]] = {}
+    if not resume_partial or not partial_csv_path.exists():
+        return generations_by_idx
+
+    partial = pd.read_csv(partial_csv_path)
+    if "row_idx" not in partial.columns:
+        raise SystemExit(f"Partial CSV missing row_idx: {partial_csv_path}")
+    missing = PARTIAL_REQUIRED_COLUMNS - set(partial.columns)
+    if missing:
+        raise SystemExit(f"Partial CSV missing required columns: {missing}")
+    if partial["row_idx"].duplicated().any():
+        raise SystemExit(f"Partial CSV contains duplicate row_idx values: {partial_csv_path}")
+    for _, row in partial.iterrows():
+        idx = int(row["row_idx"])
+        if not 0 <= idx < len(sub):
+            raise SystemExit(
+                f"Partial CSV row_idx={idx} is outside current subset of {len(sub)} rows"
+            )
+        try:
+            validate_partial_resume_row(row, sub.iloc[idx], checkpoint, run_fingerprint)
+        except ValueError as exc:
+            raise SystemExit(
+                f"Partial CSV row_idx={idx} does not match current run: {exc}"
+            ) from exc
+        waveform_path = "" if pd.isna(row["waveform_path"]) else str(row["waveform_path"])
+        generations_by_idx[idx] = {
+            "row_idx": idx,
+            "source_row_idx": int(row["source_row_idx"]),
+            "waveform_name": waveform_name(waveform_path),
+            "waveform_path": waveform_path,
+            "question": "" if pd.isna(row["question"]) else str(row["question"]),
+            "generation": "" if pd.isna(row["generation"]) else str(row["generation"]),
+            "ground_truth": "" if pd.isna(row["ground_truth"]) else str(row["ground_truth"]),
+            "prompt_category": "unknown" if pd.isna(row["prompt_category"]) else str(row["prompt_category"]),
+            "checkpoint_path": str(Path(checkpoint).resolve()),
+            "run_fingerprint": run_fingerprint,
+        }
+    print(f"[eval] Resumed {len(generations_by_idx)}/{len(sub)} rows from {partial_csv_path}")
+    return generations_by_idx
+
+
+def run_judge(args: argparse.Namespace, csv_path: Path) -> None:
+    judge_out = Path(args.output_dir) / f"judge_{args.label}.json"
+    cmd = [
+        sys.executable, "judge_eval.py",
+        "--csv", str(csv_path.resolve()),
+        "--output", str(judge_out.resolve()),
+    ]
+    print(f"[eval] Invoking LLM judge: {' '.join(cmd)}")
+    env = os.environ.copy()
+    res = subprocess.run(cmd, cwd=args.llm_judge_dir, env=env)
+    if res.returncode != 0:
+        raise SystemExit(f"judge_eval.py failed with code {res.returncode}")
+
+    with open(judge_out) as handle:
+        results = json.load(handle)
+    root = results.get("aggregates", results)
+    summary = {
+        "overall_score": root.get("overall_score"),
+        "category_aggregates": {
+            cat: {"count": data.get("count"), "mean_score": data.get("mean_score")}
+            for cat, data in root.get("category_aggregates", {}).items()
+        },
+    }
+    summary_path = Path(args.output_dir) / f"summary_{args.label}.json"
+    atomic_write_json(summary_path, summary)
+    print(f"[eval] Saved summary: {summary_path}")
+    print(json.dumps(summary, indent=2))
 
 
 @torch.no_grad()
@@ -356,6 +629,32 @@ def main():
     if "source_row_idx" not in sub.columns:
         sub["source_row_idx"] = np.arange(len(sub), dtype=np.int64)
     sub = sub.reset_index(drop=True)
+    batch_size = int(args.batch_size)
+    run_fingerprint = build_run_fingerprint(
+        args.checkpoint,
+        sub,
+        max_new_tokens=args.max_new_tokens,
+        batch_size=batch_size,
+        group_by_prompt=args.group_by_prompt,
+        generation_microbatch_size=args.generation_microbatch_size,
+    )
+    print(f"[eval] run_fingerprint={run_fingerprint}")
+
+    def require_unchanged_run_inputs(publication: str) -> None:
+        current_fingerprint = build_run_fingerprint(
+            args.checkpoint,
+            sub,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=batch_size,
+            group_by_prompt=args.group_by_prompt,
+            generation_microbatch_size=args.generation_microbatch_size,
+        )
+        if current_fingerprint != run_fingerprint:
+            raise SystemExit(
+                f"Run inputs changed before {publication} publication; refusing "
+                f"to publish fingerprint {run_fingerprint} from current inputs "
+                f"{current_fingerprint}."
+            )
 
     print(f"[eval] Loading model from {args.checkpoint}")
     model, tokenizer = load_model(args.checkpoint, args.device)
@@ -367,59 +666,44 @@ def main():
         print(f"[eval] generation_microbatch_size={decoder.generation_microbatch_size}")
     print("[eval] Model loaded; running generation")
 
-    batch_size = int(getattr(args, "batch_size", 8))
-    generations_by_idx: Dict[int, Dict[str, str]] = {}
     csv_path = Path(args.output_dir) / f"generations_{args.label}.csv"
     partial_csv_path = Path(args.output_dir) / f"generations_{args.label}.partial.csv"
-
-    if args.resume_partial and partial_csv_path.exists():
-        partial = pd.read_csv(partial_csv_path)
-        if "row_idx" not in partial.columns:
-            raise SystemExit(f"Partial CSV missing row_idx: {partial_csv_path}")
-        missing = PARTIAL_REQUIRED_COLUMNS - set(partial.columns)
-        if missing:
-            raise SystemExit(f"Partial CSV missing required columns: {missing}")
-        for _, row in partial.iterrows():
-            idx = int(row["row_idx"])
-            if 0 <= idx < len(sub):
-                try:
-                    validate_partial_resume_row(row, sub.iloc[idx], args.checkpoint)
-                except ValueError as exc:
-                    raise SystemExit(
-                        f"Partial CSV row_idx={idx} does not match current run: {exc}"
-                    ) from exc
-                generations_by_idx[idx] = {
-                    "row_idx": idx,
-                    "source_row_idx": int(row["source_row_idx"]),
-                    "waveform_name": "" if pd.isna(row["waveform_name"]) else str(row["waveform_name"]),
-                    "waveform_path": "" if pd.isna(row["waveform_path"]) else str(row["waveform_path"]),
-                    "question": "" if pd.isna(row["question"]) else str(row["question"]),
-                    "generation": "" if pd.isna(row["generation"]) else str(row["generation"]),
-                    "ground_truth": "" if pd.isna(row["ground_truth"]) else str(row["ground_truth"]),
-                    "prompt_category": "unknown" if pd.isna(row["prompt_category"]) else str(row["prompt_category"]),
-                    "checkpoint_path": str(Path(args.checkpoint).resolve()),
-                }
-        print(f"[eval] Resumed {len(generations_by_idx)}/{len(sub)} rows from {partial_csv_path}")
+    generations_by_idx = load_resumable_generations(
+        partial_csv_path,
+        sub,
+        args.checkpoint,
+        run_fingerprint,
+        resume_partial=args.resume_partial,
+    )
 
     def flush_partial(force: bool = False):
         if not force and int(args.flush_every) <= 0:
             return
         rows = [generations_by_idx[i] for i in sorted(generations_by_idx)]
-        tmp_path = partial_csv_path.with_suffix(partial_csv_path.suffix + ".tmp")
-        pd.DataFrame(rows).to_csv(tmp_path, index=False)
-        os.replace(tmp_path, partial_csv_path)
+        publish_csv_for_stable_run(
+            pd.DataFrame(rows),
+            partial_csv_path,
+            require_unchanged_run_inputs,
+            "partial",
+        )
 
     def run_batch(batch):
-        try:
-            signals = [load_ecg_signal(str(r["waveform_path_psa"])) for _, r in batch]
-            prompts = [str(r["prompt"]) for _, r in batch]
-            gens = generate_batched(model, tokenizer, signals, prompts,
-                                     args.device, args.max_new_tokens)
-        except Exception as e:
-            gens = [f"[ERROR: {e}]" for _ in batch]
+        def generate(current_batch):
+            signals = [load_ecg_signal(str(r["waveform_path_psa"])) for _, r in current_batch]
+            prompts = [str(r["prompt"]) for _, r in current_batch]
+            return generate_batched(
+                model,
+                tokenizer,
+                signals,
+                prompts,
+                args.device,
+                args.max_new_tokens,
+            )
+
+        gens = generate_batch_with_isolation(batch, generate)
         for (i, row), gen in zip(batch, gens):
             wp = str(row["waveform_path_psa"])
-            wn = os.path.basename(wp).replace(".npy", "")
+            wn = waveform_name(wp)
             generations_by_idx[int(i)] = {
                 "row_idx": int(i),
                 "source_row_idx": int(row["source_row_idx"]),
@@ -430,6 +714,7 @@ def main():
                 "ground_truth": str(row["generated_answer"]),
                 "prompt_category": str(row["prompt_category"]),
                 "checkpoint_path": str(Path(args.checkpoint).resolve()),
+                "run_fingerprint": run_fingerprint,
             }
 
     done = len(generations_by_idx)
@@ -468,42 +753,19 @@ def main():
     flush_partial(force=True)
     generations = [generations_by_idx[i] for i in range(len(sub))]
 
-    pd.DataFrame(generations).to_csv(csv_path, index=False)
+    publish_csv_for_stable_run(
+        pd.DataFrame(generations),
+        csv_path,
+        require_unchanged_run_inputs,
+        "final",
+    )
     print(f"[eval] Saved generations: {csv_path}")
 
     if not args.run_judge:
         print("[eval] Skipping judge (use --run_judge to invoke)")
         return
 
-    judge_out = Path(args.output_dir) / f"judge_{args.label}.json"
-    cmd = [
-        sys.executable, "judge_eval.py",
-        "--csv", str(csv_path.resolve()),
-        "--output", str(judge_out.resolve()),
-    ]
-    print(f"[eval] Invoking LLM judge: {' '.join(cmd)}")
-    env = os.environ.copy()
-    res = subprocess.run(cmd, cwd=args.llm_judge_dir, env=env)
-    if res.returncode != 0:
-        raise SystemExit(f"judge_eval.py failed with code {res.returncode}")
-
-    with open(judge_out) as f:
-        results = json.load(f)
-    # Judge writes either {overall_score, category_aggregates: ...} (top-level)
-    # or {aggregates: {overall_score, category_aggregates: ...}}. Handle both.
-    root = results.get("aggregates", results)
-    summary = {
-        "overall_score": root.get("overall_score"),
-        "category_aggregates": {
-            cat: {"count": d.get("count"), "mean_score": d.get("mean_score")}
-            for cat, d in root.get("category_aggregates", {}).items()
-        },
-    }
-    summary_path = Path(args.output_dir) / f"summary_{args.label}.json"
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
-    print(f"[eval] Saved summary: {summary_path}")
-    print(json.dumps(summary, indent=2))
+    run_judge(args, csv_path)
 
 
 if __name__ == "__main__":

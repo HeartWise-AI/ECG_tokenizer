@@ -12,6 +12,7 @@ import math
 # from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+from utils.checkpoint_structure import validate_bridge_structural_state_dict
 
 if not hasattr(transformers, "HybridCache") and hasattr(transformers, "DynamicCache"):
     class _CompatHybridCache(transformers.DynamicCache):
@@ -896,6 +897,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         bridge_text_hidden_size: Optional[int] = None,
         bridge_bias_last_codebook: Optional[float] = None,
         bridge_codebook_dropout: Optional[float] = None,
+        bridge_mix_strategy: Optional[str] = None,
+        bridge_token_axis: Optional[str] = None,
         bridge_cross_every: Optional[int] = None,
         instruction_dropout: float = 0.0,
         bridge_use_continuous_features: bool = False,
@@ -963,6 +966,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         self.bridge_text_hidden_size = bridge_text_hidden_size
         self.bridge_bias_last_codebook = bridge_bias_last_codebook
         self.bridge_codebook_dropout = bridge_codebook_dropout
+        self.bridge_mix_strategy = bridge_mix_strategy
+        self.bridge_token_axis = bridge_token_axis
         self.bridge_cross_every = bridge_cross_every
         self.instruction_dropout = instruction_dropout
         self.use_continuous_features = bool(bridge_use_continuous_features)
@@ -1072,6 +1077,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_text_hidden_size': bridge_text_hidden_size or bridge_mid_dim,
                         'bridge_bias_last_codebook': bridge_bias_last_codebook,
                         'bridge_codebook_dropout': bridge_codebook_dropout,
+                        'bridge_mix_strategy': bridge_mix_strategy,
+                        'bridge_token_axis': bridge_token_axis,
                         'bridge_cross_every': bridge_cross_every,
                         'instruction_dropout': instruction_dropout,
                         # Projection-bridge knobs (unused by Q-Former, consumed by projection)
@@ -1095,6 +1102,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         'bridge_text_hidden_size',
                         'bridge_bias_last_codebook',
                         'bridge_codebook_dropout',
+                        'bridge_mix_strategy',
+                        'bridge_token_axis',
                         'bridge_cross_every',
                         'instruction_dropout',
                     ):
@@ -1116,7 +1125,14 @@ class ECG_Tokenizer_Wrapper(nn.Module):
                         decoder_kwargs['afib_head_loss_weight'] = afib_head_loss_weight
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
-                
+
+                # token_axis='time' bridges rebuild z from ids through the frozen quantizer -
+                # attach by reference (stays valid when tokenizer weights load in place later).
+                _bridge = getattr(self.decoder, "bridge", None)
+                if _bridge is not None and getattr(_bridge, "token_axis", "channel") == "time":
+                    _bridge.attach_quantizer(getattr(self.quantizer, "quantizer", self.quantizer))
+                    print("[Wrapper] time-axis bridge: frozen quantizer attached")
+
                 # Apply LoRA to the LLM if requested
                 if use_lora and lora_config:
                     self._apply_lora(lora_config)
@@ -1310,6 +1326,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         """
         """Load state dict selectively based on configuration."""
         print("Loading state dict...")
+
+        validate_bridge_structural_state_dict(state_dict, self.state_dict())
 
         # Check if this is a LoRA checkpoint by looking for LoRA-specific keys
         has_lora_keys = any('lora_A' in key or 'lora_B' in key or 'base_layer' in key for key in state_dict.keys())

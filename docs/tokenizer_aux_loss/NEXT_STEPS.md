@@ -120,6 +120,7 @@ bash scripts/runner.sh --base_config config/llm_finetuning/medgemma/e4d_x1split_
   --selected_gpus 0,1,2 --use_wandb true --run_mode train
 
 # Judge eval — generate on the EXACT s3000 subset, then score. PATHS MUST BE ABSOLUTE (see R8).
+# Replace all three identity placeholders with immutable provider-side revisions.
 PYTHONPATH=/volume/ECG_tokenizer python scripts/eval_judge_csv.py --checkpoint <best_model.pt> \
   --subset_parquet /volume/ECG_tokenizer/analysis/x1split_judge/eval_subset_s3000.parquet \
   --output_csv /volume/ECG_tokenizer/analysis/x1split_judge/<tag>_s3000_generations.csv \
@@ -127,6 +128,9 @@ PYTHONPATH=/volume/ECG_tokenizer python scripts/eval_judge_csv.py --checkpoint <
 CSV=/volume/ECG_tokenizer/analysis/x1split_judge/<tag>_s3000_generations.csv \
 OUTPUT=/volume/ECG_tokenizer/analysis/x1split_judge/judge_<tag>_s3000.json \
 OUT_DIR=/volume/ECG_tokenizer/analysis/x1split_judge/<tag>_judge_shards \
+JUDGE_MODEL_ID='<immutable-model-revision>' \
+JUDGE_DEPLOYMENT_ID='<immutable-deployment-revision>' \
+JUDGE_DECODING_ID='<immutable-decoding-configuration>' \
 SHARDS=16 MAX_PARALLEL=4 bash scripts/run_csv_llm_judge_sharded.sh
 
 # Full-test deterministic endpoints (shard-level resume, 8 shards, auto-scores).
@@ -210,7 +214,10 @@ python scripts/probe_axis_views.py --ckpt <tok.pt> --tag <TAG> --device 0 --n 10
 
 ## Appendix A — the original hand-off brief (Aug 2026, superseded)
 
-Kept for provenance: this is the plan the work above was executed against, with the reasoning that
+Kept for provenance: this is the plan the work above was executed against (originally headed
+*"NEXT STEPS — ECG Tokenizer / Bridge / LLM"*, written against PR **#132**; full measurements and
+literature refs on the Notion pages *Information Cascade: Tokenizer → Q-Former → LLM* and
+*NEXT STEPS — ECG Tokenizer / Bridge / LLM (execution plan)*), with the reasoning that
 motivated each step. **Its status labels are stale** — Steps 1, 2, 3.1 and 3.2 are done — and two of
 its headline numbers were later shown to be measurement artifacts (R1b). Corrections raised in the
 PR #134 review are applied inline and marked **[corrected]**.
@@ -385,14 +392,36 @@ equal semantics. Predicts our kept=2 failure precisely.
 of why SHD is stuck at ~0.68. Regenerate with the EchoNext 7-label GT, **only after the architecture
 is settled**, otherwise a win is un-attributable.
 
-**Original rejection list.** Superseded by §5, which carries the same five rows plus
-*Best-of-N with judge selection* and *Softmax codebook fusion*. The one detail worth keeping from
-the original wording, now folded into §5: the frozen-encoder speech ablation (frozen-Whisper
-2.28 vs 3.00 WER) alongside Flamingo 70.7 vs 66.6, Idefics2 **+8.5** from *adding* the resampler,
-and Garg & Bas **+7.4 frozen vs +1.7 trained**.
+**Original rejection list, verbatim.** §5 is the live version (same five rows, compressed, plus
+*Best-of-N with judge selection* and *Softmax codebook fusion*); the citations below are kept
+because §5 trimmed them.
 
-**Original standing hazards 1–6** map onto §6 as: 1 → R1, 2 → R2, 3 → R3, 4 → R4, 5 → R5, 6 → R7.
-Nothing from that list was dropped; R1b, R1c and R6, R8–R11 are additions learned since.
+| rejected | reason |
+|---|---|
+| Swap the Q-Former for an MLP / token-preserving projection | The MLP-beats-Q-Former literature (Honeybee, Cambrian, MM1, DeCo) **fully fine-tunes the LLM**. In a **frozen + LoRA** regime — ours — every clean ablation reverses: Flamingo 70.7 vs 66.6; Idefics2 **+8.5** from *adding* the resampler; frozen-Whisper speech 2.28 vs 3.00 WER; Garg & Bas **+7.4 frozen vs +1.7 trained**. |
+| Query-orthogonality regulariser (ORCA) | Ruled out empirically: query off-diagonal cosine **0.243 / 0.167** vs collapsed reference 0.923. |
+| More codebooks / bigger token budget | Saturated. 2→8 fixed ACS but made `json_interpretation` slightly *worse*. Bottleneck is addressing, not capacity. |
+| 16-codebook tokenizer (x2_depth16) | Ties x1_split on endpoints but doubles bits/token ⇒ mandatory bridge rebuild, not drop-in. |
+| Unfreezing the tokenizer | Prismatic: full fine-tuning of the visual backbone *"dramatically degrades performance… especially on localization tasks"* (p=0.00381). LoRA only, if ever. |
+
+**Original standing hazards, verbatim.** They map onto §6 as 1 → R1, 2 → R2, 3 → R3, 4 → R4,
+5 → R5, 6 → R7; nothing was dropped, and R1b, R1c, R6 and R8–R11 are additions learned since.
+
+1. **Judge versions.** The old e4d judge CSV is Jan-2026 (older judge, smaller ontology) → spurious **+0.16**. Re-score baselines with the current judge, same sample.
+2. **Probe ≠ generation.** Never accept an architecture on probe AUROC.
+3. **More resolution can hurt coarse tasks.** Chest X-ray: higher resolution helps small findings (nodule +0.042) but *degrades* global ones (cardiomegaly 0.82→0.80). Prefer multi-scale; always report rhythm/AFib when sweeping.
+4. **The tokenizer may still be the ceiling.** Raw codes cap at LVEF 0.85 / AFib 0.78; removing *all* bridge loss recovers ~0.07 and no more.
+5. **Small n.** ACS n=1,021 (357 pos), LVEF n=2,656. The validation-snapshot LVEF of 0.93 was a balanced-subset artifact; the honest full-test number is **0.83**.
+6. **Unreviewed preprints** (LePaX 2607.06909, CheXpercept 2606.21020, CARE-X 2608.03890, ORCA 2607.06014, PARCEL 2605.30126) — re-read before manuscript use.
+
+**Original decision rule, verbatim** (superseded by §2, which adds the GT-version requirement and
+the macro/example-weighted rule):
+
+> Accept/reject on **generated-output** metrics, never on probe AUROC — we proved the probe
+> misleads (kept=2 probed best on every endpoint and still collapsed downstream).
+> **Primary:** `json_interpretation` + per-label ST/Q-wave AUROC, full 49,776-row REGEN test.
+> **Secondary:** judge overall + the four deterministic endpoints.
+> **Always** re-score the baseline with the *current* judge on the *same* sample.
 
 </details>
 

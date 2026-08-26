@@ -71,6 +71,8 @@ class GRPOFinetuningConfig(HeartWiseConfig):
     bridge_text_hidden_size: Optional[int] = None
     bridge_bias_last_codebook: Optional[float] = None
     bridge_codebook_dropout: Optional[float] = None
+    bridge_mix_strategy: Optional[str] = None
+    bridge_token_axis: Optional[str] = None
     bridge_cross_every: Optional[int] = None
     instruction_dropout: Optional[float] = None
 
