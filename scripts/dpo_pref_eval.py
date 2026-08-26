@@ -27,6 +27,7 @@ from data.dpo_pair_dataset import DPOPairDataset, dpo_collate_fn
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
 from utils.files_handler import load_yaml
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option
 
 
 def _cfg_get(container: Any, key: str, fallback: Any = None) -> Any:
@@ -192,6 +193,8 @@ def load_model(base_checkpoint: str, device: torch.device, dpo_checkpoint: Optio
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
         bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
         bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_mix_strategy=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_mix_strategy"),
+        bridge_token_axis=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_token_axis"),
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,

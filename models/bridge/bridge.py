@@ -557,6 +557,11 @@ class ECGQFormerBridge(nn.Module):
             )
         if token_axis not in ("channel", "time"):
             raise ValueError(f"token_axis must be 'channel' or 'time'; got '{token_axis}'.")
+        if token_axis == "time" and mix_strategy == "softmax":
+            raise ValueError(
+                "mix_strategy='softmax' is incompatible with token_axis='time'; "
+                "use 'sum' or 'concat_linear'."
+            )
 
         self.vocab_size = int(vocab_size)
         self.pad_id = int(vocab_size)
@@ -579,12 +584,12 @@ class ECGQFormerBridge(nn.Module):
         if self.token_axis == "time":
             # Step 3.2: kv positions are TIME slices, not channels. Codes are assigned
             # per channel (RVQ dim=codebook_dim quantises the time course), so the ids
-            # carry no time axis — rebuild the continuous post-quant tensor z through the
+            # carry no time axis - rebuild the continuous post-quant tensor z through the
             # FROZEN quantizer itself (get_output_from_indices; the x1_split RVQ uses
             # implicit neural codebooks, so levels >=1 are MLP-conditioned on the running
             # sum and no static table can reproduce them), transpose it time-major, and
             # project each time slice to d_mid with an identity init: at step 0 the kv
-            # features ARE zᵀ (+PE) — the probe-validated view. The quantizer is attached
+            # features ARE zᵀ (+PE) - the probe-validated view. The quantizer is attached
             # by reference via attach_quantizer() and is NOT part of this module's params.
             object.__setattr__(self, "_frozen_rvq", None)
             self.time_proj = nn.Linear(self.num_steps, d_mid)
@@ -644,10 +649,32 @@ class ECGQFormerBridge(nn.Module):
             raise RuntimeError("attach_quantizer is only meaningful for token_axis='time'.")
         if not hasattr(rvq, "get_output_from_indices"):
             raise TypeError("attach_quantizer expects a ResidualVQ with get_output_from_indices.")
+
         cb = getattr(rvq, "codebooks", None)
-        if cb is not None and int(cb.shape[-1]) != self.codebook_dim:
+        quantizer_count = getattr(rvq, "num_quantizers", None)
+        if quantizer_count is None:
+            layers = getattr(rvq, "layers", None)
+            if layers is not None:
+                quantizer_count = len(layers)
+            elif cb is not None and getattr(cb, "ndim", 0) >= 3:
+                quantizer_count = int(cb.shape[0])
+        if quantizer_count is None:
+            raise TypeError("attach_quantizer could not determine the quantizer count.")
+        if int(quantizer_count) != self.num_codebooks:
             raise ValueError(
-                f"quantizer codebook_dim {int(cb.shape[-1])} != bridge codebook_dim {self.codebook_dim}."
+                f"quantizer num_quantizers {int(quantizer_count)} != "
+                f"bridge num_codebooks {self.num_codebooks}."
+            )
+
+        quantizer_dim = getattr(rvq, "dim", None)
+        if quantizer_dim is None and cb is not None and getattr(cb, "ndim", 0) >= 2:
+            quantizer_dim = int(cb.shape[-1])
+        if quantizer_dim is None:
+            raise TypeError("attach_quantizer could not determine the quantizer codebook dimension.")
+        if int(quantizer_dim) != self.codebook_dim:
+            raise ValueError(
+                f"quantizer codebook_dim {int(quantizer_dim)} != "
+                f"bridge codebook_dim {self.codebook_dim}."
             )
         object.__setattr__(self, "_frozen_rvq", rvq)
 
@@ -656,6 +683,19 @@ class ECGQFormerBridge(nn.Module):
         return self.num_query_tokens
 
     def _prepare_ids(self, ecg_ids: torch.Tensor) -> torch.Tensor:
+        if self.token_axis == "time":
+            if ecg_ids.dim() != 3:
+                raise ValueError(
+                    "token_axis='time' requires ECG ids shaped "
+                    f"[batch, seq, {self.num_codebooks}]; got {tuple(ecg_ids.shape)}."
+                )
+            if ecg_ids.size(-1) != self.num_codebooks:
+                raise ValueError(
+                    f"token_axis='time' requires exactly {self.num_codebooks} codebooks; "
+                    f"got {ecg_ids.size(-1)}."
+                )
+            return ecg_ids
+
         if ecg_ids.dim() == 2:
             ecg_ids = ecg_ids.unsqueeze(-1)
         elif ecg_ids.dim() != 3:
@@ -690,7 +730,7 @@ class ECGQFormerBridge(nn.Module):
     def _embed_and_fuse(self, ecg_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Embed per-codebook ids and fuse them into one vector per position.
 
-        Returns (mixed [B, L, d_mid] — normalised, dropout applied — and
+        Returns (mixed [B, L, d_mid] - normalised, dropout applied - and
         valid_positions [B, L], True where at least one codebook holds a real code).
         """
         if ecg_ids.dtype != torch.long:
@@ -700,7 +740,16 @@ class ECGQFormerBridge(nn.Module):
         batch_size, seq_len, _ = ecg_ids.shape
 
         original_ids = ecg_ids
-        ids = ecg_ids.clamp_min(0)
+        if self.token_axis == "time":
+            invalid_ids = (ecg_ids < 0) | (ecg_ids >= self.vocab_size)
+            if bool(invalid_ids.any()):
+                raise ValueError(
+                    f"token_axis='time' requires RVQ ids in range [0, {self.vocab_size}); "
+                    "padding and invalid ids are not supported."
+                )
+            ids = ecg_ids
+        else:
+            ids = ecg_ids.clamp_min(0)
         valid_levels = original_ids >= 0
         if self.pad_id is not None:
             valid_levels = valid_levels & (original_ids != self.pad_id)
@@ -714,15 +763,20 @@ class ECGQFormerBridge(nn.Module):
             # ids: [B, L(channels), num_codebooks] -> exact post-quant tensor z through the
             # frozen quantizer decode (handles implicit-neural-codebook levels correctly).
             # The INC decode materialises large per-level intermediates, so rebuild in
-            # small batch chunks — z itself is tiny (B x 128 x 82).
-            ids_safe = ids.clamp(max=self.vocab_size - 1)
+            # small batch chunks - z itself is tiny (B x 128 x 82).
             chunk = int(getattr(self, "rebuild_chunk", 64) or 64)
             with torch.no_grad():
                 parts = [
-                    rvq.get_output_from_indices(ids_safe[i:i + chunk])
-                    for i in range(0, ids_safe.size(0), chunk)
+                    rvq.get_output_from_indices(ids[i:i + chunk])
+                    for i in range(0, ids.size(0), chunk)
                 ]
                 z = torch.cat(parts, dim=0)                      # [B, L, codebook_dim]
+            expected_shape = (batch_size, seq_len, self.codebook_dim)
+            if tuple(z.shape) != expected_shape:
+                raise RuntimeError(
+                    "quantizer reconstruction shape mismatch: "
+                    f"expected {expected_shape}, got {tuple(z.shape)}."
+                )
             z = z.to(dtype=self.time_proj.weight.dtype)
             zt = z.permute(0, 2, 1)                              # [B, D(time), L(channels)]
             mixed = self.time_proj(zt)

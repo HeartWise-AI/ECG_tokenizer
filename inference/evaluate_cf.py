@@ -36,6 +36,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 from utils.metrics.cf_evaluator import CFEvaluator
 from tqdm import tqdm
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option
 from utils.enums import DecoderMode
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 
@@ -98,6 +99,7 @@ def _build_model_from_run(model_dir: Path) -> ECG_Tokenizer_Wrapper:
     except Exception:
         ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
+    embedded_config = ckpt.get("config") if isinstance(ckpt, dict) else None
 
     # Prefer Stage-1 path from config if present
     stage1_path = getattr(config, "stage1_checkpoint_path", None)
@@ -126,6 +128,12 @@ def _build_model_from_run(model_dir: Path) -> ECG_Tokenizer_Wrapper:
         bridge_text_hidden_size=(config.bridge_text_hidden_size if config.bridge_text_hidden_size is not None else config.bridge_mid_dim),
         bridge_bias_last_codebook=(config.bridge_bias_last_codebook if config.bridge_bias_last_codebook is not None else 0.5),
         bridge_codebook_dropout=(config.bridge_codebook_dropout if config.bridge_codebook_dropout is not None else 0.0),
+        bridge_mix_strategy=resolve_checkpoint_bridge_option(
+            embedded_config, config, "bridge_mix_strategy"
+        ),
+        bridge_token_axis=resolve_checkpoint_bridge_option(
+            embedded_config, config, "bridge_token_axis"
+        ),
         bridge_cross_every=(config.bridge_cross_every if config.bridge_cross_every is not None else 2),
         instruction_dropout=config.instruction_dropout,
         use_lora=config.use_lora,

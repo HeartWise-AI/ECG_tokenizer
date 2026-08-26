@@ -176,21 +176,21 @@ Biggest gains: chamber +0.19, AFib +0.10, conduction +0.04. **Holdout: `json_int
 ⚠️ **CORRECTION (Aug 15-16): the e4d 0.643 row above was scored against the pre-REGEN ground truth**
 (23.6% of rows had a different answer key; json_interpretation GT 96% changed). Re-judged e4d's same
 generations against REGEN GT (`judge_e4d_s3000_REGENgt.json`): **e4d overall 0.616** (macro; kept=8 win
-widens to +0.042) and **json_interpretation 0.608** — the true json deficit is **−0.09, not −0.27**
+widens to +0.042) and **json_interpretation 0.608** - the true json deficit is **−0.09, not −0.27**
 (two-thirds of it was the GT-version artifact). Example-weighted overall is a statistical tie
 (0.618 vs 0.618): e4d still leads the two largest text categories (interpretation +0.03, json +0.09),
-kept=8 leads afib/rhythm/classification/chamber. Never compare judge scores across GT versions —
+kept=8 leads afib/rhythm/classification/chamber. Never compare judge scores across GT versions -
 hash the ground_truth column first.
 
 ⚠️ **Never compare across judge versions.** The pre-existing e4d judge CSV is from Jan 2026 (older judge + smaller ontology) and produces a spurious +0.16. Always re-score the baseline with the current judge on the same sample.
 
-### Axis probe (Step 3.1, Aug 12) — the time-axis hypothesis CONFIRMED
+### Axis probe (Step 3.1, Aug 12) - the time-axis hypothesis CONFIRMED
 `scripts/probe_axis_views.py` → `analysis/tokenizer_axis_probe/axis_probe_X1_SPLIT.json`.
-MIL probes (linear scorer per token + LSE/max pool — the attention analog) on frozen x1_split
+MIL probes (linear scorer per token + LSE/max pool - the attention analog) on frozen x1_split
 post-quant z (B,128ch,82t), n=10,000 patient-grouped: tokens-as-TIME-slices macro-62 **0.86**
 (localised ST/Q/T **0.82**; ST-elev-inferior 0.92, Q-wave-anterior 0.90) vs tokens-as-CHANNELS
 **0.58–0.60** (localised **0.54**, near chance). The bridge feeds the Q-Former the losing view.
-Caveats: (1) plain mean-over-time ties MIL selection (findings recur every beat) — the defect is
+Caveats: (1) plain mean-over-time ties MIL selection (findings recur every beat) - the defect is
 that channel-token attention can't form cross-channel contrasts, not temporal selection per se;
 (2) codes are per-channel (RVQ dim=82), so a time-indexed bridge must consume continuous
 transposed z + time PE, not "transposed ids".

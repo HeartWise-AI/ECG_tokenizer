@@ -18,6 +18,7 @@ import os
 import sys
 import json
 import argparse
+from pathlib import Path
 import torch
 import numpy as np
 import pandas as pd
@@ -34,6 +35,8 @@ from transformers import AutoTokenizer
 from models.ecg_tokenizer_wrapper import ECG_Tokenizer_Wrapper
 from utils.enums import DecoderMode
 from utils.files_handler import load_yaml
+from utils.artifact_provenance import atomic_write_json
+from utils.checkpoint_structure import resolve_checkpoint_bridge_option
 
 
 def load_model(checkpoint_path: str, device: torch.device):
@@ -115,6 +118,8 @@ def load_model(checkpoint_path: str, device: torch.device):
         bridge_text_hidden_size=getattr(config, "bridge_text_hidden_size", None),
         bridge_bias_last_codebook=_cfg_get(yaml_config, "bridge_bias_last_codebook", _cfg_get(config, "bridge_bias_last_codebook", None)),
         bridge_codebook_dropout=_cfg_get(yaml_config, "bridge_codebook_dropout", _cfg_get(config, "bridge_codebook_dropout", None)),
+        bridge_mix_strategy=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_mix_strategy"),
+        bridge_token_axis=resolve_checkpoint_bridge_option(config, yaml_config, "bridge_token_axis"),
         bridge_cross_every=_cfg_get(yaml_config, "bridge_cross_every", _cfg_get(config, "bridge_cross_every", None)),
         instruction_dropout=_cfg_get(yaml_config, "instruction_dropout", _cfg_get(config, "instruction_dropout", 0.0)),
         stage1_checkpoint_path=None,
@@ -246,6 +251,8 @@ def main():
     parser.add_argument("--output", type=str, default="/tmp/dpo_candidates.json", help="Output JSON path")
     parser.add_argument("--device", type=int, default=0, help="GPU device ID")
     args = parser.parse_args()
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -330,8 +337,7 @@ def main():
             print(f"  [{i+1}] {gen[:100]}...")
 
     # Save results
-    with open(args.output, 'w') as f:
-        json.dump(results, f, indent=2)
+    atomic_write_json(output_path, results)
     print(f"\n{'='*60}")
     print(f"Saved results to {args.output}")
     print('='*60)

@@ -120,15 +120,19 @@ def main() -> None:
         num_special_tokens=int(_cfg_get(ckpt_cfg, "bridge_num_special_tokens", _cfg_get(cfg, "bridge_num_special_tokens", 4))),
         bias_last_codebook=float(_cfg_get(ckpt_cfg, "bridge_bias_last_codebook", _cfg_get(cfg, "bridge_bias_last_codebook", 0.5))),
         codebook_dropout=float(_cfg_get(ckpt_cfg, "bridge_codebook_dropout", _cfg_get(cfg, "bridge_codebook_dropout", 0.0))),
+        mix_strategy=str(_cfg_get(ckpt_cfg, "bridge_mix_strategy", _cfg_get(cfg, "bridge_mix_strategy", "softmax")) or "softmax"),
+        token_axis=str(_cfg_get(ckpt_cfg, "bridge_token_axis", _cfg_get(cfg, "bridge_token_axis", "channel")) or "channel"),
         txt_vocab_size=len(tokenizer),
         txt_pad_id=int(tokenizer.pad_token_id),
         txt_cls_id=int(tokenizer.cls_token_id) if tokenizer.cls_token_id is not None else None,
         cross_every=int(_cfg_get(ckpt_cfg, "cross_every", _cfg_get(cfg, "cross_every", 2))),
     ).to(device).eval()
+    if getattr(bridge, "token_axis", "channel") == "time":
+        rvq = getattr(quantizer, "quantizer", quantizer)
+        bridge.attach_quantizer(rvq)
     missing = bridge.load_state_dict(bridge_sd, strict=False)
-    # Non-strict load may yield buffer/key differences across versions; warn only if obviously wrong
-    if missing.missing_keys and any("queries" in k for k in missing.missing_keys):
-        raise RuntimeError(f"Bridge shape mismatch: {missing}")
+    if missing.missing_keys or missing.unexpected_keys:
+        raise RuntimeError(f"Bridge checkpoint keys mismatch: {missing}")
 
     # Validation dataset/dataloader
     mapping_csv = str(cfg.get("validation_mapping_csv") or cfg.get("mapping_csv"))
@@ -160,7 +164,7 @@ def main() -> None:
         base_dir = os.path.dirname(args.ckpt)
         base_name = os.path.splitext(os.path.basename(args.ckpt))[0]
         out_path = os.path.join(base_dir, f"{base_name}_generated_val_reports.csv")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     # Resume support: collect already-generated ecg_ids
     done_ids: set[str] = set()

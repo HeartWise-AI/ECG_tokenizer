@@ -1,4 +1,4 @@
-# STEP 3.2 — MedGemma retrain on the TIME-AXIS bridge (kv = 82 time slices, not 128 channels).
+# STEP 3.2 - MedGemma retrain on the TIME-AXIS bridge (kv = 82 time slices, not 128 channels).
 # Clone of e4d_x1split_cb8_concatmix_retrain.yaml (the ACCEPTED Step-1 recipe) with TWO changes:
 #   1. stage1_checkpoint_path -> the time-axis Stage-1 run (6aeuhpxo).
 #   2. bridge_token_axis: time  (Stage-3 load HARD-FAILS if this mismatches the Stage-1 config).
@@ -81,7 +81,7 @@ use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
 # Codebook selection (match Stage-1 j4bb0w33 - 8 codebooks)
-num_codebooks_kept: 8 # kept=8 (all codebooks) — recover fine-detail json/ACS/interpretation
+num_codebooks_kept: 8 # kept=8 (all codebooks) - recover fine-detail json/ACS/interpretation
 codebook_offset: 0 # coarse codebooks [0,1]
 num_quantizers: 8
 ecg_codebook_size: 512

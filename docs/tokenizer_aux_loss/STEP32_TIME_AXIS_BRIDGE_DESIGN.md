@@ -1,4 +1,4 @@
-# Step 3.2 — Time-indexed bridge (design, pre-implementation)
+# Step 3.2 - Time-indexed bridge (design, pre-implementation)
 
 Status: DESIGN ONLY (drafted Aug 14 while the Step-1 MedGemma retrain `hcjs6vk9` occupies all
 GPUs). Implementation + launch gated on the Step-1 judge verdict (~Aug 17-18).
@@ -8,7 +8,7 @@ GPUs). Implementation + launch gated on the Step-1 judge verdict (~Aug 17-18).
 - Axis probe (`analysis/tokenizer_axis_probe/axis_probe_X1_SPLIT.json`, n=10k patient-grouped):
   linear MIL scorers over **time tokens** (82 positions × 128-d channel vector) reach macro
   **0.86** / localised ST-Q-T **0.82**; the same scorers over **channel tokens** (what the
-  Q-Former sees today) get **0.58** / **0.54** — barely above chance. Per-label:
+  Q-Former sees today) get **0.58** / **0.54** - barely above chance. Per-label:
   ST-elev-inferior 0.92 vs 0.64, Q-wave-anterior 0.90 vs 0.52.
 - Mechanism: attention over channel tokens (shared per-token projections, simplex weights)
   cannot form cross-channel contrasts; those are exactly the readable directions.
@@ -37,7 +37,7 @@ ids (B,128,8) ── codebook lookup (frozen tables, init from quantizer, 8×512
 
 - Composes Step 1 and Step 3.2 in one clean operator: identity-sum init ⇒ at step 0 the kv
   features are exactly `zᵀ + PE` (the probe-validated view); training can only improve on it.
-- Queries, `_QFormerBlock`s, Stage-1 heads (ETC/ETM/ETG), `to_llm` are unchanged — only the kv
+- Queries, `_QFormerBlock`s, Stage-1 heads (ETC/ETM/ETG), `to_llm` are unchanged - only the kv
   construction swaps. num_steps 128 → 82.
 - Codebook tables FROZEN (init from `x1_split_adapted` quantizer): keeps information identical
   to the code path, isolating "addressing" from "information". (Trainable variant = ablation
@@ -45,7 +45,7 @@ ids (B,128,8) ── codebook lookup (frozen tables, init from quantizer, 8×512
 
 ## Config surface
 
-- `bridge_token_axis: channel | time` (default `channel` — full back-compat; `time` implies the
+- `bridge_token_axis: channel | time` (default `channel` - full back-compat; `time` implies the
   additive/concat fusion path; `softmax` gate is channel-axis-only).
 - Threading mirrors `bridge_mix_strategy` exactly (dataclasses, stage1/llm projects, wrapper,
   medgemma_decoder pop + `bridge_config` + hard mismatch guard vs the Stage-1 `config.yaml`).
@@ -75,11 +75,11 @@ Decision matrix when `hcjs6vk9` verdict lands:
 
 ## Risks
 
-- 82 kv positions < 128: less kv capacity for 32 queries — probe says the view is strictly more
+- 82 kv positions < 128: less kv capacity for 32 queries - probe says the view is strictly more
   readable, but watch rhythm/AFib (hazard R3: global findings can suffer when local resolution
   improves).
 - PE scale: kv features are z-valued (norm ~175 pre-norm) vs embed-table-valued before;
   `input_norm` (RMSNorm) handles magnitude, but verify PE isn't drowned (PE added pre-norm,
   same as today).
-- json_interpretation may need more than addressing (enumeration formatting, GT quirks) — the
+- json_interpretation may need more than addressing (enumeration formatting, GT quirks) - the
   accept rule only requires closing a share of the gap, not all of it.

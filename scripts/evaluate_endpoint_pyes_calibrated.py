@@ -23,7 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
+import tempfile
 from pathlib import Path
 from typing import Dict, List
 
@@ -34,6 +34,26 @@ from sklearn.metrics import average_precision_score, brier_score_loss, confusion
 from tqdm import tqdm
 
 from scripts.binary_auroc_eval import load_ecg_signal, load_model
+from utils.artifact_provenance import (
+    atomic_savez_compressed,
+    atomic_write_json,
+    atomic_write_text,
+    encode_manifest,
+    exclusive_artifact_lock,
+    file_identity,
+    load_npz_if_current,
+    ordered_files_identity,
+    publish_artifact_bundle,
+    require_finite_numeric_array,
+    require_matching_provenance,
+)
+from utils.endpoint_contract import (
+    ENDPOINT_PROMPT_CONTRACT,
+    endpoint_contract_sha256,
+    endpoint_implementation_identity,
+)
+from utils.endpoint_labels import encode_endpoint_labels, require_binary_class_support
+from utils.patient_identity import patient_group_split_masks
 
 CHECKPOINT = "/media/data1/models/ECG_Tokenizer/e4dw86nh_20251220-232839/best_model.pt"
 TEST_PARQUET = "/media/data1/datasets/ECG_Tokenizer/combined_test_qa_m25k_h25k.parquet"
@@ -49,58 +69,28 @@ SYSTEM_MSG = ("You are an expert cardiologist. You interpret ECGs and answer "
 ENDPOINTS = {
     "lvef_lte_40": {
         "label": "LVEF <=40%",
-        "label_column": "deepecho_Visually_Estimated_EF",
-        "label_fn": lambda s: (s <= 40).astype(float),
-        "questions": [
-            "Is this patient's LVEF less than or equal to 40%? Answer Yes or No.",
-            "Does this ECG indicate a left ventricular ejection fraction of 40% or lower? Answer Yes or No.",
-            "Is the left ventricular ejection fraction reduced to 40% or below? Answer Yes or No.",
-            "Based on this ECG, is LVEF 40% or less? Answer Yes or No.",
-        ],
+        "label_column": ENDPOINT_PROMPT_CONTRACT["lvef_lte_40"]["label_column"],
+        "questions": list(ENDPOINT_PROMPT_CONTRACT["lvef_lte_40"]["questions"]),
     },
     "lvef_lt_50": {
         "label": "LVEF <50%",
-        "label_column": "deepecho_Visually_Estimated_EF",
-        "label_fn": lambda s: (s < 50).astype(float),
-        "questions": [
-            "Is this patient's LVEF less than 50%? Answer Yes or No.",
-            "Does this ECG indicate a left ventricular ejection fraction below 50%? Answer Yes or No.",
-            "Is the left ventricular ejection fraction under 50%? Answer Yes or No.",
-            "Based on this ECG, is LVEF below 50%? Answer Yes or No.",
-        ],
+        "label_column": ENDPOINT_PROMPT_CONTRACT["lvef_lt_50"]["label_column"],
+        "questions": list(ENDPOINT_PROMPT_CONTRACT["lvef_lt_50"]["questions"]),
     },
     "incident_afib_5y": {
         "label": "AFIB 5 years",
-        "label_column": "afib_label_5y",
-        "label_fn": lambda s: s.astype(float),
-        "questions": [
-            "Is this patient at risk for incident atrial fibrillation within 5 years? Answer Yes or No.",
-            "Will this patient likely develop atrial fibrillation within the next 5 years? Answer Yes or No.",
-            "Does this ECG suggest elevated risk of new-onset atrial fibrillation over 5 years? Answer Yes or No.",
-            "Is future atrial fibrillation within 5 years likely for this patient? Answer Yes or No.",
-        ],
+        "label_column": ENDPOINT_PROMPT_CONTRACT["incident_afib_5y"]["label_column"],
+        "questions": list(ENDPOINT_PROMPT_CONTRACT["incident_afib_5y"]["questions"]),
     },
     "acute_coronary_occlusion": {
         "label": "ACS acute occlusion",
-        "label_column": "acs_condition_is_acute",
-        "label_fn": lambda s: s.astype(float),
-        "questions": [
-            "Does this patient have an acute coronary occlusion? Answer Yes or No.",
-            "Is there evidence of an acute coronary artery occlusion on this ECG? Answer Yes or No.",
-            "Does this ECG indicate acute coronary occlusion? Answer Yes or No.",
-            "Is an acute coronary occlusion present? Answer Yes or No.",
-        ],
+        "label_column": ENDPOINT_PROMPT_CONTRACT["acute_coronary_occlusion"]["label_column"],
+        "questions": list(ENDPOINT_PROMPT_CONTRACT["acute_coronary_occlusion"]["questions"]),
     },
     "shd": {
         "label": "SHD",
-        "label_column": "echonext_shd_binary",
-        "label_fn": lambda s: s.astype(float),
-        "questions": [
-            "Does this patient have structural heart disease? Answer Yes or No.",
-            "Is there structural heart disease indicated by this ECG? Answer Yes or No.",
-            "Does this ECG suggest the presence of structural heart disease? Answer Yes or No.",
-            "Is structural heart disease present in this patient? Answer Yes or No.",
-        ],
+        "label_column": ENDPOINT_PROMPT_CONTRACT["shd"]["label_column"],
+        "questions": list(ENDPOINT_PROMPT_CONTRACT["shd"]["questions"]),
     },
 }
 
@@ -134,10 +124,12 @@ def get_margins(model, ecg, prompt_ids, prompt_mask, yes_id, no_id, device, batc
     margins = np.zeros(prompt_ids.size(0), dtype=np.float32)
     dec = model.decoder
     for start in range(0, prompt_ids.size(0), batch_size):
-        end = min(start + batch_size, prompt_ids.size(0)); bsz = end - start
+        end = min(start + batch_size, prompt_ids.size(0))
+        bsz = end - start
         q_feat = quantized.expand(bsz, -1, -1)
         q_codes = codes.expand(bsz, -1) if codes.dim() == 2 else codes.expand(bsz, -1, -1)
-        b_ids = prompt_ids[start:end].to(device); b_mask = prompt_mask[start:end].to(device)
+        b_ids = prompt_ids[start:end].to(device)
+        b_mask = prompt_mask[start:end].to(device)
         inputs_embeds, attn_mask, _ = dec._prepare_inputs_for_generation(
             b_ids, b_mask, q_feat, q_codes, detach_soft_prompts=True)
         md = dec.llm_model.get_input_embeddings().weight.dtype
@@ -155,7 +147,7 @@ def fit_platt(margins: np.ndarray, y: np.ndarray):
     """Platt scaling: minimise BCE of sigmoid(a*margin + b). Returns (a, b).
 
     Uses scale AND bias. Temperature-only (b fixed at 0) degenerates on Yes-biased
-    endpoints (LVEF/AFib) where the margin distribution is offset from 0 — the optimiser
+    endpoints (LVEF/AFib) where the margin distribution is offset from 0 - the optimiser
     drives the scale to infinity to collapse everything to 0.5. The bias term recentres it.
     """
     m = torch.tensor(margins, dtype=torch.float64)
@@ -181,13 +173,16 @@ def youden_threshold(prob: np.ndarray, y: np.ndarray) -> float:
     # candidate thresholds = unique probs; evaluate midpoints
     cands = np.unique(p_sorted)
     best_thr, best_j = 0.5, -1.0
-    P = y.sum(); N = len(y) - P
+    P = y.sum()
+    N = len(y) - P
     if P == 0 or N == 0:
         return 0.5
     for thr in cands:
         pred = prob >= thr
-        tp = np.sum(pred & (y == 1)); fp = np.sum(pred & (y == 0))
-        sens = tp / P; spec = 1 - fp / N
+        tp = np.sum(pred & (y == 1))
+        fp = np.sum(pred & (y == 0))
+        sens = tp / P
+        spec = 1 - fp / N
         j = sens + spec - 1
         if j > best_j:
             best_j, best_thr = j, float(thr)
@@ -202,18 +197,23 @@ def expected_calibration_error(prob: np.ndarray, y: np.ndarray, n_bins: int = 10
         m = (prob >= lo) & (prob < hi if i < n_bins - 1 else prob <= hi)
         if m.sum() == 0:
             continue
-        conf = prob[m].mean(); acc = y[m].mean()
+        conf = prob[m].mean()
+        acc = y[m].mean()
         ece += (m.sum() / len(prob)) * abs(conf - acc)
     return float(ece)
 
 
 def rank_metrics(y, s):
+    if len(y) == 0 or len(np.unique(y)) < 2:
+        return {"auroc": float("nan"), "auprc": float("nan")}
     return {"auroc": float(roc_auc_score(y, s)), "auprc": float(average_precision_score(y, s))}
 
 
 def bootstrap_ci(y, s, rng, keys=("auroc", "auprc")):
     vals = {k: [] for k in keys}
     n = len(y)
+    if n == 0:
+        return {key: [float("nan"), float("nan")] for key in keys}
     for _ in range(BOOTSTRAPS):
         idx = rng.integers(0, n, n)
         if len(np.unique(y[idx])) < 2:
@@ -238,23 +238,227 @@ def op_metrics(y, prob, thr):
     }
 
 
-def main():
+def build_margin_cache_provenance(
+    checkpoint: str,
+    parquet: str,
+    names: List[str],
+    n_prompts: List[int],
+    limit: int,
+    waveform_paths: List[str],
+    batch_size: int,
+    device: str,
+) -> Dict[str, object]:
+    return {
+        "schema_version": 2,
+        "kind": "endpoint_margin_cache",
+        "semantic": {
+            "checkpoint": file_identity(checkpoint),
+            "parquet": file_identity(parquet),
+            "script": file_identity(__file__),
+            "implementation": endpoint_implementation_identity(),
+            "endpoint_contract_sha256": endpoint_contract_sha256(names),
+            "endpoint_names": names,
+            "n_prompts": n_prompts,
+            "limit": int(limit),
+            "row_count": len(waveform_paths),
+            "ordered_waveforms": ordered_files_identity(waveform_paths),
+        },
+        "execution": {
+            "batch_size": int(batch_size),
+            "device": str(device),
+        },
+    }
+
+
+def build_static_input_provenance(checkpoint: str, parquet: str) -> Dict[str, object]:
+    """Capture inputs that must remain stable while a margin artifact is computed."""
+    return {
+        "checkpoint": file_identity(checkpoint),
+        "parquet": file_identity(parquet),
+        "script": file_identity(__file__),
+        "implementation": endpoint_implementation_identity(),
+    }
+
+
+def _evaluate_and_publish_metrics(
+    args: argparse.Namespace,
+    df: pd.DataFrame,
+    labels: np.ndarray,
+    margins: np.ndarray,
+    names: List[str],
+    n_prompts: List[int],
+    waveform_paths: List[str],
+    margin_provenance: Dict[str, object],
+) -> None:
+    if "new_PatientID" not in df.columns:
+        raise ValueError("endpoint cohort is missing required new_PatientID values")
+    calib_idx, test_idx = patient_group_split_masks(
+        df["new_PatientID"],
+        first_fraction=CALIB_FRAC,
+        seed=SEED,
+        source="endpoint calibration cohort",
+    )
+    offsets = np.cumsum([0] + n_prompts)
+    bootstrap_rng = np.random.default_rng(SEED)
+    metrics_provenance = {
+        "schema_version": 1,
+        "kind": "endpoint_calibrated_metrics",
+        "margin_cache_provenance": margin_provenance,
+        "seed": SEED,
+        "calib_frac": CALIB_FRAC,
+        "split_strategy": "patient_grouped",
+    }
+    endpoint_results: dict[str, object] = {}
+    results = {
+        "checkpoint": CHECKPOINT,
+        "parquet": TEST_PARQUET,
+        "seed": SEED,
+        "calib_frac": CALIB_FRAC,
+        "n_prompts_per_endpoint": dict(zip(names, n_prompts)),
+        "split_strategy": "patient_grouped",
+        "provenance": metrics_provenance,
+        "endpoints": endpoint_results,
+    }
+    rows_full: list[str] = []
+    rows_op: list[str] = []
+
+    def metric_cell(metric: dict[str, object]) -> str:
+        interval = metric["ci_95"]["auroc"]
+        return f"{metric['auroc']:.2f} ({interval[0]:.2f}-{interval[1]:.2f})"
+
+    for j, name in enumerate(names):
+        c0, c1 = offsets[j], offsets[j + 1]
+        endpoint_margins = margins[:, c0:c1]
+        single = endpoint_margins[:, 0]
+        ensemble = endpoint_margins.mean(axis=1)
+        ground_truth = labels[:, j]
+        valid = np.isfinite(ground_truth) & np.isfinite(ensemble)
+        y = ground_truth[valid].astype(int)
+        single_scores = single[valid]
+        ensemble_scores = ensemble[valid]
+        valid_calib = calib_idx[valid]
+        valid_test = test_idx[valid]
+        require_binary_class_support(y, endpoint=name, cohort="full scored cohort")
+        single_metrics = rank_metrics(y, single_scores)
+        single_metrics["ci_95"] = bootstrap_ci(y, single_scores, bootstrap_rng)
+        ensemble_metrics = rank_metrics(y, ensemble_scores)
+        ensemble_metrics["ci_95"] = bootstrap_ci(y, ensemble_scores, bootstrap_rng)
+
+        calibration_labels = y[valid_calib]
+        calibration_scores = ensemble_scores[valid_calib]
+        test_labels = y[valid_test]
+        test_scores = ensemble_scores[valid_test]
+        require_binary_class_support(
+            calibration_labels,
+            endpoint=name,
+            cohort="calibration split",
+        )
+        require_binary_class_support(test_labels, endpoint=name, cohort="test split")
+        platt_a, platt_b = fit_platt(calibration_scores, calibration_labels)
+        calibration_probabilities = 1 / (
+            1 + np.exp(-(platt_a * calibration_scores + platt_b))
+        )
+        test_probabilities = 1 / (1 + np.exp(-(platt_a * test_scores + platt_b)))
+        threshold = youden_threshold(calibration_probabilities, calibration_labels)
+        locked = op_metrics(test_labels, test_probabilities, threshold)
+        naive = op_metrics(test_labels, 1 / (1 + np.exp(-test_scores)), 0.5)
+        calibration = {
+            "platt_a": platt_a,
+            "platt_b": platt_b,
+            "locked_threshold_prob": threshold,
+            "test_auroc": float(roc_auc_score(test_labels, test_scores)),
+            "test_brier": float(brier_score_loss(test_labels, test_probabilities)),
+            "test_ece": expected_calibration_error(test_probabilities, test_labels),
+            "n_calib": int(len(calibration_labels)),
+            "n_test": int(len(test_labels)),
+            "n_calib_pos": int(calibration_labels.sum()),
+            "n_test_pos": int(test_labels.sum()),
+            "operating_point_locked": locked,
+            "operating_point_naive_pyes0.5": naive,
+        }
+        endpoint_results[name] = {
+            "label": ENDPOINTS[name]["label"],
+            "n": int(valid.sum()),
+            "n_positive": int(y.sum()),
+            "n_negative": int(len(y) - y.sum()),
+            "rank_single_prompt_margin": single_metrics,
+            "rank_prompt_ensemble_margin": ensemble_metrics,
+            "calibration_locked": calibration,
+        }
+        rows_full.append(
+            f"| {ENDPOINTS[name]['label']} | {int(y.sum())}/{len(y)} | "
+            f"{metric_cell(single_metrics)} | {metric_cell(ensemble_metrics)} |"
+        )
+        rows_op.append(
+            f"| {ENDPOINTS[name]['label']} | {calibration['n_test']} | "
+            f"{naive['sensitivity']:.2f}/{naive['specificity']:.2f} | "
+            f"{locked['sensitivity']:.2f}/{locked['specificity']:.2f} | "
+            f"{locked['ppv']:.2f} | {locked['npv']:.2f} | "
+            f"{calibration['test_ece']:.3f} |"
+        )
+
+    json_path = OUT_DIR / f"endpoint_pyes_{OUT_DIR.name.replace('endpoint_pyes_', '')}_calibrated_metrics.json"
+    markdown = [
+        "# calibrated / prompt-ensembled endpoint readout",
+        "",
+        "## AUROC on full scored set (rank metric, comparable to Notion e4d table)",
+        "",
+        "| Endpoint | Pos/n | AUROC single-prompt margin (95% CI) | AUROC 4-prompt ensemble (95% CI) |",
+        "|---|---:|---|---|",
+        *rows_full,
+        "",
+        "## Operating point on held-out TEST split (threshold LOCKED from calib split)",
+        "",
+        "| Endpoint | n_test | naive P(Yes)>=0.5 Sens/Spec | locked Sens/Spec | PPV | NPV | ECE |",
+        "|---|---:|---|---|---:|---:|---:|",
+        *rows_op,
+        "",
+    ]
+    md_path = json_path.with_suffix(".md")
+
+    def verify_current() -> None:
+        require_matching_provenance(
+            margin_provenance,
+            build_margin_cache_provenance(
+                CHECKPOINT,
+                TEST_PARQUET,
+                names,
+                n_prompts,
+                args.limit,
+                waveform_paths,
+                args.batch_size,
+                args.device,
+            ),
+            artifact="endpoint calibrated metrics",
+        )
+
+    with tempfile.TemporaryDirectory(
+        dir=OUT_DIR,
+        prefix=".endpoint-metrics-staging-",
+    ) as staging_dir:
+        staging = Path(staging_dir)
+        atomic_write_json(staging / json_path.name, results)
+        atomic_write_text(staging / md_path.name, "\n".join(markdown) + "\n")
+        publish_artifact_bundle(
+            {
+                json_path.name: staging / json_path.name,
+                md_path.name: staging / md_path.name,
+            },
+            json_path.with_suffix(".bundle.json"),
+            provenance=metrics_provenance,
+            verify_current=verify_current,
+        )
+    print("\n".join(markdown))
+
+
+def _run(args: argparse.Namespace) -> None:
     global CHECKPOINT, TEST_PARQUET, OUT_DIR
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--batch_size", type=int, default=20)
-    ap.add_argument("--limit", type=int, default=0, help="debug: cap #ECGs")
-    ap.add_argument("--checkpoint", default=CHECKPOINT)
-    ap.add_argument("--parquet", default=TEST_PARQUET,
-                    help="test parquet; use the REGEN file for anything compared against "
-                         "post-Jul-2026 results (GT was regenerated — see hazard R1b)")
-    ap.add_argument("--out", default=str(OUT_DIR))
-    args = ap.parse_args()
     CHECKPOINT, TEST_PARQUET = args.checkpoint, args.parquet
     OUT_DIR = Path(args.out)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"[pyes] checkpoint={CHECKPOINT}\n[pyes] parquet={TEST_PARQUET}\n[pyes] out={OUT_DIR}")
 
+    captured_static_inputs = build_static_input_provenance(CHECKPOINT, TEST_PARQUET)
     df = pd.read_parquet(TEST_PARQUET).drop_duplicates(subset="waveform_path_psa").reset_index(drop=True)
     names = list(ENDPOINTS)
     n_prompts = [len(ENDPOINTS[n]["questions"]) for n in names]
@@ -264,22 +468,68 @@ def main():
         sp = ENDPOINTS[n]
         if sp["label_column"] not in df.columns:
             continue
-        mask = df[sp["label_column"]].notna()
-        lab[mask.to_numpy(), j] = sp["label_fn"](df.loc[mask, sp["label_column"]]).to_numpy()
+        lab[:, j] = encode_endpoint_labels(df[sp["label_column"]], n)
     keep = np.isfinite(lab).any(axis=1)
-    df = df.loc[keep].reset_index(drop=True); lab = lab[keep]
+    df = df.loc[keep].reset_index(drop=True)
+    lab = lab[keep]
     if args.limit:
-        df = df.iloc[:args.limit].reset_index(drop=True); lab = lab[:args.limit]
+        df = df.iloc[:args.limit].reset_index(drop=True)
+        lab = lab[:args.limit]
     print(f"[calib] {len(df)} unique ECGs; endpoints={names}")
 
     raw_path = OUT_DIR / "raw_margins.npz"
-    if raw_path.exists():
-        raw = np.load(raw_path, allow_pickle=True)
-        margins = raw["margins"]; lab = raw["labels"]
-        names = raw["endpoints"].tolist(); n_prompts = raw["n_prompts"].tolist()
-        wp = raw["waveform_paths"]
-        print(f"[calib] loaded cached margins {margins.shape}")
-    else:
+    waveform_paths = df["waveform_path_psa"].astype(str).tolist()
+    provenance = build_margin_cache_provenance(
+        CHECKPOINT,
+        TEST_PARQUET,
+        names,
+        n_prompts,
+        args.limit,
+        waveform_paths,
+        args.batch_size,
+        args.device,
+    )
+    semantic = provenance["semantic"]
+    if not isinstance(semantic, dict):
+        raise RuntimeError("endpoint margin provenance is missing semantic identities")
+    require_matching_provenance(
+        captured_static_inputs,
+        {key: semantic[key] for key in captured_static_inputs},
+        artifact="endpoint margin cohort",
+    )
+    cached = load_npz_if_current(raw_path, provenance)
+    if cached is not None:
+        cached_handle = cached
+        try:
+            required = {"margins", "labels", "endpoints", "n_prompts", "waveform_paths"}
+            missing = required - set(cached.files)
+            if missing:
+                raise ValueError(f"cache missing arrays: {sorted(missing)}")
+            margins = cached["margins"].copy()
+            cached_labels = cached["labels"].copy()
+            cached_names = [str(value) for value in cached["endpoints"].tolist()]
+            cached_n_prompts = [int(value) for value in cached["n_prompts"].tolist()]
+            wp = cached["waveform_paths"].astype(str)
+            require_finite_numeric_array(
+                margins,
+                artifact="endpoint margin cache",
+                expected_shape=(len(df), sum(n_prompts)),
+            )
+            if cached_labels.shape != lab.shape:
+                raise ValueError("cache label shape does not match current cohort")
+            if cached_names != names or cached_n_prompts != n_prompts:
+                raise ValueError("cache endpoint layout does not match current contract")
+            if wp.tolist() != waveform_paths:
+                raise ValueError("cache waveform order does not match current cohort")
+            if not np.array_equal(cached_labels, lab, equal_nan=True):
+                raise ValueError("cache labels do not match the validated source labels")
+            print(f"[calib] loaded current cached margins {margins.shape}")
+        except (KeyError, ValueError) as exc:
+            print(f"[calib] ignoring invalid margin cache: {exc}")
+            cached = None
+        finally:
+            cached_handle.close()
+    if cached is None:
         model, tokenizer = load_model(CHECKPOINT, args.device)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -292,95 +542,64 @@ def main():
         for i, row in tqdm(df.iterrows(), total=len(df), desc="margins"):
             ecg = load_ecg_signal(row["waveform_path_psa"])
             margins[i] = get_margins(model, ecg, pids, pmask, yes_id, no_id, args.device, args.batch_size)
-        wp = df["waveform_path_psa"].to_numpy(dtype=object)
-        np.savez_compressed(raw_path, margins=margins, labels=lab,
-                            endpoints=np.array(names, dtype=object),
-                            n_prompts=np.array(n_prompts), waveform_paths=wp)
+        require_finite_numeric_array(
+            margins,
+            artifact="generated endpoint margins",
+            expected_shape=(len(df), total_p),
+        )
+        wp = np.asarray(waveform_paths, dtype=np.str_)
+        require_matching_provenance(
+            provenance,
+            build_margin_cache_provenance(
+                CHECKPOINT,
+                TEST_PARQUET,
+                names,
+                n_prompts,
+                args.limit,
+                waveform_paths,
+                args.batch_size,
+                args.device,
+            ),
+            artifact="endpoint margin cache",
+        )
+        atomic_savez_compressed(
+            raw_path,
+            margins=margins,
+            labels=lab,
+            endpoints=np.asarray(names, dtype=np.str_),
+            n_prompts=np.asarray(n_prompts, dtype=np.int64),
+            waveform_paths=wp,
+            provenance=encode_manifest(provenance),
+        )
         print(f"[calib] saved margins {margins.shape}")
 
-    # deterministic calib/test split over ECGs
-    rng = np.random.default_rng(SEED)
-    perm = rng.permutation(len(lab))
-    n_calib = int(len(lab) * CALIB_FRAC)
-    calib_idx = np.zeros(len(lab), dtype=bool); calib_idx[perm[:n_calib]] = True
-    test_idx = ~calib_idx
+    _evaluate_and_publish_metrics(
+        args,
+        df,
+        lab,
+        margins,
+        names,
+        n_prompts,
+        waveform_paths,
+        provenance,
+    )
 
-    # column offsets per endpoint in the margins matrix
-    offsets = np.cumsum([0] + n_prompts)
 
-    boot = np.random.default_rng(SEED)
-    results = {"checkpoint": CHECKPOINT, "parquet": TEST_PARQUET, "seed": SEED,
-               "calib_frac": CALIB_FRAC, "n_prompts_per_endpoint": dict(zip(names, n_prompts)),
-               "endpoints": {}}
-    rows_full, rows_op = [], []
-    for j, n in enumerate(names):
-        c0, c1 = offsets[j], offsets[j + 1]
-        ep_margins = margins[:, c0:c1]                       # [N, P]
-        single = ep_margins[:, 0]                            # prompt-0 margin (== old rank score)
-        ensemble = np.nanmean(ep_margins, axis=1)            # mean margin across paraphrases
-        gt = lab[:, j]
-        valid = np.isfinite(gt) & np.isfinite(ensemble)
-        y = gt[valid].astype(int)
-        s_single = single[valid]; s_ens = ensemble[valid]
-        v_calib = calib_idx[valid]; v_test = test_idx[valid]
-
-        # rank metrics on FULL scored set (comparable to Notion)
-        m_single = rank_metrics(y, s_single); m_single["ci_95"] = bootstrap_ci(y, s_single, boot)
-        m_ens = rank_metrics(y, s_ens); m_ens["ci_95"] = bootstrap_ci(y, s_ens, boot)
-
-        # locked calibration on ENSEMBLE margin: fit T + threshold on calib, apply to test
-        yc, sc = y[v_calib], s_ens[v_calib]
-        yt, st = y[v_test], s_ens[v_test]
-        cal = {"note": "insufficient calib class balance"}
-        if len(np.unique(yc)) == 2 and len(np.unique(yt)) == 2:
-            a, b = fit_platt(sc, yc)
-            prob_c = 1 / (1 + np.exp(-(a * sc + b)))
-            prob_t = 1 / (1 + np.exp(-(a * st + b)))
-            thr = youden_threshold(prob_c, yc)
-            op_test = op_metrics(yt, prob_t, thr)
-            # naive/circular baseline: raw P(Yes) >= 0.5 on test (== margin >= 0)
-            op_naive = op_metrics(yt, 1 / (1 + np.exp(-st)), 0.5)
-            cal = {
-                "platt_a": a,
-                "platt_b": b,
-                "locked_threshold_prob": thr,
-                "test_auroc": float(roc_auc_score(yt, st)),
-                "test_brier": float(brier_score_loss(yt, prob_t)),
-                "test_ece": expected_calibration_error(prob_t, yt),
-                "n_calib": int(len(yc)), "n_test": int(len(yt)),
-                "n_calib_pos": int(yc.sum()), "n_test_pos": int(yt.sum()),
-                "operating_point_locked": op_test,
-                "operating_point_naive_pyes0.5": op_naive,
-            }
-        results["endpoints"][n] = {
-            "label": ENDPOINTS[n]["label"], "n": int(valid.sum()),
-            "n_positive": int(y.sum()), "n_negative": int(len(y) - y.sum()),
-            "rank_single_prompt_margin": m_single,
-            "rank_prompt_ensemble_margin": m_ens,
-            "calibration_locked": cal,
-        }
-
-        def cell(m):
-            return f"{m['auroc']:.2f} ({m['ci_95']['auroc'][0]:.2f}-{m['ci_95']['auroc'][1]:.2f})"
-        rows_full.append(f"| {ENDPOINTS[n]['label']} | {int(y.sum())}/{len(y)} | "
-                         f"{cell(m_single)} | {cell(m_ens)} |")
-        if "operating_point_locked" in cal:
-            ol, on = cal["operating_point_locked"], cal["operating_point_naive_pyes0.5"]
-            rows_op.append(f"| {ENDPOINTS[n]['label']} | {cal['n_test']} | "
-                           f"{on['sensitivity']:.2f}/{on['specificity']:.2f} | "
-                           f"{ol['sensitivity']:.2f}/{ol['specificity']:.2f} | "
-                           f"{ol['ppv']:.2f} | {ol['npv']:.2f} | {cal['test_ece']:.3f} |")
-
-    (OUT_DIR / f"endpoint_pyes_{OUT_DIR.name.replace('endpoint_pyes_', '')}_calibrated_metrics.json").write_text(json.dumps(results, indent=2))
-    md = ["# calibrated / prompt-ensembled endpoint readout", "",
-          "## AUROC on full scored set (rank metric — comparable to Notion e4d table)", "",
-          "| Endpoint | Pos/n | AUROC single-prompt margin (95% CI) | AUROC 4-prompt ensemble (95% CI) |",
-          "|---|---:|---|---|", *rows_full, "",
-          "## Operating point on held-out TEST split (threshold LOCKED from calib split)", "",
-          "| Endpoint | n_test | naive P(Yes)>=0.5 Sens/Spec | locked Sens/Spec | PPV | NPV | ECE |",
-          "|---|---:|---|---|---:|---:|---:|", *rows_op, ""]
-    (OUT_DIR / f"endpoint_pyes_{OUT_DIR.name.replace('endpoint_pyes_', '')}_calibrated_metrics.md").write_text("\n".join(md) + "\n")
-    print("\n".join(md))
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--batch_size", type=int, default=20)
+    ap.add_argument("--limit", type=int, default=0, help="debug: cap #ECGs")
+    ap.add_argument("--checkpoint", default=CHECKPOINT)
+    ap.add_argument("--parquet", default=TEST_PARQUET,
+                    help="test parquet; use the REGEN file for anything compared against "
+                         "post-Jul-2026 results (GT was regenerated; see hazard R1b)")
+    ap.add_argument("--out", default=str(OUT_DIR))
+    args = ap.parse_args()
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with exclusive_artifact_lock(out_dir / ".endpoint-calibrated-metrics.lock"):
+        _run(args)
 
 
 if __name__ == "__main__":

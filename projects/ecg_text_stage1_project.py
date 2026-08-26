@@ -241,7 +241,7 @@ class ECGTextStage1Project(BaseProject):
 
         if getattr(bridge, "token_axis", "channel") == "time":
             # time-axis kv rebuilds z from ids through the frozen quantizer decode
-            # (x1_split uses implicit neural codebooks — static tables cannot reproduce z).
+            # (x1_split uses implicit neural codebooks - static tables cannot reproduce z).
             rvq = getattr(quantizer, "quantizer", quantizer)
             bridge.attach_quantizer(rvq)
             print("[Stage1] bridge token_axis=time: frozen quantizer attached")

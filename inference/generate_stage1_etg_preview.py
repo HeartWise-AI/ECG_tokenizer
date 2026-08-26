@@ -151,11 +151,16 @@ def main() -> None:
         num_special_tokens=int(_cfg_get(ckpt_cfg, "bridge_num_special_tokens", _cfg_get(cfg, "bridge_num_special_tokens", 4))),
         bias_last_codebook=float(_cfg_get(ckpt_cfg, "bridge_bias_last_codebook", _cfg_get(cfg, "bridge_bias_last_codebook", 0.5))),
         codebook_dropout=float(_cfg_get(ckpt_cfg, "bridge_codebook_dropout", _cfg_get(cfg, "bridge_codebook_dropout", 0.0))),
+        mix_strategy=str(_cfg_get(ckpt_cfg, "bridge_mix_strategy", _cfg_get(cfg, "bridge_mix_strategy", "softmax")) or "softmax"),
+        token_axis=str(_cfg_get(ckpt_cfg, "bridge_token_axis", _cfg_get(cfg, "bridge_token_axis", "channel")) or "channel"),
         txt_vocab_size=len(tokenizer),
         txt_pad_id=int(tokenizer.pad_token_id),
         txt_cls_id=int(tokenizer.cls_token_id) if tokenizer.cls_token_id is not None else None,
         cross_every=int(_cfg_get(ckpt_cfg, "cross_every", _cfg_get(cfg, "cross_every", 2))),
     ).to(device).eval()
+    if getattr(bridge, "token_axis", "channel") == "time":
+        rvq = getattr(quantizer, "quantizer", quantizer)
+        bridge.attach_quantizer(rvq)
 
     # Load Stage-1 checkpoint into bridge
     bridge_sd = ckpt.get("model_state_dict") or ckpt

@@ -81,7 +81,7 @@ use_cross_attention: false
 num_attention_heads: 8
 intermediate_dim: 1024
 # Codebook selection (match Stage-1 j4bb0w33 - 8 codebooks)
-num_codebooks_kept: 8 # kept=8 (all codebooks) — recover fine-detail json/ACS/interpretation
+num_codebooks_kept: 8 # kept=8 (all codebooks) - recover fine-detail json/ACS/interpretation
 codebook_offset: 0 # coarse codebooks [0,1]
 num_quantizers: 8
 ecg_codebook_size: 512

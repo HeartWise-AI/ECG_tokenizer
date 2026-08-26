@@ -1,26 +1,55 @@
 """Codebook-fusion strategies of the ECG Q-Former bridge family.
 
 RVQ codebooks are additive, so the bridge offers three fusion modes:
-  softmax        — legacy convex-combination gate (back-compat default)
-  sum            — plain unweighted sum (ablation floor)
-  concat_linear  — concat(8×d_mid) -> Linear, initialised to the identity-sum
+  softmax        - legacy convex-combination gate (back-compat default)
+  sum            - plain unweighted sum (ablation floor)
+  concat_linear  - concat(8×d_mid) -> Linear, initialised to the identity-sum
 
 The identity init must make concat_linear exactly reproduce sum at step 0, and
 old softmax checkpoints must keep loading unchanged.
 """
 
+import importlib.util
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 import torch
+import torch.nn as nn
 
-from models.bridge.bridge import (
-    ECGQFormerBridge,
-    ECGQFormerBridgeStage1,
-    InstructionAwareECGQFormerBridge,
-)
+
+_BRIDGE_PATH = Path(__file__).resolve().parents[2] / "models" / "bridge" / "bridge.py"
+_BRIDGE_SPEC = importlib.util.spec_from_file_location("qformer_mix_bridge_under_test", _BRIDGE_PATH)
+if _BRIDGE_SPEC is None or _BRIDGE_SPEC.loader is None:
+    raise ImportError(f"could not load bridge module from {_BRIDGE_PATH}")
+_BRIDGE_MODULE = importlib.util.module_from_spec(_BRIDGE_SPEC)
+_BRIDGE_SPEC.loader.exec_module(_BRIDGE_MODULE)
+ECGQFormerBridge = _BRIDGE_MODULE.ECGQFormerBridge
+ECGQFormerBridgeStage1 = _BRIDGE_MODULE.ECGQFormerBridgeStage1
+InstructionAwareECGQFormerBridge = _BRIDGE_MODULE.InstructionAwareECGQFormerBridge
 
 VOCAB = 64
 NCB = 4
 D_MID = 32
+
+
+class _TestRMSNorm(nn.Module):
+    """RMSNorm fallback for the repository's incomplete local test environment."""
+
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = float(eps)
+
+    def forward(self, value):
+        scale = value.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return value * scale * self.weight
+
+
+def _construct(bridge_class, **kwargs):
+    rms_norm = getattr(nn, "RMSNorm", _TestRMSNorm)
+    with patch.object(nn, "RMSNorm", rms_norm, create=True):
+        return bridge_class(**kwargs)
 
 
 def _make_bridge(mix_strategy: str, **overrides) -> ECGQFormerBridge:
@@ -38,7 +67,7 @@ def _make_bridge(mix_strategy: str, **overrides) -> ECGQFormerBridge:
         mix_strategy=mix_strategy,
     )
     kwargs.update(overrides)
-    return ECGQFormerBridge(**kwargs)
+    return _construct(ECGQFormerBridge, **kwargs)
 
 
 def _make_ids(batch: int = 2, seq: int = 16) -> torch.Tensor:
@@ -117,11 +146,16 @@ def test_stage1_to_instruction_bridge_roundtrip(tmp_path, mix_strategy):
         dropout=0.0,
         mix_strategy=mix_strategy,
     )
-    stage1 = ECGQFormerBridgeStage1(**common, txt_vocab_size=100, txt_pad_id=0)
+    stage1 = _construct(
+        ECGQFormerBridgeStage1,
+        **common,
+        txt_vocab_size=100,
+        txt_pad_id=0,
+    )
     ckpt_path = tmp_path / "stage1.pt"
     torch.save({"model_state_dict": stage1.state_dict()}, ckpt_path)
 
-    bridge = InstructionAwareECGQFormerBridge(**common)
+    bridge = _construct(InstructionAwareECGQFormerBridge, **common)
     bridge.load_stage1_checkpoint(str(ckpt_path))
 
     fusion_prefix = "mix_gate." if mix_strategy == "softmax" else "mix_proj."

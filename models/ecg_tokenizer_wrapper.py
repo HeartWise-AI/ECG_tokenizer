@@ -12,6 +12,7 @@ import math
 # from models.ecg_image_projection import ECG2ImageProjection, ECGImageProjectionConfig  # Module not available
 from data.ecg_clinical_report_dataset import ECGClinicalReportDataset
 from utils.config.llm_finetuning_config import LLMFinetuningConfig
+from utils.checkpoint_structure import validate_bridge_structural_state_dict
 
 if not hasattr(transformers, "HybridCache") and hasattr(transformers, "DynamicCache"):
     class _CompatHybridCache(transformers.DynamicCache):
@@ -1125,7 +1126,7 @@ class ECG_Tokenizer_Wrapper(nn.Module):
 
                 self.decoder = cast(nn.Module, decoder_ctor(**decoder_kwargs))
 
-                # token_axis='time' bridges rebuild z from ids through the frozen quantizer —
+                # token_axis='time' bridges rebuild z from ids through the frozen quantizer -
                 # attach by reference (stays valid when tokenizer weights load in place later).
                 _bridge = getattr(self.decoder, "bridge", None)
                 if _bridge is not None and getattr(_bridge, "token_axis", "channel") == "time":
@@ -1325,6 +1326,8 @@ class ECG_Tokenizer_Wrapper(nn.Module):
         """
         """Load state dict selectively based on configuration."""
         print("Loading state dict...")
+
+        validate_bridge_structural_state_dict(state_dict, self.state_dict())
 
         # Check if this is a LoRA checkpoint by looking for LoRA-specific keys
         has_lora_keys = any('lora_A' in key or 'lora_B' in key or 'base_layer' in key for key in state_dict.keys())
